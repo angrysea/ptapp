@@ -1,0 +1,4 @@
+/target
+tests/ui/shots/
+.venv/
+*.bak
