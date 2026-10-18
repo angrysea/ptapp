@@ -68,6 +68,16 @@ pub async fn presign_get(state: &AppState, key: &str) -> ApiResult<String> {
     Ok(req.uri().to_string())
 }
 
+/// Whether an object exists in the media bucket. HeadObject reports a
+/// missing object as the NotFound error variant; other errors are surfaced.
+pub async fn s3_object_exists(state: &AppState, key: &str) -> ApiResult<bool> {
+    match state.s3.head_object().bucket(&state.bucket).key(key).send().await {
+        Ok(_) => Ok(true),
+        Err(e) if e.as_service_error().is_some_and(|se| se.is_not_found()) => Ok(false),
+        Err(e) => Err(crate::error::ApiError::Internal(format!("s3 head: {e}"))),
+    }
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct AuditEntry<'a> {

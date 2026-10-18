@@ -165,9 +165,16 @@ pub async fn dashboard(
     Query(q): Query<DashQuery>,
 ) -> ApiResult<Json<Value>> {
     let scope = client_scope(&st, &ctx, &cid).await?;
+    audit(&st, &ctx, &scope, "view-dashboard").await;
     let weeks = q.weeks.unwrap_or(8).clamp(1, 26);
-    let (sched, logs) = recent(&st, &scope.pk(), weeks * 7).await?;
-    let checks: Vec<Value> = logs
+    // Fetch at least 28 days so the "last28" adherence is always a 28-day
+    // window; each reported window then filters explicitly.
+    let (sched, logs) = recent(&st, &scope.pk(), (weeks * 7).max(28)).await?;
+    let win_start = today() - Duration::days(weeks * 7);
+    let l28_start = today() - Duration::days(28);
+    let sched_w = sched.iter().filter(|s| s.date >= win_start).cloned().collect::<Vec<_>>();
+    let logs_w = logs.iter().filter(|l| l.date >= win_start).cloned().collect::<Vec<_>>();
+    let checks: Vec<Value> = logs_w
         .iter()
         .rev()
         .filter_map(|l| l.check.as_ref().map(|c| json!({ "date": l.date, "workoutName": l.workout_name, "check": c })))
@@ -175,14 +182,14 @@ pub async fn dashboard(
         .collect();
     Ok(Json(json!({
         "weeks": weeks,
-        "adherence": adherence(&sched, &logs, today()),
+        "adherence": adherence(&sched_w, &logs_w, today()),
         "last28": adherence(
-            &sched.iter().filter(|s| s.date >= today() - Duration::days(28)).cloned().collect::<Vec<_>>(),
-            &logs,
+            &sched.iter().filter(|s| s.date >= l28_start).cloned().collect::<Vec<_>>(),
+            &logs.iter().filter(|l| l.date >= l28_start).cloned().collect::<Vec<_>>(),
             today(),
         ),
-        "weeklyVolume": weekly_volume(&logs),
-        "strength": strength_trends(&logs),
+        "weeklyVolume": weekly_volume(&logs_w),
+        "strength": strength_trends(&logs_w),
         "checks": checks,
     })))
 }

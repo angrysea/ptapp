@@ -52,9 +52,11 @@ const listeners = new Set();
 export const onSync = (fn) => listeners.add(fn);
 const notify = async () => { const n = (await outbox.all()).length; listeners.forEach((fn) => fn(n)); };
 
-/** Queue a write. `key` dedupes: a newer write with the same key replaces the old one. */
-export async function enqueue(method, path, body, key = `${method} ${path}`) {
-  await outbox.put({ key, method, path, body });
+/** Queue a write. Pass `key` to dedupe (a newer write with the same key replaces
+ * the old one, e.g. `log:{id}`); the default key is unique so same-path writes
+ * (chat, video) never silently replace each other. */
+export async function enqueue(method, path, body, key = null) {
+  await outbox.put({ key: key ?? `${method} ${path} ${Date.now()}-${Math.random().toString(36).slice(2)}`, method, path, body });
   await notify();
   flush();
 }
@@ -67,9 +69,14 @@ export async function flush() {
     for (const item of await outbox.all()) {
       try {
         await api(item.method, item.path, item.body);
-        await outbox.del(item.key);
+        // Only drop the queued write if it is still the one we just sent; if
+        // the user re-queued this key while the request was in flight, keep
+        // the newer item so it replays on the next flush.
+        const cur = await outbox.get(item.key);
+        if (cur?.seq === item.seq) await outbox.del(item.key);
       } catch (e) {
-        if (isNetwork(e) || (e instanceof ApiError && (e.status >= 500 || e.status === 401))) break; // retry later
+        if (isNetwork(e)) break; // offline: stop, everything retries later
+        if (e instanceof ApiError && (e.status >= 500 || e.status === 401)) continue; // retry this write later, don't stall the queue
         // 409 = server already has a newer version; other 4xx will never succeed.
         console.warn('dropping queued write', item, e);
         await outbox.del(item.key);

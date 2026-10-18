@@ -1,6 +1,6 @@
 //! Local development server: the same router as the Lambda, served over plain
 //! HTTP on :9000 with DEV_AUTH enabled. Point AWS_ENDPOINT_URL at an emulator
-//! (moto_server, DynamoDB Local + an S3 mock) and it creates the table and
+//! (moto via `docker compose up`, DynamoDB Local + an S3 mock) and it creates the table and
 //! bucket on startup. See docs/DEVELOPMENT.md.
 
 use aws_sdk_dynamodb::types::{AttributeDefinition, BillingMode, KeySchemaElement, KeyType, ScalarAttributeType};

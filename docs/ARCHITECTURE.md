@@ -65,7 +65,7 @@ When a coach reads intake, waiver, metrics or photos, an `AUDIT#` item is writte
 2. **Reads**: `api.get(path, {cache:true})` stores the last good response in IndexedDB and serves it when the network fails.
 3. **Workout in progress**: every set tick is saved to an IndexedDB draft, so closing the app loses nothing.
 4. **Finishing**: the log (with a client-generated id) goes into the **outbox**, keyed `log:{id}` so newer edits replace older queued ones. The outbox flushes on `online`, every 30 s and at start-up.
-5. **Server**: `PUT /clients/{id}/logs/{logId}` is an idempotent upsert with condition `attribute_not_exists(pk) OR ver < :incomingMillis`. An older replay gets `409` plus the current copy and is dropped; the newest edit wins. Phone clocks more than 5 minutes ahead are clamped.
+5. **Server**: `PUT /clients/{id}/logs/{logId}` is an idempotent upsert with condition `attribute_not_exists(pk) OR ver <= :incomingMillis`. An older replay gets `409` plus the current copy and is dropped; the newest edit wins. Phone clocks more than 5 minutes ahead are clamped. A replay that edits the log's date replaces the old-dated item too, so one log id never has two live copies.
 
 ## API surface
 

@@ -12,22 +12,46 @@ import { $app, addDays, field, fmtDate, h, mount, num, select, sheet, toast, tod
 
 const KIND_LABEL = { straight: '', superset: 'Superset', circuit: 'Circuit', amrap: 'AMRAP', emom: 'EMOM', interval: 'Intervals' };
 
+/** Cache schedule/logs per client (not per date range), so the offline cache
+ * survives midnight: items accumulate across days and are pruned to a
+ * generous window. Returns {items, fresh} — fresh=false means the fetch failed. */
+async function merged(path, from, to, key) {
+  const map = new Map(Object.entries((await kv.get(key)) || {}));
+  let fresh = false;
+  try {
+    for (const it of await get(`${path}?from=${from}&to=${to}`)) map.set(it.id, it);
+    fresh = true;
+  } catch { /* offline or server error: serve what we have */ }
+  const lo = addDays(todayIso(), -120), hi = addDays(todayIso(), 120);
+  const kept = [...map.values()].filter((it) => it.date >= lo && it.date <= hi);
+  kv.set(key, Object.fromEntries(kept.map((it) => [it.id, it]))).catch(() => {});
+  return { items: kept.filter((it) => it.date >= from && it.date <= to), fresh };
+}
+
 /** Server logs merged with locally finished logs that may not have synced yet. */
 async function loadWeek(cid) {
   const from = addDays(todayIso(), -7);
   const to = addDays(todayIso(), 21);
-  const [sched, logs, local] = await Promise.all([
-    get(`/clients/${cid}/schedule?from=${from}&to=${to}`, { cache: true }).catch(() => []),
-    get(`/clients/${cid}/logs?from=${from}&to=${to}`, { cache: true }).catch(() => []),
+  const [schedR, logsR, local] = await Promise.all([
+    merged(`/clients/${cid}/schedule`, from, to, `cache:sched:${cid}`),
+    merged(`/clients/${cid}/logs`, from, to, `cache:logs:${cid}`),
     kv.get('localLogs').then((m) => m || {}),
   ]);
+  const sched = schedR.items, logs = logsR.items;
   // Forget local copies the server has caught up with.
   const serverIds = new Map(logs.map((l) => [l.id, l.updatedAt]));
   let pruned = false;
   for (const [id, l] of Object.entries(local)) {
     if (serverIds.has(id) && serverIds.get(id) >= l.updatedAt) { delete local[id]; pruned = true; }
   }
-  if (pruned) kv.set('localLogs', local);
+  if (pruned) await kv.set('localLogs', local);
+  // Drafts for scheduled workouts that no longer exist (coach reassigned the
+  // program) are unreachable; drop them so they don't accumulate.
+  if (schedR.fresh) {
+    for (const k of await kv.keys()) {
+      if (k.startsWith('draft:') && !sched.some((s) => s.id === k.slice(6))) await kv.del(k);
+    }
+  }
   const bySched = {};
   for (const l of [...logs, ...Object.values(local)]) {
     if (!l.scheduledId) continue;
@@ -57,8 +81,19 @@ export async function renderToday() {
   const upcoming = sched.filter((s) => s.date > today).slice(0, 6);
   const recent = sched.filter((s) => s.date < today).reverse();
 
+  // A workout the client started but never finished shows as "Started" so
+  // there is a path back to the draft.
+  const drafts = {};
+  for (const s of todays) {
+    const d = await kv.get(`draft:${s.id}`);
+    if (d) drafts[s.id] = d;
+  }
+  const chip = (s) => bySched[s.id] ? statusChip(bySched[s.id], s.date)
+    : drafts[s.id] ? h('span', { class: 'chip' }, 'Started')
+    : statusChip(null, s.date);
+
   const card = (s, isToday) => h('div', { class: `card link ${isToday ? 'today' : ''}`, onclick: () => go(`/workout/${s.date}/${s.id}`) },
-    h('div', { class: 'spread' }, h('strong', {}, s.workout.name), statusChip(bySched[s.id], s.date)),
+    h('div', { class: 'spread' }, h('strong', {}, s.workout.name), chip(s)),
     h('div', { class: 'muted small' }, `${fmtDate(s.date)} · ${s.programName} · week ${s.week}`),
     h('div', { class: 'small' }, s.workout.blocks.flatMap((b) => b.items.map((i) => i.exerciseName)).join(' · ')));
 
@@ -101,7 +136,7 @@ export async function renderWorkout(date, schedId) {
   const { sched, bySched } = await loadWeek(me.userId);
   let s = sched.find((x) => x.id === schedId);
   if (!s) {
-    const wide = await get(`/clients/${me.userId}/schedule?from=${date}&to=${date}`, { cache: true }).catch(() => []);
+    const wide = (await merged(`/clients/${me.userId}/schedule`, date, date, `cache:sched:${me.userId}`)).items;
     s = wide.find((x) => x.id === schedId);
   }
   if (!s) return mount($app(), h('p', {}, 'Workout not found (it may not be cached for offline use yet).'));

@@ -35,6 +35,7 @@ export const outbox = {
   /** Items with the same key replace each other, so only the latest edit is sent. */
   put: (item) => run('outbox', 'readwrite', (s) => s.put({ seq: Date.now(), ...item })),
   all: async () => ((await run('outbox', 'readonly', (s) => s.getAll())) || []).sort((a, b) => a.seq - b.seq),
+  get: (key) => run('outbox', 'readonly', (s) => s.get(key)),
   del: (key) => run('outbox', 'readwrite', (s) => s.delete(key)),
   clear: () => run('outbox', 'readwrite', (s) => s.clear()),
 };

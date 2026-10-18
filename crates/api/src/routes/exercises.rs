@@ -9,7 +9,7 @@ use serde_json::{json, Value};
 
 use crate::auth::Ctx;
 use crate::error::{bad_request, ApiError, ApiResult};
-use crate::util::{ext_for, new_id, presign_get, presign_put, VIDEO_TYPES};
+use crate::util::{ext_for, new_id, presign_get, presign_put, s3_object_exists, VIDEO_TYPES};
 use crate::AppState;
 
 #[derive(Serialize)]
@@ -28,7 +28,20 @@ pub async fn list(State(st): State<AppState>, ctx: Ctx) -> ApiResult<Json<Vec<Ex
     all.sort_by_key(|e| e.name.to_lowercase());
     let mut out = Vec::with_capacity(all.len());
     for e in all {
-        let demo_video_url = match &e.demo_key {
+        let mut demo_key = e.demo_key.clone();
+        if let Some(k) = &demo_key {
+            let exists = s3_object_exists(&st, k).await?;
+            if !exists {
+                // Upload never completed; clear the stale key from the record.
+                demo_key = None;
+                if e.custom {
+                    let mut cleared = e.clone();
+                    cleared.demo_key = None;
+                    st.store.put(&format!("COACH#{}", ctx.profile.coach_id), &format!("EXERCISE#{}", cleared.id), &cleared).await?;
+                }
+            }
+        }
+        let demo_video_url = match &demo_key {
             Some(k) => Some(presign_get(&st, k).await?),
             None => None,
         };
@@ -107,7 +120,9 @@ pub async fn remove(State(st): State<AppState>, ctx: Ctx, Path(id): Path<String>
     let ex = load_custom(&st, coach, &id).await?;
     st.store.delete(&format!("COACH#{coach}"), &format!("EXERCISE#{id}")).await?;
     if let Some(k) = ex.demo_key {
-        let _ = st.s3.delete_object().bucket(&st.bucket).key(k).send().await;
+        if let Err(e) = st.s3.delete_object().bucket(&st.bucket).key(&k).send().await {
+            tracing::warn!("demo video {k} delete failed: {e}"); // bucket lifecycle will reclaim it
+        }
     }
     Ok(Json(json!({ "ok": true })))
 }
@@ -131,7 +146,9 @@ pub async fn demo_upload(
     let key = format!("media/{coach}/exercises/{id}/{}.{ext}", &new_id()[..8]);
     let upload_url = presign_put(&st, &key, &body.content_type).await?;
     if let Some(old) = ex.demo_key.replace(key) {
-        let _ = st.s3.delete_object().bucket(&st.bucket).key(old).send().await;
+        if let Err(e) = st.s3.delete_object().bucket(&st.bucket).key(&old).send().await {
+            tracing::warn!("old demo video {old} delete failed: {e}");
+        }
     }
     st.store.put(&format!("COACH#{coach}"), &format!("EXERCISE#{id}"), &ex).await?;
     Ok(Json(json!({ "uploadUrl": upload_url, "contentType": body.content_type })))

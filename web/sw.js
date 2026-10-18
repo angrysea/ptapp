@@ -34,6 +34,9 @@ self.addEventListener('fetch', (e) => {
         }
         return res;
       })
-      .catch(() => caches.match(e.request, { ignoreSearch: true }).then((hit) => hit || caches.match('index.html'))),
+      // Serving the HTML shell for a failed css/js miss would return wrong
+      // content; only the navigation entry point may fall back to it.
+      .catch(() => caches.match(e.request, { ignoreSearch: true }).then((hit) => hit
+        || (e.mode === 'navigate' ? caches.match('/') : undefined))),
   );
 });

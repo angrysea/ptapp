@@ -61,6 +61,8 @@ pub async fn list(State(st): State<AppState>, ctx: Ctx) -> ApiResult<Json<Vec<In
 
 pub async fn revoke(State(st): State<AppState>, ctx: Ctx, Path(code): Path<String>) -> ApiResult<Json<Value>> {
     let coach_id = ctx.require_coach()?;
+    // Codes are stored uppercase; peek/accept already normalize, so revoke must too.
+    let code = code.to_uppercase();
     let inv: Option<Invite> = st.store.get(&format!("INVITE#{code}"), "INVITE").await?;
     if inv.is_some_and(|i| i.coach_id == coach_id) {
         st.store.delete(&format!("INVITE#{code}"), "INVITE").await?;

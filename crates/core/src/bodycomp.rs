@@ -120,7 +120,7 @@ pub fn compute(input: &SkinfoldInput) -> Result<BodyCompResult, BodyCompError> {
             1.097 - 0.00046971 * sum + 0.00000056 * sum * sum - 0.00012828 * age
         }
         (SkinfoldMethod::DurninWomersley4, sex) => {
-            let (c, m) = durnin_womersley_coefficients(sex, age)?;
+            let (c, m) = durnin_womersley_coefficients(sex, age);
             c - m * sum.log10()
         }
     };
@@ -142,12 +142,10 @@ pub fn compute(input: &SkinfoldInput) -> Result<BodyCompResult, BodyCompError> {
 }
 
 /// Durnin & Womersley (1974) Table 4 coefficients: density = c - m * log10(sum of 4).
-/// The paper starts at 17; younger clients use the 17-19 band.
-fn durnin_womersley_coefficients(sex: Sex, age: f64) -> Result<(f64, f64), BodyCompError> {
-    if age < 16.0 {
-        return Err(BodyCompError::AgeOutOfRange(age));
-    }
-    Ok(match sex {
+/// The paper's youngest band is 17-19; clients below 17 use it (compute() has
+/// already restricted ages to 10-100).
+fn durnin_womersley_coefficients(sex: Sex, age: f64) -> (f64, f64) {
+    match sex {
         Sex::Male => match age {
             a if a < 20.0 => (1.1620, 0.0630),
             a if a < 30.0 => (1.1631, 0.0632),
@@ -162,7 +160,7 @@ fn durnin_womersley_coefficients(sex: Sex, age: f64) -> Result<(f64, f64), BodyC
             a if a < 50.0 => (1.1333, 0.0612),
             _ => (1.1339, 0.0645),
         },
-    })
+    }
 }
 
 fn round(v: f64, places: i32) -> f64 {
@@ -213,6 +211,31 @@ mod tests {
         let r = run(SkinfoldMethod::JacksonPollock7, DensityEquation::Siri, Sex::Male, 40.0, &s);
         assert!((r.body_density - 1.06086).abs() < 1e-5);
         assert_eq!(r.body_fat_pct, 16.6); // 495/1.0608594 - 450 = 16.60
+    }
+
+    #[test]
+    fn jp7_female() {
+        // Constants from the Jackson & Pollock women's 7-site equation
+        // (Med Sci Sports Exerc, 1980;12(3):175-81, PMID 7402053). The paper
+        // itself is paywalled; re-verify these digits against it before
+        // trusting body-fat numbers for women to one decimal.
+        // sum = 100, age 25 -> BD = 1.097 - 0.046971 + 0.0056 - 0.003207 = 1.052422
+        let s = sites(&[
+            ("chest", &[10.0]), ("midaxillary", &[15.0]), ("triceps", &[10.0]), ("subscapular", &[15.0]),
+            ("abdomen", &[20.0]), ("suprailiac", &[15.0]), ("thigh", &[15.0]),
+        ]);
+        let r = run(SkinfoldMethod::JacksonPollock7, DensityEquation::Siri, Sex::Female, 25.0, &s);
+        assert_eq!(r.sum_mm, 100.0);
+        assert!((r.body_density - 1.05242).abs() < 1e-5);
+        assert_eq!(r.body_fat_pct, 20.3); // 495/1.052422 - 450 = 20.34
+    }
+
+    #[test]
+    fn dw_under_17_uses_first_band() {
+        // age 14 female -> 17-19 band: BD = 1.1549 - 0.0678 * log10(50) = 1.03971
+        let s = sites(&[("biceps", &[8.0]), ("triceps", &[16.0]), ("subscapular", &[12.0]), ("suprailiac", &[14.0])]);
+        let r = run(SkinfoldMethod::DurninWomersley4, DensityEquation::Siri, Sex::Female, 14.0, &s);
+        assert!((r.body_density - 1.03971).abs() < 1e-5);
     }
 
     #[test]

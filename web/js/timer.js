@@ -25,12 +25,23 @@ async function wakeLock() {
   try { return await navigator.wakeLock?.request('screen'); } catch { return null; }
 }
 
+/** Wake lock that releases even if the request resolves after the timer was
+ * closed, and re-acquires when the page becomes visible again (Chrome drops
+ * the lock when the screen turns off). */
+function keepAwake() {
+  const c = { lock: null, closed: false };
+  const onVis = (e) => { if (!e.hidden && !c.closed) wakeLock().then((l) => { c.lock = l; }); };
+  document.addEventListener('visibilitychange', onVis);
+  wakeLock().then((l) => { c.lock = l; if (c.closed) l?.release?.(); });
+  c.stop = () => { c.closed = true; document.removeEventListener('visibilitychange', onVis); c.lock?.release?.(); };
+  return c;
+}
+
 /** Countdown rest timer shown as a bottom sheet. */
 export function restTimer(seconds) {
   let end = Date.now() + seconds * 1000;
   const big = h('div', { class: 'timer-big' }, mmss(seconds));
-  let lock;
-  wakeLock().then((l) => { lock = l; });
+  const lock = keepAwake();
   const tick = setInterval(() => {
     const left = (end - Date.now()) / 1000;
     big.textContent = mmss(left);
@@ -45,7 +56,7 @@ export function restTimer(seconds) {
       h('button', { onclick: () => { end += 15000; } }, '+15s'),
       h('button', { class: 'primary', onclick: () => close() }, 'Skip')),
   );
-  function close() { clearInterval(tick); lock?.release?.(); s.close(); }
+  function close() { clearInterval(tick); lock.stop(); s.close(); }
 }
 
 /**
@@ -75,7 +86,6 @@ export function blockTimer(block) {
   let end = 0;
   let pausedLeft = null;
   let rounds = 0;
-  let lock;
   const phaseEl = h('div', { class: 'timer-phase' });
   const big = h('div', { class: 'timer-big' });
   const roundsEl = h('span', {}, '0');
@@ -83,6 +93,7 @@ export function blockTimer(block) {
 
   function enter(i) {
     idx = i;
+    pausedLeft = null; // entering a new phase discards a paused countdown
     const p = phases[i];
     end = Date.now() + p.sec * 1000;
     phaseEl.textContent = p.label;
@@ -116,7 +127,7 @@ export function blockTimer(block) {
       h('button', { onclick: () => idx + 1 < phases.length && enter(idx + 1) }, 'Next'),
       h('button', { class: 'primary', onclick: close }, 'Close')),
   );
-  wakeLock().then((l) => { lock = l; });
+  const lock = keepAwake();
   enter(0);
-  function close() { clearInterval(tick); lock?.release?.(); s.close(); }
+  function close() { clearInterval(tick); lock.stop(); s.close(); }
 }

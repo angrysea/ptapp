@@ -9,11 +9,12 @@ use serde::Deserialize;
 
 use crate::auth::{client_scope, Ctx};
 use crate::error::{bad_request, ApiResult};
-use crate::util::new_id;
+use crate::util::{audit, new_id};
 use crate::AppState;
 
 pub async fn list(State(st): State<AppState>, ctx: Ctx, Path(cid): Path<String>) -> ApiResult<Json<Vec<Comment>>> {
     let scope = client_scope(&st, &ctx, &cid).await?;
+    audit(&st, &ctx, &scope, "view-comments").await;
     Ok(Json(st.store.query_prefix(&scope.pk(), "COMMENT#").await?))
 }
 
@@ -34,7 +35,7 @@ pub async fn create(
 ) -> ApiResult<Json<Comment>> {
     let scope = client_scope(&st, &ctx, &cid).await?;
     let text = body.text.trim();
-    if text.is_empty() || text.len() > 4000 {
+    if text.is_empty() || text.chars().count() > 4000 {
         return Err(bad_request("comment must be 1-4000 characters"));
     }
     let c = Comment {

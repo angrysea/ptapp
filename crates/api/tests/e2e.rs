@@ -1,7 +1,7 @@
 //! End-to-end API test against a local DynamoDB/S3 emulator.
 //!
-//!   moto_server -p 5000 &          (or DynamoDB Local + any S3 mock)
-//!   E2E_ENDPOINT=http://localhost:5000 cargo test -p api --test e2e
+//!   docker compose up -d --wait    (moto on :5055, or DynamoDB Local + any S3 mock)
+//!   E2E_ENDPOINT=http://localhost:5055 cargo test -p api --test e2e
 //!
 //! Skipped when E2E_ENDPOINT is unset. Uses the DEV_AUTH header instead of
 //! Cognito, so it exercises routing, authorization and storage, not JWTs.
@@ -63,7 +63,7 @@ async fn full_client_journey() {
     s3.create_bucket().bucket(std::env::var("MEDIA_BUCKET").unwrap()).send().await.unwrap();
 
     let mut state = api::AppState::from_env().await;
-    state.s3 = s3;
+    state.s3 = s3.clone();
     let t = T { app: api::router(state) };
     let today = chrono::Utc::now().date_naive();
 
@@ -98,6 +98,13 @@ async fn full_client_journey() {
     assert_eq!(t.call("POST", &format!("/invites/{code}/accept"), Some("client2"), Some(json!({}))).await.0, StatusCode::NOT_FOUND);
     let (_, pending) = t.call("GET", "/invites", Some("coach1"), None).await;
     assert_eq!(pending.as_array().unwrap().len(), 0);
+
+    // revoke normalizes case: a lowercase code must actually revoke the invite
+    let (_, inv2) = t.call("POST", "/invites", Some("coach1"), Some(json!({ "email": "d@x.com", "clientName": "Other" }))).await;
+    let code2 = inv2["code"].as_str().unwrap().to_lowercase();
+    assert_eq!(t.call("DELETE", &format!("/invites/{code2}"), Some("coach1"), None).await.0, StatusCode::OK);
+    assert_eq!(t.call("GET", &format!("/invites/{code2}"), Some("client2"), None).await.0, StatusCode::NOT_FOUND);
+    assert_eq!(t.call("GET", "/invites", Some("coach1"), None).await.1.as_array().unwrap().len(), 0);
 
     // --- intake + waiver (ON-2, ON-3)
     let (s, _) = t
@@ -166,6 +173,8 @@ async fn full_client_journey() {
     assert_eq!(sched[0]["date"], start.to_string());
     let first = &sched[0];
     let item_id = first["workout"]["blocks"][0]["items"][0]["id"].as_str().unwrap();
+    // overlapping assignment is refused (would double-schedule the same dates)
+    assert_eq!(t.call("POST", "/clients/client1/assignments", Some("coach1"), Some(json!({ "programId": pid, "startDate": start.to_string() }))).await.0, StatusCode::BAD_REQUEST);
 
     // --- logging with last-write-wins (LG-1, LG-3, LG-4, FB-2)
     let log = |ts: &str, reps: u32| json!({
@@ -183,6 +192,12 @@ async fn full_client_journey() {
     let (s, conflict) = t.call("PUT", "/clients/client1/logs/log-abc", Some("client1"), Some(log(&older, 3))).await;
     assert_eq!(s, StatusCode::CONFLICT);
     assert_eq!(conflict["current"]["sets"][0]["reps"], 5);
+    let (_, logs) = t.call("GET", "/clients/client1/logs", Some("coach1"), None).await;
+    assert_eq!(logs.as_array().unwrap().len(), 1);
+    // same log id replayed with an edited date replaces the old-dated copy
+    let mut moved = log(&now.to_rfc3339(), 5);
+    moved["date"] = json!(today.to_string());
+    assert_eq!(t.call("PUT", "/clients/client1/logs/log-abc", Some("client1"), Some(moved)).await.0, StatusCode::OK);
     let (_, logs) = t.call("GET", "/clients/client1/logs", Some("coach1"), None).await;
     assert_eq!(logs.as_array().unwrap().len(), 1);
 
@@ -220,6 +235,14 @@ async fn full_client_journey() {
         .call("POST", "/clients/client1/metrics", Some("client1"), Some(json!({ "date": today.to_string(), "kind": "tape", "tapeCm": { "elbow": 30 } })))
         .await;
     assert_eq!(s, StatusCode::BAD_REQUEST);
+    // skinfold body weight is range-checked like a plain weight reading
+    assert_eq!(t
+        .call("POST", "/clients/client1/metrics", Some("client1"), Some(json!({
+            "date": today.to_string(), "kind": "skinfold",
+            "skinfold": { "method": "jacksonPollock3", "equation": "siri", "bodyWeightKg": 5000,
+                          "sitesMm": { "chest": [15], "abdomen": [25], "thigh": [20] } }
+        })))
+        .await.0, StatusCode::BAD_REQUEST);
 
     // --- photos (BM-7)
     let (s, ph) = t
@@ -227,6 +250,14 @@ async fn full_client_journey() {
         .await;
     assert_eq!(s, StatusCode::OK, "{ph}");
     assert!(ph["photo"]["key"].as_str().unwrap().starts_with("media/coach1/client1/photos/"));
+    // stand in for the browser's presigned PUT; listing drops records with no object
+    s3.put_object()
+        .bucket(std::env::var("MEDIA_BUCKET").unwrap())
+        .key(ph["photo"]["key"].as_str().unwrap())
+        .body(b"jpeg".to_vec().into())
+        .send()
+        .await
+        .unwrap();
     let (_, photos) = t.call("GET", "/clients/client1/photos", Some("coach1"), None).await;
     assert!(photos[0]["url"].as_str().unwrap().contains("X-Amz-Signature"));
 

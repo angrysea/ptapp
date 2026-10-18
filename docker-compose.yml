@@ -1,0 +1,12 @@
+# Local AWS emulator (DynamoDB + S3) for dev and the e2e test.
+# See docs/DEVELOPMENT.md.
+services:
+  moto:
+    image: motoserver/moto:5.2.3
+    ports:
+      - "5055:5000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/moto-api/')"]
+      interval: 2s
+      timeout: 2s
+      retries: 15

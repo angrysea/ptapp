@@ -12,7 +12,7 @@ use serde_json::{json, Value};
 
 use crate::auth::{client_scope, Ctx};
 use crate::error::{bad_request, ApiError, ApiResult};
-use crate::util::{audit, dated_id, ext_for, presign_get, presign_put, IMAGE_TYPES};
+use crate::util::{audit, dated_id, ext_for, presign_get, presign_put, s3_object_exists, IMAGE_TYPES};
 use crate::AppState;
 
 #[derive(Deserialize)]
@@ -93,6 +93,9 @@ pub async fn create(
         }
         MetricKind::Skinfold => {
             let sf = body.skinfold.ok_or_else(|| bad_request("skinfold readings are required"))?;
+            if sf.body_weight_kg.is_some_and(|w| !(20.0..=400.0).contains(&w)) {
+                return Err(bad_request("body weight must be 20-400 kg"));
+            }
             let sex = scope.client.sex.ok_or_else(|| bad_request("set sex in the intake form first"))?;
             let age = scope
                 .client
@@ -149,6 +152,13 @@ pub async fn list_photos(State(st): State<AppState>, ctx: Ctx, Path(cid): Path<S
     let photos: Vec<Photo> = st.store.query_prefix(&scope.pk(), "PHOTO#").await?;
     let mut out = Vec::with_capacity(photos.len());
     for p in photos {
+        let exists = s3_object_exists(&st, &p.key).await?;
+        if !exists {
+            // The browser never finished the presigned PUT (closed tab, lost
+            // upload): drop the record pointing at a nonexistent object.
+            st.store.delete(&scope.pk(), &format!("PHOTO#{}", p.id)).await?;
+            continue;
+        }
         let url = presign_get(&st, &p.key).await?;
         out.push(PhotoOut { photo: p, url });
     }

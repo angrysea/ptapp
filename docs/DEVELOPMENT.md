@@ -14,15 +14,16 @@ Install the tools (WSL / Linux):
 
 ```bash
 rustup target add aarch64-unknown-linux-gnu
-pip install --user cargo-lambda aws-sam-cli   # cargo-lambda brings Zig for cross-compiling to arm64
-python3 -m venv ~/.ptapp-moto && ~/.ptapp-moto/bin/pip install "moto[server,dynamodb,s3]" cfn-lint
+pip install --user cargo-lambda aws-sam-cli cfn-lint   # cargo-lambda brings Zig for cross-compiling to arm64
 ```
+
+The AWS emulator (moto) runs in Docker, so you also need Docker Desktop (Windows/macOS, `winget install Docker.DockerDesktop`) or Docker Engine (Linux).
 
 ## Run everything
 
 ```bash
-# 1. AWS emulator
-~/.ptapp-moto/bin/moto_server -p 5055 &
+# 1. AWS emulator (moto in Docker, on :5055; see docker-compose.yml)
+docker compose up -d --wait
 
 # 2. API on http://localhost:9000 (creates table + bucket in moto, DEV_AUTH on)
 AWS_ENDPOINT_URL=http://127.0.0.1:5055 AWS_REGION=us-east-1 \

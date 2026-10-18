@@ -13,7 +13,7 @@ use serde_json::{json, Value};
 use crate::auth::{client_scope, Ctx};
 use crate::error::{bad_request, ApiError, ApiResult};
 use crate::store::keyed;
-use crate::util::{new_id, parse_date, today};
+use crate::util::{audit, new_id, parse_date, today};
 use crate::AppState;
 
 /// Highest sort-key suffix; ids and dates only use ASCII below '~'.
@@ -40,12 +40,24 @@ pub async fn assign(
         .await?
         .ok_or(ApiError::NotFound("program"))?;
     let start = parse_date(&body.start_date)?;
+    let end = end_date(start, program.weeks);
+    // Two overlapping assignments would schedule the same dates twice and
+    // inflate adherence denominators, so refuse before materializing.
+    let existing: Vec<Assignment> = st.store.query_prefix(&scope.pk(), "ASSIGN#").await?;
+    if let Some(clash) = existing.iter().find(|a| a.start_date <= end && start <= a.end_date) {
+        return Err(bad_request(format!(
+            "overlaps the {name} assignment ({from} to {to}); pick another start date or remove it first",
+            name = clash.program_name,
+            from = clash.start_date,
+            to = clash.end_date,
+        )));
+    }
     let assignment = Assignment {
         id: new_id(),
         program_id: program.id.clone(),
         program_name: program.name.clone(),
         start_date: start,
-        end_date: end_date(start, program.weeks),
+        end_date: end,
         created_at: Utc::now(),
     };
     let pk = scope.pk();
@@ -74,8 +86,9 @@ pub async fn list_assignments(State(st): State<AppState>, ctx: Ctx, Path(cid): P
     Ok(Json(a))
 }
 
-/// Removes the assignment and its not-yet-logged workouts from today on.
-/// Past workouts stay so adherence history is preserved.
+/// Removes the assignment and its not-yet-logged workouts from tomorrow on.
+/// Today's workout stays so a client mid-workout keeps it; past workouts
+/// stay too, preserving adherence history.
 pub async fn unassign(
     State(st): State<AppState>,
     ctx: Ctx,
@@ -84,7 +97,7 @@ pub async fn unassign(
     ctx.require_coach()?;
     let scope = client_scope(&st, &ctx, &cid).await?;
     let pk = scope.pk();
-    let from = format!("SCHED#{}", today());
+    let from = format!("SCHED#{}", today() + Duration::days(1));
     let future: Vec<ScheduledWorkout> = st.store.query_between(&pk, &from, &format!("SCHED#{HIGH}"), true).await?;
     let logged: Vec<WorkoutLog> = st.store.query_between(&pk, &format!("LOG#{}", today()), &format!("LOG#{HIGH}"), true).await?;
     let keys: Vec<(String, String)> = future
@@ -130,6 +143,7 @@ pub async fn schedule(
     Query(r): Query<Range>,
 ) -> ApiResult<Json<Vec<ScheduledWorkout>>> {
     let scope = client_scope(&st, &ctx, &cid).await?;
+    audit(&st, &ctx, &scope, "view-schedule").await;
     let (from, to) = r.resolve()?;
     let items = st
         .store
@@ -145,6 +159,7 @@ pub async fn logs(
     Query(r): Query<Range>,
 ) -> ApiResult<Json<Vec<WorkoutLog>>> {
     let scope = client_scope(&st, &ctx, &cid).await?;
+    audit(&st, &ctx, &scope, "view-logs").await;
     let (from, to) = r.resolve()?;
     let items = st
         .store
@@ -175,6 +190,16 @@ pub async fn put_log(
     }
     let pk = scope.pk();
     let sk = format!("LOG#{}#{}", log.date, log.id);
+    // One log id must have exactly one live item: if an offline device edited
+    // the log's date, the old-dated copy is replaced, not left alongside it.
+    let prior: Vec<WorkoutLog> = st.store.query_prefix(&pk, "LOG#").await?;
+    let stale: Vec<(String, String)> = prior.iter()
+        .filter(|l| l.id == log.id && l.date != log.date)
+        .map(|l| (pk.clone(), format!("LOG#{}#{}", l.date, l.id)))
+        .collect();
+    if !stale.is_empty() {
+        st.store.batch_delete(stale).await?;
+    }
     let mut item = keyed(&pk, &sk, &log)?;
     let ver = log.updated_at.timestamp_millis();
     item.insert("ver".into(), AttributeValue::N(ver.to_string()));
@@ -185,7 +210,7 @@ pub async fn put_log(
         .put_item()
         .table_name(&st.store.table)
         .set_item(Some(item))
-        .condition_expression("attribute_not_exists(pk) OR ver < :v")
+        .condition_expression("attribute_not_exists(pk) OR ver <= :v")
         .expression_attribute_values(":v", AttributeValue::N(ver.to_string()))
         .send()
         .await;
