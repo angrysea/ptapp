@@ -2,6 +2,7 @@
 
 use axum::extract::{Path, State};
 use axum::Json;
+use futures::future::try_join_all;
 use ptcore::library::{builtin_exercises, is_builtin};
 use ptcore::model::Exercise;
 use serde::{Deserialize, Serialize};
@@ -26,24 +27,20 @@ pub async fn list(State(st): State<AppState>, ctx: Ctx) -> ApiResult<Json<Vec<Ex
     let custom: Vec<Exercise> = st.store.query_prefix(&format!("COACH#{}", ctx.profile.coach_id), "EXERCISE#").await?;
     all.extend(custom);
     all.sort_by_key(|e| e.name.to_lowercase());
-    let mut out = Vec::with_capacity(all.len());
-    for e in all {
-        let mut demo_key = e.demo_key.clone();
-        if let Some(k) = &demo_key {
-            let exists = s3_object_exists(&st, k).await?;
-            if !exists {
-                // Upload never completed; clear the stale key from the record.
-                demo_key = None;
-                if e.custom {
-                    let mut cleared = e.clone();
-                    cleared.demo_key = None;
-                    st.store.put(&format!("COACH#{}", ctx.profile.coach_id), &format!("EXERCISE#{}", cleared.id), &cleared).await?;
-                }
-            }
+    // Only link demos whose upload has landed. A missing object may still be
+    // uploading, so the key is kept; the next demo upload replaces it anyway.
+    let present = try_join_all(all.iter().map(|e| async {
+        match &e.demo_key {
+            Some(k) => s3_object_exists(&st, k).await,
+            None => Ok(false),
         }
-        let demo_video_url = match &demo_key {
-            Some(k) => Some(presign_get(&st, k).await?),
-            None => None,
+    }))
+    .await?;
+    let mut out = Vec::with_capacity(all.len());
+    for (e, exists) in all.into_iter().zip(present) {
+        let demo_video_url = match (&e.demo_key, exists) {
+            (Some(k), true) => Some(presign_get(&st, k).await?),
+            _ => None,
         };
         out.push(ExerciseOut { exercise: e, demo_video_url });
     }

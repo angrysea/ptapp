@@ -19,7 +19,11 @@ async function merged(path, from, to, key) {
   const map = new Map(Object.entries((await kv.get(key)) || {}));
   let fresh = false;
   try {
-    for (const it of await get(`${path}?from=${from}&to=${to}`)) map.set(it.id, it);
+    const items = await get(`${path}?from=${from}&to=${to}`);
+    // The server's answer is complete for this range: drop cached items in it
+    // that it no longer returns (e.g. workouts removed by an unassign).
+    for (const [id, it] of map) if (it.date >= from && it.date <= to) map.delete(id);
+    for (const it of items) map.set(it.id, it);
     fresh = true;
   } catch { /* offline or server error: serve what we have */ }
   const lo = addDays(todayIso(), -120), hi = addDays(todayIso(), 120);

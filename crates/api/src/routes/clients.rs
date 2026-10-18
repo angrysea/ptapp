@@ -5,7 +5,7 @@ use axum::extract::{Path, Query, State};
 use axum::Json;
 use chrono::{Duration, Utc};
 use futures::future::join_all;
-use ptcore::model::{Intake, ParqAnswer, Profile, RosterEntry, ScheduledWorkout, Waiver, WorkoutLog};
+use ptcore::model::{Assignment, Intake, ParqAnswer, Profile, RosterEntry, ScheduledWorkout, Waiver, WorkoutLog};
 use ptcore::stats::{adherence, strength_trends, weekly_volume};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -41,13 +41,15 @@ pub async fn roster(State(st): State<AppState>, ctx: Ctx) -> ApiResult<Json<Vec<
             let pk = format!("CLIENT#{}", e.client_id);
             let (sched, logs) = recent(&st, &pk, 28).await?;
             let waiver = latest_waiver(&st, &pk).await?;
+            // `recent` stops at today, so look at assignments for anything ahead.
+            let assignments: Vec<Assignment> = st.store.query_prefix(&pk, "ASSIGN#").await?;
             let a = adherence(&sched, &logs, today());
             let last_workout = logs.iter().filter(|l| l.status.counts_as_done()).map(|l| l.date).max();
             let pain_since = today() - Duration::days(14);
             let pain = logs
                 .iter()
                 .any(|l| l.date >= pain_since && l.check.as_ref().is_some_and(|c| c.pain));
-            let upcoming = sched.iter().any(|s| s.date >= today());
+            let upcoming = sched.iter().any(|s| s.date >= today()) || assignments.iter().any(|a| a.end_date >= today());
             ApiResult::Ok(json!({
                 "client": e,
                 "adherence": a,

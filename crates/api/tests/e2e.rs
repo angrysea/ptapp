@@ -200,6 +200,13 @@ async fn full_client_journey() {
     assert_eq!(t.call("PUT", "/clients/client1/logs/log-abc", Some("client1"), Some(moved)).await.0, StatusCode::OK);
     let (_, logs) = t.call("GET", "/clients/client1/logs", Some("coach1"), None).await;
     assert_eq!(logs.as_array().unwrap().len(), 1);
+    // ...but an older replay still carrying the original date must not undo the move
+    let (s, conflict) = t.call("PUT", "/clients/client1/logs/log-abc", Some("client1"), Some(log(&older, 3))).await;
+    assert_eq!(s, StatusCode::CONFLICT);
+    assert_eq!(conflict["current"]["date"], today.to_string());
+    let (_, logs) = t.call("GET", "/clients/client1/logs", Some("coach1"), None).await;
+    assert_eq!(logs.as_array().unwrap().len(), 1);
+    assert_eq!(logs[0]["date"], today.to_string());
 
     // --- dashboard + roster (LG-6)
     let (s, dash) = t.call("GET", "/clients/client1/dashboard", Some("coach1"), None).await;
@@ -212,6 +219,7 @@ async fn full_client_journey() {
     assert_eq!(roster[0]["painFlag"], true);
     assert_eq!(roster[0]["waiverSigned"], true);
     assert_eq!(roster[0]["parqFlagged"], true);
+    assert_eq!(roster[0]["hasUpcoming"], true, "workout B is 9 days out, none today");
 
     // --- body metrics (BM-1..4)
     let (s, m) = t

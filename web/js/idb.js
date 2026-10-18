@@ -31,9 +31,14 @@ export const kv = {
   clear: () => run('kv', 'readwrite', (s) => s.clear()),
 };
 
+// Strictly increasing, so two writes queued in the same millisecond still get
+// distinct seqs (flush() relies on seq to tell a re-queued item from the sent one).
+let lastSeq = 0;
+const nextSeq = () => (lastSeq = Math.max(Date.now(), lastSeq + 1));
+
 export const outbox = {
   /** Items with the same key replace each other, so only the latest edit is sent. */
-  put: (item) => run('outbox', 'readwrite', (s) => s.put({ seq: Date.now(), ...item })),
+  put: (item) => run('outbox', 'readwrite', (s) => s.put({ seq: nextSeq(), ...item })),
   all: async () => ((await run('outbox', 'readonly', (s) => s.getAll())) || []).sort((a, b) => a.seq - b.seq),
   get: (key) => run('outbox', 'readonly', (s) => s.get(key)),
   del: (key) => run('outbox', 'readwrite', (s) => s.delete(key)),

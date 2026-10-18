@@ -190,18 +190,18 @@ pub async fn put_log(
     }
     let pk = scope.pk();
     let sk = format!("LOG#{}#{}", log.date, log.id);
+    let ver = log.updated_at.timestamp_millis();
     // One log id must have exactly one live item: if an offline device edited
     // the log's date, the old-dated copy is replaced, not left alongside it.
+    // The conditional put below only sees the new date's key, so an older
+    // replay carrying a different date is refused here, before anything is
+    // written or deleted.
     let prior: Vec<WorkoutLog> = st.store.query_prefix(&pk, "LOG#").await?;
-    let stale: Vec<(String, String)> = prior.iter()
-        .filter(|l| l.id == log.id && l.date != log.date)
-        .map(|l| (pk.clone(), format!("LOG#{}#{}", l.date, l.id)))
-        .collect();
-    if !stale.is_empty() {
-        st.store.batch_delete(stale).await?;
+    let moved: Vec<&WorkoutLog> = prior.iter().filter(|l| l.id == log.id && l.date != log.date).collect();
+    if let Some(newer) = moved.iter().find(|l| l.updated_at.timestamp_millis() > ver) {
+        return Err(ApiError::Conflict(serde_json::to_value(newer).unwrap_or(Value::Null)));
     }
     let mut item = keyed(&pk, &sk, &log)?;
-    let ver = log.updated_at.timestamp_millis();
     item.insert("ver".into(), AttributeValue::N(ver.to_string()));
 
     let res = st
@@ -215,7 +215,14 @@ pub async fn put_log(
         .send()
         .await;
     match res {
-        Ok(_) => Ok(Json(log)),
+        Ok(_) => {
+            // Only drop the old-dated copies once the new one is safely stored.
+            let stale: Vec<(String, String)> = moved.iter().map(|l| (pk.clone(), format!("LOG#{}#{}", l.date, l.id))).collect();
+            if !stale.is_empty() {
+                st.store.batch_delete(stale).await?;
+            }
+            Ok(Json(log))
+        }
         Err(e) if e.as_service_error().is_some_and(|se| se.is_conditional_check_failed_exception()) => {
             let current: Option<WorkoutLog> = st.store.get(&pk, &sk).await?;
             Err(ApiError::Conflict(serde_json::to_value(current).unwrap_or(Value::Null)))

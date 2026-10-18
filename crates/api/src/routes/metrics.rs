@@ -4,7 +4,8 @@ use std::collections::BTreeMap;
 
 use axum::extract::{Path, Query, State};
 use axum::Json;
-use chrono::{NaiveDate, Utc};
+use chrono::{Duration, NaiveDate, Utc};
+use futures::future::try_join_all;
 use ptcore::bodycomp::{compute, DensityEquation, SkinfoldInput, SkinfoldMethod};
 use ptcore::model::{Metric, MetricKind, Photo, PhotoPose, SkinfoldRecord, TAPE_SITES};
 use serde::{Deserialize, Serialize};
@@ -150,13 +151,17 @@ pub async fn list_photos(State(st): State<AppState>, ctx: Ctx, Path(cid): Path<S
     let scope = client_scope(&st, &ctx, &cid).await?;
     audit(&st, &ctx, &scope, "view-photos").await;
     let photos: Vec<Photo> = st.store.query_prefix(&scope.pk(), "PHOTO#").await?;
+    let present = try_join_all(photos.iter().map(|p| s3_object_exists(&st, &p.key))).await?;
+    // A PUT can only land while its presigned URL is valid. A missing object
+    // younger than that may still be uploading, so it is just left out; older
+    // ones were abandoned (closed tab, lost upload) and their record is dropped.
+    let abandoned_before = Utc::now() - Duration::from_std(st.presign_ttl).unwrap_or(Duration::hours(1)) - Duration::minutes(5);
     let mut out = Vec::with_capacity(photos.len());
-    for p in photos {
-        let exists = s3_object_exists(&st, &p.key).await?;
+    for (p, exists) in photos.into_iter().zip(present) {
         if !exists {
-            // The browser never finished the presigned PUT (closed tab, lost
-            // upload): drop the record pointing at a nonexistent object.
-            st.store.delete(&scope.pk(), &format!("PHOTO#{}", p.id)).await?;
+            if p.created_at < abandoned_before {
+                st.store.delete(&scope.pk(), &format!("PHOTO#{}", p.id)).await?;
+            }
             continue;
         }
         let url = presign_get(&st, &p.key).await?;
