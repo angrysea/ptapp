@@ -13,9 +13,17 @@ Parameters:
     Type: String
     Default: http://localhost:8080
     Description: Extra origin allowed for CORS and OAuth callbacks while developing the web app locally
+  PermissionsBoundary:
+    Type: String
+    Default: ""
+    Description: Managed policy ARN capping the stack's IAM roles (set by CI deploys; see scripts/ci-deploy-role.yaml)
+
+Conditions:
+  HasBoundary: !Not [!Equals [!Ref PermissionsBoundary, ""]]
 
 Globals:
   Function:
+    PermissionsBoundary: !If [HasBoundary, !Ref PermissionsBoundary, !Ref AWS::NoValue]
     Runtime: provided.al2023
     Architectures: [arm64]
     MemorySize: 256

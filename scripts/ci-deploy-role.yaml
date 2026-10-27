@@ -1,18 +1,30 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >
-  IAM role that the GitHub Actions deploy job assumes through OIDC, so no
-  long-lived AWS keys are stored in GitHub. Deploy once per AWS account; see
-  docs/DEPLOY.md ("Deploying from GitHub Actions").
+  Deploy access for GitHub Actions (OIDC, no stored keys). Deploy once per
+  AWS account and stage; see docs/DEPLOY.md ("Deploying from GitHub Actions").
+
+  Three layers, so a compromised CI job cannot become an account admin:
+  * GitHubDeployRole (assumed by CI) can only drive CloudFormation on this
+    stage's stacks, upload artifacts and publish the web app. It touches no
+    other service directly.
+  * CfnExecRole (assumed by CloudFormation for the app stack) creates the
+    resources. It may create IAM roles only if they carry the boundary.
+  * AppBoundary caps any such role at the app's own table, buckets and
+    logs, whatever policy the template attaches. Extend it when the app
+    needs a new service (e.g. SQS for video in Phase 1b).
+
+  scripts/deploy.sh derives these names from the account id when
+  DEPLOY_ROLE_STACK=1, so keep them in sync if you rename anything.
 
 Parameters:
   Repository:
     Type: String
     Default: angrysea/ptapp
-    Description: GitHub owner/repo allowed to assume the role
+    Description: GitHub owner/repo allowed to assume the CI role
   Environment:
     Type: String
     Default: dev
-    Description: GitHub environment (= stack stage) the deploy job runs in
+    Description: Stack stage, also the GitHub environment the deploy job runs in
   CreateOidcProvider:
     Type: String
     AllowedValues: ["true", "false"]
@@ -30,11 +42,104 @@ Resources:
       Url: https://token.actions.githubusercontent.com
       ClientIdList: [sts.amazonaws.com]
 
-  DeployRole:
+  # sam deploy uploads the Lambda bundle and template here (instead of
+  # --resolve-s3, which would need bucket-creation rights).
+  ArtifactBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub ptapp-${Environment}-sam-artifacts-${AWS::AccountId}
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 }
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-old-artifacts
+            Status: Enabled
+            ExpirationInDays: 30
+
+  AppBoundary:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub ptapp-${Environment}-boundary
+      Description: Ceiling for every role the app stack creates
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action: dynamodb:*
+            Resource:
+              - !Sub arn:aws:dynamodb:*:${AWS::AccountId}:table/ptapp-${Environment}
+              - !Sub arn:aws:dynamodb:*:${AWS::AccountId}:table/ptapp-${Environment}/*
+          - Effect: Allow
+            Action: s3:*
+            Resource:
+              - !Sub arn:aws:s3:::ptapp-${Environment}-*
+              - !Sub arn:aws:s3:::ptapp-${Environment}-*/*
+          - Effect: Allow
+            Action: [logs:CreateLogGroup, logs:CreateLogStream, logs:PutLogEvents]
+            Resource: !Sub arn:aws:logs:*:${AWS::AccountId}:log-group:/aws/lambda/ptapp-${Environment}-*
+
+  CfnExecRole:
     Type: AWS::IAM::Role
     Properties:
-      # Deliberately outside the ptapp-<env>-* pattern below, so the role
-      # cannot grant itself more permissions.
+      # Outside the ptapp-<env>-* pattern below, so it cannot modify itself.
+      RoleName: !Sub cfn-exec-ptapp-${Environment}
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: cloudformation.amazonaws.com }
+            Action: sts:AssumeRole
+      # The stack spans Lambda, DynamoDB, S3, Cognito, API Gateway,
+      # CloudFront and logs. PowerUserAccess covers them and excludes IAM;
+      # a dedicated AWS account per stage limits this further (DEPLOY.md).
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/PowerUserAccess
+      Policies:
+        - PolicyName: bounded-stack-roles
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # Granting or changing permissions requires the boundary.
+              - Effect: Allow
+                Action:
+                  - iam:CreateRole
+                  - iam:PutRolePolicy
+                  - iam:AttachRolePolicy
+                  - iam:PutRolePermissionsBoundary
+                Resource: !Sub arn:aws:iam::${AWS::AccountId}:role/ptapp-${Environment}-*
+                Condition:
+                  StringEquals:
+                    iam:PermissionsBoundary: !Ref AppBoundary
+              - Effect: Allow
+                Action:
+                  - iam:GetRole
+                  - iam:GetRolePolicy
+                  - iam:DeleteRole
+                  - iam:DeleteRolePolicy
+                  - iam:DetachRolePolicy
+                  - iam:TagRole
+                  - iam:UntagRole
+                  - iam:UpdateAssumeRolePolicy
+                Resource: !Sub arn:aws:iam::${AWS::AccountId}:role/ptapp-${Environment}-*
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource: !Sub arn:aws:iam::${AWS::AccountId}:role/ptapp-${Environment}-*
+                Condition:
+                  StringEquals:
+                    iam:PassedToService: lambda.amazonaws.com
+              - Effect: Deny
+                Action: iam:DeleteRolePermissionsBoundary
+                Resource: "*"
+
+  GitHubDeployRole:
+    Type: AWS::IAM::Role
+    Properties:
       RoleName: !Sub github-deploy-ptapp-${Environment}
       MaxSessionDuration: 3600
       AssumeRolePolicyDocument:
@@ -47,35 +152,49 @@ Resources:
             Condition:
               StringEquals:
                 token.actions.githubusercontent.com:aud: sts.amazonaws.com
-                # Only the deploy job, running in this GitHub environment.
+                # Jobs in this GitHub environment only; DEPLOY.md restricts
+                # the environment to the main branch.
                 token.actions.githubusercontent.com:sub: !Sub repo:${Repository}:environment:${Environment}
-      # SAM creates the stack's resources (Lambda, DynamoDB, S3, Cognito,
-      # CloudFront, API Gateway, logs). PowerUserAccess covers all of them
-      # except IAM, which is granted below for the stack's own roles only.
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/PowerUserAccess
       Policies:
-        - PolicyName: stack-roles
+        - PolicyName: deploy
           PolicyDocument:
             Version: "2012-10-17"
             Statement:
               - Effect: Allow
-                Action:
-                  - iam:CreateRole
-                  - iam:DeleteRole
-                  - iam:GetRole
-                  - iam:PassRole
-                  - iam:TagRole
-                  - iam:UntagRole
-                  - iam:UpdateAssumeRolePolicy
-                  - iam:AttachRolePolicy
-                  - iam:DetachRolePolicy
-                  - iam:PutRolePolicy
-                  - iam:GetRolePolicy
-                  - iam:DeleteRolePolicy
-                Resource: !Sub arn:aws:iam::${AWS::AccountId}:role/ptapp-${Environment}-*
+                Action: cloudformation:*
+                Resource: !Sub arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/ptapp-${Environment}/*
+              - Effect: Allow
+                Action: cloudformation:CreateChangeSet
+                Resource: !Sub arn:aws:cloudformation:${AWS::Region}:aws:transform/Serverless-2016-10-31
+              - Effect: Allow
+                Action: [cloudformation:GetTemplateSummary, cloudformation:ValidateTemplate]
+                Resource: "*"
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource: !GetAtt CfnExecRole.Arn
+                Condition:
+                  StringEquals:
+                    iam:PassedToService: cloudformation.amazonaws.com
+              - Effect: Allow
+                Action: [s3:GetObject, s3:PutObject, s3:ListBucket, s3:GetBucketLocation]
+                Resource: [!GetAtt ArtifactBucket.Arn, !Sub "${ArtifactBucket.Arn}/*"]
+              # Publishing the PWA: the stack's web bucket and its CloudFront cache.
+              - Effect: Allow
+                Action: [s3:ListBucket, s3:GetObject, s3:PutObject, s3:DeleteObject]
+                Resource:
+                  - !Sub arn:aws:s3:::ptapp-${Environment}-webbucket-*
+                  - !Sub arn:aws:s3:::ptapp-${Environment}-webbucket-*/*
+              - Effect: Allow
+                Action: cloudfront:CreateInvalidation
+                Resource: !Sub arn:aws:cloudfront::${AWS::AccountId}:distribution/*
 
 Outputs:
   RoleArn:
     Description: Set as the AWS_DEPLOY_ROLE_ARN variable on the GitHub environment
-    Value: !GetAtt DeployRole.Arn
+    Value: !GetAtt GitHubDeployRole.Arn
+  CfnExecRoleArn:
+    Value: !GetAtt CfnExecRole.Arn
+  BoundaryArn:
+    Value: !Ref AppBoundary
+  ArtifactBucketName:
+    Value: !Ref ArtifactBucket

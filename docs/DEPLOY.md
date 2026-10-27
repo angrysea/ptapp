@@ -23,7 +23,7 @@ It prints the app URL (`https://dxxxx.cloudfront.net`). The first coach signs up
 
 One-time setup per AWS account and stage:
 
-1. Create the deploy role (it also creates the account's GitHub OIDC provider; pass `CreateOidcProvider=false` if one already exists):
+1. Create the deploy roles (this also creates the account's GitHub OIDC provider; pass `CreateOidcProvider=false` if one already exists):
    ```bash
    aws cloudformation deploy --template-file scripts/ci-deploy-role.yaml \
      --stack-name ptapp-github-deploy-dev --capabilities CAPABILITY_NAMED_IAM \
@@ -31,12 +31,22 @@ One-time setup per AWS account and stage:
    aws cloudformation describe-stacks --stack-name ptapp-github-deploy-dev \
      --query "Stacks[0].Outputs[?OutputKey=='RoleArn'].OutputValue" --output text
    ```
-   The role trusts only workflow jobs running in the GitHub environment of the same name. It has `PowerUserAccess` plus IAM rights limited to the stack's own `ptapp-<stage>-*` roles.
-2. In GitHub, **Settings → Environments → New environment** named `dev` (add required reviewers if you want an approval step), with these variables:
-   * `AWS_DEPLOY_ROLE_ARN`: the role ARN from step 1
-   * `COGNITO_DOMAIN_PREFIX`: as above, globally unique
-   * `AWS_REGION`: optional, defaults to `us-east-1`
+   This creates three layers, so a compromised CI job cannot take over the account:
+   * the **CI role**, which can only run CloudFormation on the `ptapp-<stage>` stack, upload to its own artifact bucket, publish the web app and invalidate CloudFront. It has no direct access to IAM or the app's data;
+   * a **CloudFormation execution role** (`cfn-exec-ptapp-<stage>`) that creates the stack's resources. It can only create IAM roles that carry the boundary below;
+   * a **permissions boundary** (`ptapp-<stage>-boundary`) that caps every role in the stack at the app's own table, buckets and logs. When the app needs a new AWS service (SQS for video, for example), add it to the boundary in `scripts/ci-deploy-role.yaml`.
+
+   The execution role still has `PowerUserAccess` for the services the stack uses. For production, use a separate AWS account per stage so that access can't reach anything else.
+2. In GitHub, **Settings → Environments → New environment** named `dev`:
+   * Under **Deployment branches and tags**, choose **Selected branches** and add `main`. **This is required:** AWS trusts any job that runs in this environment, so without the rule a workflow edited on another branch could deploy.
+   * Optionally add required reviewers for an approval step.
+   * Add these variables:
+     * `AWS_DEPLOY_ROLE_ARN`: the `RoleArn` output from step 1
+     * `COGNITO_DOMAIN_PREFIX`: as above, globally unique
+     * `AWS_REGION`: optional, defaults to `us-east-1`
 3. Repeat with `Environment=prod` and a `prod` environment for production.
+
+CI deploys set `DEPLOY_ROLE_STACK=1`, which makes `deploy.sh` use the execution role, the boundary and the artifact bucket. Deploying from your own machine without it works as before.
 
 To deploy on every push to `main` instead, add `push` to the deploy job's `if:` condition in `ci.yml`.
 
