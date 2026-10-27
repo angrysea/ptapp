@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Build the Rust Lambda, deploy the SAM stack, generate web/js/config.js and
-# publish the PWA. Run from Linux, macOS, WSL or CI (see docs/DEPLOY.md).
+# publish the PWA. Run from Linux, macOS, WSL or Git Bash (see docs/DEPLOY.md).
 #
 #   COGNITO_DOMAIN_PREFIX=myptapp-dev ./scripts/deploy.sh
 #
@@ -15,28 +15,16 @@ REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-us-east-1}}"
 echo "==> building Lambda (arm64)"
 cargo lambda build --release --arm64 --bin api
 
-# With DEPLOY_ROLE_STACK=1 (set by CI), deploy through the roles and bucket
-# from scripts/ci-deploy-role.yaml: CloudFormation runs as its execution
-# role and every IAM role in the stack carries the permissions boundary.
-# Otherwise deploy with your own credentials and SAM's managed bucket.
-DEPLOY_ARGS=(--resolve-s3)
-PARAMS=("Stage=$STAGE" "CognitoDomainPrefix=$COGNITO_DOMAIN_PREFIX")
-if [ "${DEPLOY_ROLE_STACK:-}" = 1 ]; then
-  ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"
-  DEPLOY_ARGS=(--role-arn "arn:aws:iam::$ACCOUNT:role/cfn-exec-ptapp-$STAGE" --s3-bucket "ptapp-$STAGE-sam-artifacts-$ACCOUNT")
-  PARAMS+=("PermissionsBoundary=arn:aws:iam::$ACCOUNT:policy/ptapp-$STAGE-boundary")
-fi
-
 echo "==> deploying stack $STACK to $REGION"
 sam deploy \
   --template-file template.yaml \
   --stack-name "$STACK" \
   --region "$REGION" \
   --capabilities CAPABILITY_IAM \
-  "${DEPLOY_ARGS[@]}" \
+  --resolve-s3 \
   --no-confirm-changeset \
   --no-fail-on-empty-changeset \
-  --parameter-overrides "${PARAMS[@]}"
+  --parameter-overrides "Stage=$STAGE" "CognitoDomainPrefix=$COGNITO_DOMAIN_PREFIX"
 
 out() {
   aws cloudformation describe-stacks --region "$REGION" --stack-name "$STACK" \

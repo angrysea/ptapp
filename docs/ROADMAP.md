@@ -5,7 +5,7 @@ Every remaining requirement, in build order, with concrete steps for **this** co
 1. domain types and rules in `crates/core` (+ unit tests)
 2. key patterns in `store.rs`; a route in `crates/api/src/routes/*`; registration in `lib.rs`; steps in `tests/e2e.rs`
 3. a view in `web/js/views/*`, its route in `app.js`, and the file added to `SHELL` in `sw.js`
-4. infrastructure in `template.yaml`; extend `tests/ui/journey.py`; CI (`.github/workflows/ci.yml`) then runs clippy, tests, `cfn-lint` and both journeys on the pull request; deploy to dev with the workflow's manual deploy
+4. infrastructure in `template.yaml`; extend `tests/ui/journey.py`; CI (`.github/workflows/ci.yml`) then runs clippy, tests, `cfn-lint` and both journeys on the pull request and push; deploy to dev with `scripts/deploy.sh` (DEPLOY.md)
 
 Patterns already in place to reuse rather than rebuild:
 
@@ -30,7 +30,7 @@ Status legend: ✅ done in MVP · 🟡 partial · ⬜ not started
 | Body metrics | BM-1 ✅ · BM-2 ✅ · BM-3 ✅ · BM-4 ✅ · BM-7 ✅ · BM-8 ✅ | BM-5 ✅ · BM-6 ⬜ |
 | Messaging | MS-1 🟡 (async thread, text only) · MS-2 ⬜ | MS-3 🟡 (comments anchor to log/set) · MS-4 ⬜ · MS-5 ⬜ · MS-6 ⬜ |
 | Business | BZ-1 ⬜ | BZ-2 ⬜ · BZ-3 ⬜ · BZ-4 ⬜ · BZ-5 ⬜ · BZ-6 ⬜ |
-| NFRs | privacy ✅ (private photos, tenant checks, per-user offline cache) · audit log ✅ · offline ✅ · upload size limits ✅ · CI ✅ (tests on every push; manual OIDC deploy) · backups 🟡 (PITR; restore test) · MFA 🟡 (optional) · alarms ⬜ · export/delete ⬜ · video retention ⬜ | |
+| NFRs | privacy ✅ (private photos, tenant checks, per-user offline cache) · audit log ✅ · offline ✅ · upload size limits ✅ · CI ✅ (tests on every push; deploys run locally) · backups 🟡 (PITR; restore test) · MFA 🟡 (optional) · alarms ⬜ · export/delete ⬜ · video retention ⬜ | |
 
 ---
 
@@ -103,7 +103,7 @@ Use the server-side render approach from the BRD: the browser records an **edit 
 * ✅ **Upload size limits:** done. Presigned PUTs are signed for an exact, capped size (15 MB photos, 250 MB demo videos), so S3 refuses anything else; no post-upload check is needed. Video parts (section 1) should do the same per part.
 * **Observability:** CloudWatch alarms on Lambda errors/throttles, HTTP API 5xx, and DLQ depth → SNS email. Use structured `tracing` JSON logs (already in place). Worth doing before the first real users, ahead of the video work.
 * **Backups:** an AWS Backup plan (daily, 35 days) and a scripted quarterly restore test into a scratch table.
-* ✅ **CI/CD:** done. `.github/workflows/ci.yml` runs clippy (`-D warnings`), unit tests, `cfn-lint`, a web syntax check, the e2e test with moto as a service container and the Playwright journey on every push and pull request. Deploy is a manual run of the same workflow, through OIDC to the role in `scripts/ci-deploy-role.yaml` (setup in DEPLOY.md). Switch it to deploy on every push to `main` once dev is stable.
+* ✅ **CI/CD:** done. `.github/workflows/ci.yml` runs clippy (`-D warnings`), unit tests, `cfn-lint`, a web syntax check, the e2e test with moto as a service container and the Playwright journey on every push and pull request. Deploys run locally with `scripts/deploy.sh`: the AWS Organization blocks the OIDC provider a GitHub deploy would need. Revisit if its admin allows one (the removed deploy job and role template are in git history).
 * **Coach signups:** anyone who creates an account can register as a coach. Gate `register_coach` once open question 1 is answered (admin approval, or an active SaaS subscription, see section 4).
 * **Photo list:** `GET /photos` still checks S3 once per photo on every load. Move photos to the upload + confirm pattern the exercise demos use, which also lets the pending-tag lifecycle rule clean up abandoned photo uploads.
 

@@ -17,40 +17,17 @@ The script:
 
 It prints the app URL (`https://dxxxx.cloudfront.net`). The first coach signs up through **Sign in → Sign up** on the Cognito page, then picks "I'm a coach".
 
-## Deploying from GitHub Actions
+## Signing in and deploying from Windows
 
-`.github/workflows/ci.yml` runs on every push to `main` and on every pull request: clippy (warnings fail the build), unit tests, `cfn-lint`, a syntax check of the web app, the API journey against moto, and the Playwright browser journey (screenshots are attached to failed runs). It deploys **only** when started by hand: **Actions → CI → Run workflow**, tick *Deploy*, pick the stage. It authenticates to AWS with OIDC, so no AWS keys are stored in GitHub.
+Deploys run from a developer machine, not from GitHub. (The AWS Organization this app deploys into blocks creating the OIDC provider GitHub would need.) GitHub CI (`.github/workflows/ci.yml`) still runs clippy, the unit tests, `cfn-lint`, a web syntax check, the API journey against moto and the Playwright journey on every push and pull request.
 
-One-time setup per AWS account and stage:
-
-1. Create the deploy roles (this also creates the account's GitHub OIDC provider; pass `CreateOidcProvider=false` if one already exists):
+1. Install the tools once: `winget install Amazon.AWSCLI Amazon.SAM-CLI zig.zig`, `pip install cargo-lambda` and `rustup target add aarch64-unknown-linux-gnu`.
+2. Sign in with your normal AWS console login: `aws login --profile ptapp` (it opens the browser; the CLI refreshes the temporary credentials itself). Use `aws configure sso` only if your account uses an IAM Identity Center portal.
+3. Deploy from Git Bash in a new terminal (so it sees the new tools). SAM installs as `sam.cmd`, which Git Bash cannot call as `sam`, so wrap it:
    ```bash
-   aws cloudformation deploy --template-file scripts/ci-deploy-role.yaml \
-     --stack-name ptapp-github-deploy-dev --capabilities CAPABILITY_NAMED_IAM \
-     --parameter-overrides Environment=dev
-   aws cloudformation describe-stacks --stack-name ptapp-github-deploy-dev \
-     --query "Stacks[0].Outputs[?OutputKey=='RoleArn'].OutputValue" --output text
+   sam() { "/c/Program Files/Amazon/AWSSAMCLI/bin/sam.cmd" "$@"; }; export -f sam
+   AWS_PROFILE=ptapp AWS_REGION=us-east-2 STAGE=dev COGNITO_DOMAIN_PREFIX=ptapp-online ./scripts/deploy.sh
    ```
-   This creates three layers, so a compromised CI job cannot take over the account:
-   * the **CI role**, which can only run CloudFormation on the `ptapp-<stage>` stack, upload to its own artifact bucket, publish the web app and invalidate CloudFront. It has no direct access to IAM or the app's data;
-   * a **CloudFormation execution role** (`cfn-exec-ptapp-<stage>`) that creates the stack's resources. It can only create IAM roles that carry the boundary below;
-   * a **permissions boundary** (`ptapp-<stage>-boundary`) that caps every role in the stack at the app's own table, buckets and logs. When the app needs a new AWS service (SQS for video, for example), add it to the boundary in `scripts/ci-deploy-role.yaml`.
-
-   CI can submit any template, so the execution role is the real limit of what a CI deploy can do. It only covers the services the stack uses: DynamoDB, S3, Lambda and logs are limited to this stage's names, while Cognito, API Gateway and CloudFront can't be limited by name because AWS generates their IDs. For production, use a separate AWS account per stage so those three can't reach anything else. If a first CI deploy fails with `AccessDenied`, the error names the missing action; add it to `stack-services`.
-
-   If you deployed this stage from your own machine before, its function role has no boundary yet. The first CI deploy attaches it. Until then, don't attach extra policies to `ptapp-<stage>-*` roles by hand.
-2. In GitHub, **Settings → Environments → New environment** named `dev`:
-   * Under **Deployment branches and tags**, choose **Selected branches** and add `main`. **This is required:** AWS trusts any job that runs in this environment, so without the rule a workflow edited on another branch could deploy.
-   * Optionally add required reviewers for an approval step.
-   * Add these variables:
-     * `AWS_DEPLOY_ROLE_ARN`: the `RoleArn` output from step 1
-     * `COGNITO_DOMAIN_PREFIX`: as above, globally unique
-     * `AWS_REGION`: optional, defaults to `us-east-1`
-3. Repeat with `Environment=prod` and a `prod` environment for production.
-
-CI deploys set `DEPLOY_ROLE_STACK=1`, which makes `deploy.sh` use the execution role, the boundary and the artifact bucket. Deploying from your own machine without it works as before.
-
-To deploy on every push to `main` instead, add `push` to the deploy job's `if:` condition in `ci.yml`.
 
 ## After the first deploy
 
