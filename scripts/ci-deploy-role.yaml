@@ -95,22 +95,55 @@ Resources:
           - Effect: Allow
             Principal: { Service: cloudformation.amazonaws.com }
             Action: sts:AssumeRole
-      # The stack spans Lambda, DynamoDB, S3, Cognito, API Gateway,
-      # CloudFront and logs. PowerUserAccess covers them and excludes IAM;
-      # a dedicated AWS account per stage limits this further (DEPLOY.md).
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/PowerUserAccess
+      # CI can submit any template, so this role is the real ceiling of a CI
+      # deploy. It covers only the services template.yaml uses, scoped to
+      # this stage's names where the service allows it. Cognito, API Gateway
+      # and CloudFront resources get generated ids, so they cannot be scoped
+      # by name; a dedicated AWS account per stage closes that gap
+      # (DEPLOY.md). Add services here (and to AppBoundary) as the app grows.
       Policies:
+        - PolicyName: stack-services
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: dynamodb:*
+                Resource:
+                  - !Sub arn:aws:dynamodb:*:${AWS::AccountId}:table/ptapp-${Environment}
+                  - !Sub arn:aws:dynamodb:*:${AWS::AccountId}:table/ptapp-${Environment}/*
+              # Media and web buckets (CloudFormation names them
+              # ptapp-<env>-<logicalid>-<random>) and the artifact bucket.
+              - Effect: Allow
+                Action: s3:*
+                Resource:
+                  - !Sub arn:aws:s3:::ptapp-${Environment}-*
+                  - !Sub arn:aws:s3:::ptapp-${Environment}-*/*
+              - Effect: Allow
+                Action: lambda:*
+                Resource: !Sub arn:aws:lambda:*:${AWS::AccountId}:function:ptapp-${Environment}-*
+              - Effect: Allow
+                Action: logs:*
+                Resource: !Sub arn:aws:logs:*:${AWS::AccountId}:log-group:/aws/lambda/ptapp-${Environment}-*
+              - Effect: Allow
+                Action: logs:DescribeLogGroups
+                Resource: "*"
+              - Effect: Allow
+                Action: [cognito-idp:*, apigateway:*, cloudfront:*]
+                Resource: "*"
         - PolicyName: bounded-stack-roles
           PolicyDocument:
             Version: "2012-10-17"
             Statement:
-              # Granting or changing permissions requires the boundary.
+              # Every action that supports the boundary condition requires it.
+              # Trust-policy edits are not granted at all: the stack never
+              # needs them, and they cannot be tied to the boundary.
               - Effect: Allow
                 Action:
                   - iam:CreateRole
                   - iam:PutRolePolicy
                   - iam:AttachRolePolicy
+                  - iam:DeleteRolePolicy
+                  - iam:DetachRolePolicy
                   - iam:PutRolePermissionsBoundary
                 Resource: !Sub arn:aws:iam::${AWS::AccountId}:role/ptapp-${Environment}-*
                 Condition:
@@ -121,11 +154,8 @@ Resources:
                   - iam:GetRole
                   - iam:GetRolePolicy
                   - iam:DeleteRole
-                  - iam:DeleteRolePolicy
-                  - iam:DetachRolePolicy
                   - iam:TagRole
                   - iam:UntagRole
-                  - iam:UpdateAssumeRolePolicy
                 Resource: !Sub arn:aws:iam::${AWS::AccountId}:role/ptapp-${Environment}-*
               - Effect: Allow
                 Action: iam:PassRole

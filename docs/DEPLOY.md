@@ -36,7 +36,9 @@ One-time setup per AWS account and stage:
    * a **CloudFormation execution role** (`cfn-exec-ptapp-<stage>`) that creates the stack's resources. It can only create IAM roles that carry the boundary below;
    * a **permissions boundary** (`ptapp-<stage>-boundary`) that caps every role in the stack at the app's own table, buckets and logs. When the app needs a new AWS service (SQS for video, for example), add it to the boundary in `scripts/ci-deploy-role.yaml`.
 
-   The execution role still has `PowerUserAccess` for the services the stack uses. For production, use a separate AWS account per stage so that access can't reach anything else.
+   CI can submit any template, so the execution role is the real limit of what a CI deploy can do. It only covers the services the stack uses: DynamoDB, S3, Lambda and logs are limited to this stage's names, while Cognito, API Gateway and CloudFront can't be limited by name because AWS generates their IDs. For production, use a separate AWS account per stage so those three can't reach anything else. If a first CI deploy fails with `AccessDenied`, the error names the missing action; add it to `stack-services`.
+
+   If you deployed this stage from your own machine before, its function role has no boundary yet. The first CI deploy attaches it. Until then, don't attach extra policies to `ptapp-<stage>-*` roles by hand.
 2. In GitHub, **Settings → Environments → New environment** named `dev`:
    * Under **Deployment branches and tags**, choose **Selected branches** and add `main`. **This is required:** AWS trusts any job that runs in this environment, so without the rule a workflow edited on another branch could deploy.
    * Optionally add required reviewers for an approval step.
