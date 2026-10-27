@@ -17,6 +17,29 @@ The script:
 
 It prints the app URL (`https://dxxxx.cloudfront.net`). The first coach signs up through **Sign in → Sign up** on the Cognito page, then picks "I'm a coach".
 
+## Deploying from GitHub Actions
+
+`.github/workflows/ci.yml` runs on every push to `main` and on every pull request: clippy (warnings fail the build), unit tests, `cfn-lint`, a syntax check of the web app, the API journey against moto, and the Playwright browser journey (screenshots are attached to failed runs). It deploys **only** when started by hand: **Actions → CI → Run workflow**, tick *Deploy*, pick the stage. It authenticates to AWS with OIDC, so no AWS keys are stored in GitHub.
+
+One-time setup per AWS account and stage:
+
+1. Create the deploy role (it also creates the account's GitHub OIDC provider; pass `CreateOidcProvider=false` if one already exists):
+   ```bash
+   aws cloudformation deploy --template-file scripts/ci-deploy-role.yaml \
+     --stack-name ptapp-github-deploy-dev --capabilities CAPABILITY_NAMED_IAM \
+     --parameter-overrides Environment=dev
+   aws cloudformation describe-stacks --stack-name ptapp-github-deploy-dev \
+     --query "Stacks[0].Outputs[?OutputKey=='RoleArn'].OutputValue" --output text
+   ```
+   The role trusts only workflow jobs running in the GitHub environment of the same name. It has `PowerUserAccess` plus IAM rights limited to the stack's own `ptapp-<stage>-*` roles.
+2. In GitHub, **Settings → Environments → New environment** named `dev` (add required reviewers if you want an approval step), with these variables:
+   * `AWS_DEPLOY_ROLE_ARN`: the role ARN from step 1
+   * `COGNITO_DOMAIN_PREFIX`: as above, globally unique
+   * `AWS_REGION`: optional, defaults to `us-east-1`
+3. Repeat with `Environment=prod` and a `prod` environment for production.
+
+To deploy on every push to `main` instead, add `push` to the deploy job's `if:` condition in `ci.yml`.
+
 ## After the first deploy
 
 * **MFA for coaches.** The pool allows TOTP (`MfaConfiguration: OPTIONAL`). Coaches enable it from the hosted UI. Enforcing it for the coach role is a Phase 1b item.

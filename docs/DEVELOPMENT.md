@@ -49,6 +49,8 @@ cargo clippy --all-targets
 cfn-lint template.yaml
 ```
 
+CI runs all of these, plus the browser journey below, on every push and pull request (`.github/workflows/ci.yml`; see DEPLOY.md). The code is not `rustfmt`-formatted, so CI does not check formatting.
+
 The e2e test (`crates/api/tests/e2e.rs`) drives the real router in process through onboarding, invites, intake/waiver, programs, assignment, offline-conflict logging, dashboard maths, skinfolds, photos, comments, tenant isolation and the audit log.
 
 Browser journey (Playwright; uses installed Microsoft Edge by default, `BROWSER_CHANNEL=chrome` for Chrome):

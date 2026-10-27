@@ -5,7 +5,14 @@ Every remaining requirement, in build order, with concrete steps for **this** co
 1. domain types and rules in `crates/core` (+ unit tests)
 2. key patterns in `store.rs`; a route in `crates/api/src/routes/*`; registration in `lib.rs`; steps in `tests/e2e.rs`
 3. a view in `web/js/views/*`, its route in `app.js`, and the file added to `SHELL` in `sw.js`
-4. infrastructure in `template.yaml`; `cfn-lint`; deploy to dev; extend `tests/ui/journey.py`
+4. infrastructure in `template.yaml`; extend `tests/ui/journey.py`; CI (`.github/workflows/ci.yml`) then runs clippy, tests, `cfn-lint` and both journeys on the pull request; deploy to dev with the workflow's manual deploy
+
+Patterns already in place to reuse rather than rebuild:
+
+* **Uploads:** `util::presign_put` signs `Content-Length` (and any tag) into the URL, so S3 enforces the size the API approved; the response's `uploadHeaders` must be sent as-is. Uploads that need a follow-up step are tagged `state=pending` (`util::PENDING_TAG`) and confirmed by the API; a lifecycle rule expires unconfirmed ones after 2 days (see the exercise demo `demo-upload` / `demo-confirm` pair).
+* **Local dates:** `Profile.timeZone` (sent by the app at startup) and `Profile::today()` / `ClientScope::today()` give a user's calendar date. Anything "per day" or "per week" (missed workouts, reminders, check-ins) uses these, never UTC.
+* **Item size:** every write goes through `store::keyed`, which turns items over ~350 KB into a 400.
+* **Offline writes:** the outbox in `web/js/api.js` is per user; use `enqueue(..., key)` with a stable key for edits that should replace each other.
 
 Status legend: ✅ done in MVP · 🟡 partial · ⬜ not started
 
@@ -13,7 +20,7 @@ Status legend: ✅ done in MVP · 🟡 partial · ⬜ not started
 
 | Area | Must (MVP) | Should / Could |
 |---|---|---|
-| Onboarding | ON-1 🟡 (link + mailto; SES email in 1b) · ON-2 ✅ · ON-3 ✅ | ON-4 ⬜ · ON-5 ⬜ |
+| Onboarding | ON-1 🟡 (link + mailto, bound to the invited verified email; SES email in 1b) · ON-2 ✅ · ON-3 ✅ | ON-4 ⬜ · ON-5 ⬜ |
 | Builder | WB-1 ✅ · WB-2 ✅ · WB-3 ✅ · WB-4 ✅ | WB-5 ⬜ · WB-6 ⬜ · WB-7 ⬜ |
 | Logging | LG-1 ✅ · LG-2 ✅ · LG-3 ✅ · LG-4 ✅ · LG-6 ✅ | LG-5 🟡 (e1RM trend; no PR events) · LG-7 🟡 (roster flags; no alerts) · LG-8 ⬜ |
 | Video submission | VS-1 ⬜ · VS-2 ⬜ · VS-3 ⬜ · VS-4 ⬜ | VS-5 ⬜ |
@@ -23,7 +30,7 @@ Status legend: ✅ done in MVP · 🟡 partial · ⬜ not started
 | Body metrics | BM-1 ✅ · BM-2 ✅ · BM-3 ✅ · BM-4 ✅ · BM-7 ✅ · BM-8 ✅ | BM-5 ✅ · BM-6 ⬜ |
 | Messaging | MS-1 🟡 (async thread, text only) · MS-2 ⬜ | MS-3 🟡 (comments anchor to log/set) · MS-4 ⬜ · MS-5 ⬜ · MS-6 ⬜ |
 | Business | BZ-1 ⬜ | BZ-2 ⬜ · BZ-3 ⬜ · BZ-4 ⬜ · BZ-5 ⬜ · BZ-6 ⬜ |
-| NFRs | privacy ✅ (private photos, tenant checks) · audit log ✅ · offline ✅ · backups 🟡 (PITR; restore test) · MFA 🟡 (optional) · export/delete ⬜ · video retention ⬜ | |
+| NFRs | privacy ✅ (private photos, tenant checks, per-user offline cache) · audit log ✅ · offline ✅ · upload size limits ✅ · CI ✅ (tests on every push; manual OIDC deploy) · backups 🟡 (PITR; restore test) · MFA 🟡 (optional) · alarms ⬜ · export/delete ⬜ · video retention ⬜ | |
 
 ---
 
@@ -43,7 +50,7 @@ The BRD's Phase 1 also includes video, chat and payments. Build in this order: v
 **Core:** `Video { id, logId, itemId, setIndex, exerciseId, status: uploading|processing|ready|failed, rawKey, mp4Key, posterKey, durationSec, reviewedAt, createdAt }`.
 
 **API**
-* `POST /clients/{cid}/videos` → creates `VIDEO#{id}`, starts an S3 **multipart upload** (`CreateMultipartUpload`) and returns `uploadId` plus presigned `UploadPart` URLs for N parts (8 MB each). This gives **resumable** uploads (VS-3): the client keeps the part list in IndexedDB and re-requests URLs with `POST /videos/{id}/parts`.
+* `POST /clients/{cid}/videos` with the file size → creates `VIDEO#{id}`, starts an S3 **multipart upload** (`CreateMultipartUpload`, tagged `state=pending` so abandoned uploads expire) and returns `uploadId` plus presigned `UploadPart` URLs for N parts (8 MB each), each signed for its exact part length like `util::presign_put`. This gives **resumable** uploads (VS-3): the client keeps the part list in IndexedDB and re-requests URLs with `POST /videos/{id}/parts`.
 * `POST /clients/{cid}/videos/{id}/complete` with `{parts:[{n, etag}]}` → `CompleteMultipartUpload`; status becomes processing.
 * Transcode worker: `ffmpeg -i raw -vf scale=-2:'min(1080,ih)' -c:v libx264 -crf 26 -preset veryfast -movflags +faststart -c:a aac -b:a 96k`, plus a poster frame; writes `mp4Key`; sets status ready and `gsi1pk=COACH#{coach}#UNREVIEWED`, `gsi1sk={createdAt}`.
 * `GET /videos/queue` (coach) → Query GSI `COACH#{coach}#UNREVIEWED` ascending, i.e. **oldest first (VS-4)**; `POST /videos/{id}/reviewed` removes the GSI attributes.
@@ -93,10 +100,12 @@ Use the server-side render approach from the BRD: the browser records an **edit 
 * **ON-1 email:** SES with a verified domain; `POST /invites` sends the templated email, and the mailto fallback stays.
 * **Coach MFA:** add a Cognito **pre-token-generation** Lambda that adds `role`. The API then rejects coach routes unless the token's `amr` claim includes `mfa`, and the PWA links to the hosted UI's TOTP setup. Alternatively, use separate coach and client user pools, with `MfaConfiguration: ON` for the coach pool.
 * **Privacy export & delete (privacy NFR):** `POST /me/export` → an async job (SQS) that queries `CLIENT#{id}`, zips JSON + CSV + media into S3 and emails a presigned link; `DELETE /me` → deletes partition items in batches, the S3 prefix `media/{coach}/{client}/` and the Cognito user, and writes a tombstone audit record. Add an explicit consent checkbox at signup (privacy NFR), stored on the profile with a timestamp.
-* **Upload size limits:** S3 presigned PUT can't enforce size, so check `ContentLength` in the S3-event worker and delete oversize objects. For photos, an alternative is a Lambda-generated presigned **POST** policy with `content-length-range`.
-* **Observability:** CloudWatch alarms on Lambda errors/throttles, HTTP API 5xx, and DLQ depth → SNS email. Use structured `tracing` JSON logs (already in place).
+* ✅ **Upload size limits:** done. Presigned PUTs are signed for an exact, capped size (15 MB photos, 250 MB demo videos), so S3 refuses anything else; no post-upload check is needed. Video parts (section 1) should do the same per part.
+* **Observability:** CloudWatch alarms on Lambda errors/throttles, HTTP API 5xx, and DLQ depth → SNS email. Use structured `tracing` JSON logs (already in place). Worth doing before the first real users, ahead of the video work.
 * **Backups:** an AWS Backup plan (daily, 35 days) and a scripted quarterly restore test into a scratch table.
-* **CI/CD:** a GitHub Actions workflow on `ubuntu-latest`: `cargo test`, the e2e test with moto as a service container, `cfn-lint`, then `scripts/deploy.sh` with OIDC to an IAM deploy role (no long-lived keys).
+* ✅ **CI/CD:** done. `.github/workflows/ci.yml` runs clippy (`-D warnings`), unit tests, `cfn-lint`, a web syntax check, the e2e test with moto as a service container and the Playwright journey on every push and pull request. Deploy is a manual run of the same workflow, through OIDC to the role in `scripts/ci-deploy-role.yaml` (setup in DEPLOY.md). Switch it to deploy on every push to `main` once dev is stable.
+* **Coach signups:** anyone who creates an account can register as a coach. Gate `register_coach` once open question 1 is answered (admin approval, or an active SaaS subscription, see section 4).
+* **Photo list:** `GET /photos` still checks S3 once per photo on every load. Move photos to the upload + confirm pattern the exercise demos use, which also lets the pending-tag lifecycle rule clean up abandoned photo uploads.
 
 **Phase 1 exit gate (BRD):** clients log at least 80% of assigned workouts for 4 weeks, which the dashboard's adherence % measures directly; coach video review takes under 5 minutes.
 
@@ -108,7 +117,7 @@ Use the server-side render approach from the BRD: the browser records an **edit 
 |---|---|
 | **VR-4 Drawing tools** | A `<canvas>` over the video; tools for line, angle (3-point, live degrees), circle, arrow, freehand and an on-screen timer. Strokes are recorded as timeline events `{t, tool, points, color}` in the same edit list; the render worker draws them with ffmpeg `drawbox`/`drawtext`, or by rasterizing the strokes to PNG overlays per segment (`overlay=enable='between(t,a,b)'`). |
 | **VR-5 Compare** | Pick a reference clip (exercise demo or the client's earlier `VIDEO#` for the same `exerciseId`, found via GSI `CLIENT#{id}#EX#{exerciseId}`). Side-by-side with two `<video>` elements and synced `currentTime`; overlay with CSS opacity. The renderer uses `hstack` or `blend`. |
-| **FB-3 Weekly check-in** | `COACH#/CHECKIN_TEMPLATE#{id}` holds the questions (JSON schema: scale/text/number/photo). `CLIENT#/CHECKIN#{weekStart}` stores the answers. An EventBridge Scheduler weekly rule per client timezone sends the reminder (MS-4). The comparison view shows the last 4 weeks as columns. |
+| **FB-3 Weekly check-in** | `COACH#/CHECKIN_TEMPLATE#{id}` holds the questions (JSON schema: scale/text/number/photo). `CLIENT#/CHECKIN#{weekStart}` stores the answers. An EventBridge Scheduler weekly rule in each client's `Profile.timeZone` sends the reminder (MS-4). The comparison view shows the last 4 weeks as columns. |
 | **FB-4 Saved snippets** | `COACH#/SNIPPET#{id}`; a picker in the comment box and video reply; `/` shortcut. |
 | **WB-5 %1RM loads** | Add `CLIENT#/MAX#{exerciseId}` (tested or estimated). `Item.load` becomes an enum `{kg} \| {pct1rm}`. At **assign time** `materialize()` resolves % to kg rounded to the plate increment (core function, unit-tested); the snapshot keeps both. |
 | **WB-6 Progression rules** | A core `ProgressionRule { exerciseId, when: AllRepsHitAtOrBelowRpe(x), then: AddKg(2.5) \| AddReps(1), cap }`. Evaluated in Rust when a log is saved (or nightly): it proposes next-week load changes as **pending suggestions** for the coach (the same coach-in-the-loop UI as AI-6). Pain flags block suggestions (BRD risk). |
@@ -166,7 +175,7 @@ Use the server-side render approach from the BRD: the browser records an **edit 
 
 ## Open questions from the BRD (answers needed before the phase they affect)
 
-1. **Single coach vs. SaaS.** Built multi-tenant (one coach = one tenant). Decide whether coaches pay you (Phase 1b, BZ-1).
+1. **Single coach vs. SaaS.** Built multi-tenant (one coach = one tenant). Decide whether coaches pay you (Phase 1b, BZ-1). This also decides how coach signup is gated (see 1b hardening).
 2. **Where local AI runs.** The design assumes a GPU box pulling from SQS (Phase 3).
 3. **Lifts for form review.** Pick 3-5 before Phase 3; start labeling clips in Phase 1b.
 4. **Nutrition in scope?** Phase 4 by default.

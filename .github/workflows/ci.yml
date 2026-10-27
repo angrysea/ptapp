@@ -1,0 +1,137 @@
+# Tests every push and pull request; deploys only when run by hand
+# (Actions → CI → Run workflow) once the AWS role is set up (docs/DEPLOY.md).
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: Deploy to AWS after the tests pass
+        type: boolean
+        default: false
+      stage:
+        description: Stack stage (ptapp-<stage>)
+        default: dev
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: Lint and unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test
+      - name: Lint the SAM template
+        run: pipx run cfn-lint template.yaml
+      - name: Check web app syntax
+        run: |
+          for f in $(git ls-files 'web/*.js'); do node --check "$f"; done
+
+  e2e:
+    name: API and browser journeys
+    runs-on: ubuntu-latest
+    services:
+      # Same emulator as docker-compose.yml.
+      moto:
+        image: motoserver/moto:5.2.3
+        ports: ["5055:5000"]
+    env:
+      AWS_ENDPOINT_URL: http://127.0.0.1:5055
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Wait for moto
+        run: |
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:5055/moto-api/ >/dev/null && exit 0; sleep 1; done
+          echo "moto did not start"; exit 1
+      - name: API journey
+        run: cargo test -p api --test e2e
+        env:
+          E2E_ENDPOINT: http://127.0.0.1:5055
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Playwright
+        run: |
+          pip install playwright
+          python -m playwright install --with-deps chromium
+      - name: Start the local API and web server
+        run: |
+          cargo build -p api --bin local
+          nohup target/debug/local > api.log 2>&1 &
+          nohup python -m http.server 8080 -d web > web.log 2>&1 &
+          for i in $(seq 1 60); do
+            curl -sf http://localhost:9000/health >/dev/null && curl -sf http://localhost:8080/ >/dev/null && exit 0
+            sleep 1
+          done
+          echo "servers did not start"; cat api.log web.log; exit 1
+      - name: Browser journey
+        run: python tests/ui/journey.py
+        env:
+          BROWSER_CHANNEL: chromium
+      - name: Upload screenshots and logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: journey-${{ github.run_id }}
+          path: |
+            tests/ui/shots/
+            api.log
+          retention-days: 7
+
+  deploy:
+    name: Deploy
+    needs: [check, e2e]
+    if: github.event_name == 'workflow_dispatch' && inputs.deploy && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.stage }}
+    permissions:
+      contents: read
+      id-token: write # OIDC: no long-lived AWS keys in GitHub
+    concurrency:
+      group: deploy-${{ inputs.stage }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-gnu
+      - uses: Swatinem/rust-cache@v2
+      - uses: mlugg/setup-zig@v2
+      - name: Install cargo-lambda
+        run: pip install cargo-lambda
+      - uses: aws-actions/setup-sam@v2
+        with:
+          use-installer: true
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+      - name: Deploy
+        run: ./scripts/deploy.sh
+        env:
+          STAGE: ${{ inputs.stage }}
+          COGNITO_DOMAIN_PREFIX: ${{ vars.COGNITO_DOMAIN_PREFIX }}

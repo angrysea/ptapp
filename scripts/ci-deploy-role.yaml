@@ -1,0 +1,81 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  IAM role that the GitHub Actions deploy job assumes through OIDC, so no
+  long-lived AWS keys are stored in GitHub. Deploy once per AWS account; see
+  docs/DEPLOY.md ("Deploying from GitHub Actions").
+
+Parameters:
+  Repository:
+    Type: String
+    Default: angrysea/ptapp
+    Description: GitHub owner/repo allowed to assume the role
+  Environment:
+    Type: String
+    Default: dev
+    Description: GitHub environment (= stack stage) the deploy job runs in
+  CreateOidcProvider:
+    Type: String
+    AllowedValues: ["true", "false"]
+    Default: "true"
+    Description: Set to false if this account already has the GitHub OIDC provider
+
+Conditions:
+  MakeProvider: !Equals [!Ref CreateOidcProvider, "true"]
+
+Resources:
+  GitHubOidc:
+    Type: AWS::IAM::OIDCProvider
+    Condition: MakeProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList: [sts.amazonaws.com]
+
+  DeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      # Deliberately outside the ptapp-<env>-* pattern below, so the role
+      # cannot grant itself more permissions.
+      RoleName: !Sub github-deploy-ptapp-${Environment}
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Sub arn:aws:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                # Only the deploy job, running in this GitHub environment.
+                token.actions.githubusercontent.com:sub: !Sub repo:${Repository}:environment:${Environment}
+      # SAM creates the stack's resources (Lambda, DynamoDB, S3, Cognito,
+      # CloudFront, API Gateway, logs). PowerUserAccess covers all of them
+      # except IAM, which is granted below for the stack's own roles only.
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/PowerUserAccess
+      Policies:
+        - PolicyName: stack-roles
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - iam:CreateRole
+                  - iam:DeleteRole
+                  - iam:GetRole
+                  - iam:PassRole
+                  - iam:TagRole
+                  - iam:UntagRole
+                  - iam:UpdateAssumeRolePolicy
+                  - iam:AttachRolePolicy
+                  - iam:DetachRolePolicy
+                  - iam:PutRolePolicy
+                  - iam:GetRolePolicy
+                  - iam:DeleteRolePolicy
+                Resource: !Sub arn:aws:iam::${AWS::AccountId}:role/ptapp-${Environment}-*
+
+Outputs:
+  RoleArn:
+    Description: Set as the AWS_DEPLOY_ROLE_ARN variable on the GitHub environment
+    Value: !GetAtt DeployRole.Arn
