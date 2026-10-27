@@ -80,13 +80,50 @@ pub async fn presign_put(state: &AppState, key: &str, content_type: &str, size: 
         .presigned(PresigningConfig::expires_in(state.presign_ttl)?)
         .await
         .map_err(|e| crate::error::ApiError::Internal(format!("presign put: {e}")))?;
+    Ok(browser_upload(&req))
+}
+
+/// A PUT URL for one part of a multipart upload, signed for exactly `size`
+/// bytes like `presign_put`. S3's response carries the part's ETag, which
+/// the browser reads (the media bucket's CORS exposes it) and sends back
+/// when completing the upload.
+pub async fn presign_part(state: &AppState, key: &str, upload_id: &str, part_number: i32, size: i64) -> ApiResult<Upload> {
+    let req = state
+        .s3
+        .upload_part()
+        .bucket(&state.bucket)
+        .key(key)
+        .upload_id(upload_id)
+        .part_number(part_number)
+        .content_length(size)
+        .presigned(PresigningConfig::expires_in(state.presign_ttl)?)
+        .await
+        .map_err(|e| crate::error::ApiError::Internal(format!("presign part: {e}")))?;
+    Ok(browser_upload(&req))
+}
+
+fn browser_upload(req: &aws_sdk_s3::presigning::PresignedRequest) -> Upload {
     // Browsers set Content-Length themselves and refuse to let scripts do it.
     let headers = req
         .headers()
         .filter(|(k, _)| !k.eq_ignore_ascii_case("content-length"))
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect();
-    Ok(Upload { url: req.uri().to_string(), headers })
+    Upload { url: req.uri().to_string(), headers }
+}
+
+/// Removes the pending tag from a confirmed upload, so the lifecycle rule
+/// that expires unconfirmed uploads leaves it alone.
+pub async fn untag(state: &AppState, key: &str) -> ApiResult<()> {
+    state
+        .s3
+        .delete_object_tagging()
+        .bucket(&state.bucket)
+        .key(key)
+        .send()
+        .await
+        .map_err(|e| crate::error::ApiError::Internal(format!("s3 untag: {e}")))?;
+    Ok(())
 }
 
 pub async fn presign_get(state: &AppState, key: &str) -> ApiResult<String> {
@@ -101,12 +138,18 @@ pub async fn presign_get(state: &AppState, key: &str) -> ApiResult<String> {
     Ok(req.uri().to_string())
 }
 
-/// Whether an object exists in the media bucket. HeadObject reports a
-/// missing object as the NotFound error variant; other errors are surfaced.
+/// Whether an object exists in the media bucket.
 pub async fn s3_object_exists(state: &AppState, key: &str) -> ApiResult<bool> {
+    Ok(s3_object_size(state, key).await?.is_some())
+}
+
+/// The size of an object in the media bucket, or None if it doesn't exist.
+/// HeadObject reports a missing object as the NotFound error variant; other
+/// errors are surfaced.
+pub async fn s3_object_size(state: &AppState, key: &str) -> ApiResult<Option<i64>> {
     match state.s3.head_object().bucket(&state.bucket).key(key).send().await {
-        Ok(_) => Ok(true),
-        Err(e) if e.as_service_error().is_some_and(|se| se.is_not_found()) => Ok(false),
+        Ok(out) => Ok(Some(out.content_length().unwrap_or(0))),
+        Err(e) if e.as_service_error().is_some_and(|se| se.is_not_found()) => Ok(None),
         Err(e) => Err(crate::error::ApiError::Internal(format!("s3 head: {e}"))),
     }
 }

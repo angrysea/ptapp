@@ -9,7 +9,7 @@ use serde_json::{json, Value};
 
 use crate::auth::Ctx;
 use crate::error::{bad_request, ApiError, ApiResult};
-use crate::util::{check_size, ext_for, new_id, presign_get, presign_put, s3_object_exists, MAX_VIDEO_BYTES, PENDING_TAG, VIDEO_TYPES};
+use crate::util::{check_size, ext_for, new_id, presign_get, presign_put, s3_object_exists, MAX_VIDEO_BYTES, PENDING_TAG, VIDEO_TYPES, untag};
 use crate::AppState;
 
 #[derive(Serialize)]
@@ -162,13 +162,7 @@ pub async fn demo_confirm(State(st): State<AppState>, ctx: Ctx, Path(id): Path<S
         return Err(bad_request("the video upload has not arrived; try uploading again"));
     }
     // Untag first: a confirmed demo must not be expired by the lifecycle rule.
-    st.s3
-        .delete_object_tagging()
-        .bucket(&st.bucket)
-        .key(&pending)
-        .send()
-        .await
-        .map_err(|e| ApiError::Internal(format!("s3 untag: {e}")))?;
+    untag(&st, &pending).await?;
     ex.pending_demo_key = None;
     let old = ex.demo_key.replace(pending);
     st.store.put(&format!("COACH#{coach}"), &format!("EXERCISE#{id}"), &ex).await?;

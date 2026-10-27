@@ -518,6 +518,53 @@ pub struct Photo {
     pub created_at: DateTime<Utc>,
 }
 
+// ---------------------------------------------------------------- videos (VS-1..VS-4)
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum VideoStatus {
+    /// Created; parts are being uploaded (possibly across sessions).
+    Uploading,
+    /// Upload confirmed; playable.
+    Ready,
+}
+
+/// A client's video of one set (`CLIENT#{cid}` / `VIDEO#{id}`). Usually
+/// trimmed and re-encoded on the device; when a browser can't, the original
+/// is uploaded with `trim_start`/`trim_end` and the player keeps to them.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Video {
+    pub id: String,
+    /// The workout log the set belongs to; logs get their ids on the device,
+    /// so this can name a log that hasn't synced yet.
+    pub log_id: String,
+    pub item_id: String,
+    pub set_index: u32,
+    pub exercise_id: String,
+    pub exercise_name: String,
+    pub status: VideoStatus,
+    pub key: String,
+    pub content_type: String,
+    pub size_bytes: i64,
+    /// Multipart upload in progress; cleared once the upload is complete.
+    #[serde(default)]
+    pub upload_id: Option<String>,
+    pub part_size: i64,
+    /// Set once a poster frame upload has landed.
+    #[serde(default)]
+    pub poster_key: Option<String>,
+    #[serde(default)]
+    pub duration_sec: Option<f64>,
+    #[serde(default)]
+    pub trim_start: Option<f64>,
+    #[serde(default)]
+    pub trim_end: Option<f64>,
+    pub created_at: DateTime<Utc>,
+    #[serde(default)]
+    pub reviewed_at: Option<DateTime<Utc>>,
+}
+
 pub const TAPE_SITES: &[&str] = &[
     "neck", "chest", "waist", "hips", "armL", "armR", "thighL", "thighR", "calfL", "calfR",
 ];

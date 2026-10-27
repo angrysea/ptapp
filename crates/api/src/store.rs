@@ -7,7 +7,7 @@
 //!   INVITE#{code}   INVITE
 //!   ADMIN           INVITE#{code} | COACH#{coach} | REQUEST#{sub}
 //!   CLIENT#{client} INTAKE | WAIVER#{ts} | ASSIGN#{id} | SCHED#{date}#{id} | LOG#{date}#{id}
-//!                   COMMENT#{ts}#{id} | METRIC#{date-id} | PHOTO#{date-id} | AUDIT#{ts}#{id}
+//!                   COMMENT#{ts}#{id} | METRIC#{date-id} | PHOTO#{date-id} | VIDEO#{date-id} | AUDIT#{ts}#{id}
 
 use std::collections::HashMap;
 

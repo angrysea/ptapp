@@ -7,3 +7,4 @@ pub mod me;
 pub mod metrics;
 pub mod programs;
 pub mod training;
+pub mod videos;

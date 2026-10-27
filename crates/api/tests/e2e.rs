@@ -362,6 +362,97 @@ async fn full_client_journey() {
     let photo_path = format!("/clients/client1/photos/{}", photos[0]["id"].as_str().unwrap());
     assert_eq!(t.call("DELETE", &photo_path, Some("coach1"), None).await.0, StatusCode::FORBIDDEN);
 
+    // --- set videos (VS-1..VS-3): multipart upload, complete, list
+    let bucket = std::env::var("MEDIA_BUCKET").unwrap();
+    let part = 8 * 1024 * 1024usize;
+    let size = part + 5; // two parts: 8 MiB and 5 bytes
+    let new_video = |extra: Value| {
+        let mut v = json!({ "logId": "log-abc", "itemId": item_id, "setIndex": 0, "exerciseId": "back-squat",
+            "exerciseName": "Back Squat", "contentType": "video/mp4", "size": size, "durationSec": 12.0, "posterSize": 4 });
+        v.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        v
+    };
+    assert_eq!(t.call("POST", "/clients/client1/videos", Some("coach1"), Some(new_video(json!({})))).await.0, StatusCode::FORBIDDEN);
+    assert_eq!(t.call("POST", "/clients/client1/videos", Some("coach2"), Some(new_video(json!({})))).await.0, StatusCode::FORBIDDEN);
+    for bad in [json!({ "size": 600 * 1024 * 1024 }), json!({ "contentType": "image/gif" }), json!({ "durationSec": 90.0 }),
+        json!({ "trimStart": 10.0, "trimEnd": 80.0 }), json!({ "trimStart": 5.0 }), json!({ "logId": "../x" })] {
+        assert_eq!(t.call("POST", "/clients/client1/videos", Some("client1"), Some(new_video(bad.clone()))).await.0, StatusCode::BAD_REQUEST, "{bad}");
+    }
+    let (s, cv) = t.call("POST", "/clients/client1/videos", Some("client1"), Some(new_video(json!({})))).await;
+    assert_eq!(s, StatusCode::OK, "{cv}");
+    let vid = cv["video"]["id"].as_str().unwrap().to_string();
+    let key = cv["video"]["key"].as_str().unwrap().to_string();
+    assert!(key.starts_with("media/coach1/client1/videos/") && key.ends_with(".mp4"), "{key}");
+    assert_eq!(cv["video"]["status"], "uploading");
+    let parts = cv["parts"].as_array().unwrap();
+    assert_eq!(parts.len(), 2);
+    assert_eq!(parts[0]["size"], part);
+    assert_eq!(parts[1]["size"], 5);
+    let url0 = parts[0]["url"].as_str().unwrap();
+    assert!(url0.contains("partNumber=1") && url0.contains("uploadId=") && url0.contains("X-Amz-SignedHeaders=content-length"), "{url0}");
+    assert_eq!(cv["poster"]["headers"]["x-amz-tagging"], "state=pending");
+    // an expired part URL can be re-issued
+    let (s, re) = t.call("POST", &format!("/clients/client1/videos/{vid}/parts"), Some("client1"), Some(json!({ "parts": [2] }))).await;
+    assert_eq!(s, StatusCode::OK, "{re}");
+    assert_eq!(re["parts"][0]["n"], 2);
+    // completing before the parts are uploaded fails and leaves the video uploading
+    let early = json!({ "parts": [{ "n": 1, "etag": "\"x\"" }, { "n": 2, "etag": "\"y\"" }] });
+    assert_eq!(t.call("POST", &format!("/clients/client1/videos/{vid}/complete"), Some("client1"), Some(early)).await.0, StatusCode::BAD_REQUEST);
+    // stand in for the browser's part PUTs and poster PUT
+    let upload_id = s3
+        .list_multipart_uploads()
+        .bucket(&bucket)
+        .prefix(&key)
+        .send()
+        .await
+        .unwrap()
+        .uploads()[0]
+        .upload_id()
+        .unwrap()
+        .to_string();
+    let mut etags = vec![];
+    for (n, len) in [(1, part), (2, 5)] {
+        let out = s3.upload_part().bucket(&bucket).key(&key).upload_id(&upload_id).part_number(n).body(vec![7u8; len].into()).send().await.unwrap();
+        etags.push(json!({ "n": n, "etag": out.e_tag().unwrap() }));
+    }
+    let poster_key = key.replace(".mp4", ".jpg");
+    s3.put_object().bucket(&bucket).key(&poster_key).tagging("state=pending").body(b"jpeg".to_vec().into()).send().await.unwrap();
+    // wrong part numbering is refused
+    let gap = json!({ "parts": [etags[0].clone()] });
+    assert_eq!(t.call("POST", &format!("/clients/client1/videos/{vid}/complete"), Some("client1"), Some(gap)).await.0, StatusCode::BAD_REQUEST);
+    assert_eq!(t.call("POST", &format!("/clients/client1/videos/{vid}/complete"), Some("coach1"), Some(json!({ "parts": etags }))).await.0, StatusCode::FORBIDDEN);
+    let (s, done) = t.call("POST", &format!("/clients/client1/videos/{vid}/complete"), Some("client1"), Some(json!({ "parts": etags }))).await;
+    assert_eq!(s, StatusCode::OK, "{done}");
+    assert_eq!(done["status"], "ready");
+    assert_eq!(done["posterKey"], poster_key.as_str());
+    assert!(done["uploadId"].is_null());
+    // repeating complete (a lost response) returns the same ready video
+    let (s, again) = t.call("POST", &format!("/clients/client1/videos/{vid}/complete"), Some("client1"), Some(json!({ "parts": etags }))).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(again["status"], "ready");
+    // confirmed objects lose the pending tag, so the lifecycle rule keeps them
+    for k in [&key, &poster_key] {
+        let tags = s3.get_object_tagging().bucket(&bucket).key(k).send().await.unwrap();
+        assert!(tags.tag_set().is_empty(), "{k}: {:?}", tags.tag_set());
+    }
+    // the coach and the client see it with playback URLs; other coaches don't
+    let (s, vids) = t.call("GET", "/clients/client1/videos", Some("coach1"), None).await;
+    assert_eq!(s, StatusCode::OK, "{vids}");
+    assert_eq!(vids.as_array().unwrap().len(), 1);
+    assert_eq!(vids[0]["setIndex"], 0);
+    assert!(vids[0]["url"].as_str().unwrap().contains("X-Amz-Signature"));
+    assert!(vids[0]["posterUrl"].as_str().unwrap().contains("X-Amz-Signature"));
+    let (_, mine) = t.call("GET", "/clients/client1/videos?logId=log-abc", Some("client1"), None).await;
+    assert_eq!(mine.as_array().unwrap().len(), 1);
+    let (_, other) = t.call("GET", "/clients/client1/videos?logId=log-other", Some("client1"), None).await;
+    assert_eq!(other.as_array().unwrap().len(), 0);
+    assert_eq!(t.call("GET", "/clients/client1/videos", Some("coach2"), None).await.0, StatusCode::FORBIDDEN);
+    // a video whose upload never finished isn't listed
+    let (_, pending) = t.call("POST", "/clients/client1/videos", Some("client1"), Some(new_video(json!({ "trimStart": 2.0, "trimEnd": 30.0, "durationSec": 75.0 })))).await;
+    assert_eq!(pending["video"]["trimEnd"], 30.0);
+    let (_, vids) = t.call("GET", "/clients/client1/videos", Some("client1"), None).await;
+    assert_eq!(vids.as_array().unwrap().len(), 1);
+
     // --- comments (FB-1)
     let (s, _) = t
         .call("POST", "/clients/client1/comments", Some("coach1"), Some(json!({ "text": "Great depth on set 2", "logId": "log-abc", "setIndex": 1 })))

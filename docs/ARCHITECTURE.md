@@ -58,6 +58,7 @@ When a coach reads intake, waiver, metrics or photos, an `AUDIT#` item is writte
 | `CLIENT#{client}` | `COMMENT#{rfc3339}#{id}` | feedback / message |
 | `CLIENT#{client}` | `METRIC#{date}-{rand}` | weight / tape / skinfold (with computed result) |
 | `CLIENT#{client}` | `PHOTO#{date}-{rand}` | photo record; S3 key `media/{coach}/{client}/photos/…` |
+| `CLIENT#{client}` | `VIDEO#{date}-{rand}` | set video (log, item, set index), status uploading/ready; S3 keys `media/{coach}/{client}/videos/{id}.{mp4,mov,webm}` and `.jpg` poster, uploaded as a multipart upload in 8 MiB parts |
 | `CLIENT#{client}` | `AUDIT#{rfc3339}#{rand}` | coach access log, `ttl` 1 year |
 
 "Today's workout" is one `Query` on `CLIENT#id` between `SCHED#{from}` and `SCHED#{to}#~`. Phases 1b and 2 add a GSI (`gsi1pk`/`gsi1sk`) for cross-client queues, such as unreviewed videos sorted oldest first (see ROADMAP).

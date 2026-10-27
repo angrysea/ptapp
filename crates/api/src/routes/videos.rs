@@ -1,0 +1,339 @@
+//! VS-1..VS-3: a client's video of a set, uploaded in resumable parts.
+//!
+//! The browser trims and re-encodes the clip (or, when it can't, uploads the
+//! original with trim points), then:
+//!   1. `POST /videos` creates the record and an S3 multipart upload tagged
+//!      pending, and returns one URL per part, each signed for its exact size;
+//!   2. uploads the parts, keeping their ETags; `POST …/parts` re-issues URLs
+//!      that expired while it was offline;
+//!   3. `POST …/complete` assembles the parts, checks the size, removes the
+//!      pending tag and marks the video ready.
+//!
+//! Abandoned uploads are cleaned up by the media bucket's lifecycle rules
+//! (incomplete multipart uploads after 2 days; pending-tagged objects).
+
+use aws_sdk_s3::types::{CompletedMultipartUpload, CompletedPart};
+use axum::extract::{Path, Query, State};
+use axum::Json;
+use chrono::Utc;
+use futures::future::try_join_all;
+use ptcore::model::{Video, VideoStatus};
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+
+use crate::auth::{client_scope, ClientScope, Ctx};
+use crate::error::{bad_request, ApiError, ApiResult};
+use crate::util::{
+    audit, check_size, dated_id, ext_for, presign_get, presign_part, presign_put, s3_object_exists, s3_object_size, untag,
+    Upload, PENDING_TAG, VIDEO_TYPES,
+};
+use crate::AppState;
+
+/// S3 needs every part but the last to be at least 5 MiB.
+pub const PART_SIZE: i64 = 8 * 1024 * 1024;
+/// Re-encoded clips are far smaller; this covers originals on the fallback path.
+pub const MAX_SET_VIDEO_BYTES: i64 = 500 * 1024 * 1024;
+const MAX_POSTER_BYTES: i64 = 2 * 1024 * 1024;
+/// BRD VS-2. A little over 60 s allows for encoder rounding.
+const MAX_SECONDS: f64 = 60.5;
+
+/// Sizes of the parts a `size`-byte upload is split into, in order.
+pub fn part_sizes(size: i64, part_size: i64) -> Vec<i64> {
+    let mut parts = Vec::new();
+    let mut left = size;
+    while left > 0 {
+        parts.push(left.min(part_size));
+        left -= part_size;
+    }
+    parts
+}
+
+fn video_sk(id: &str) -> String {
+    format!("VIDEO#{id}")
+}
+
+fn poster_key_for(video_key: &str) -> String {
+    match video_key.rsplit_once('.') {
+        Some((stem, _)) => format!("{stem}.jpg"),
+        None => format!("{video_key}.jpg"),
+    }
+}
+
+/// Ids here come from the device; keep them to the same shape as log ids.
+fn check_id(what: &str, id: &str) -> ApiResult<()> {
+    if id.is_empty() || id.len() > 64 || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+        return Err(bad_request(format!("{what} must be 1-64 characters of [A-Za-z0-9-]")));
+    }
+    Ok(())
+}
+
+/// Uploading is the client's own act; coaches only watch.
+async fn client_owned(st: &AppState, ctx: &Ctx, cid: &str) -> ApiResult<ClientScope> {
+    let scope = client_scope(st, ctx, cid).await?;
+    if scope.by_coach {
+        return Err(ApiError::Forbidden("only the client uploads their videos"));
+    }
+    Ok(scope)
+}
+
+async fn load(st: &AppState, scope: &ClientScope, vid: &str) -> ApiResult<Video> {
+    st.store.get(&scope.pk(), &video_sk(vid)).await?.ok_or(ApiError::NotFound("video"))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PartUrl {
+    n: i32,
+    size: i64,
+    url: String,
+    headers: std::collections::BTreeMap<String, String>,
+}
+
+async fn part_urls(st: &AppState, v: &Video, numbers: &[i32]) -> ApiResult<Vec<PartUrl>> {
+    let upload_id = v.upload_id.as_deref().ok_or_else(|| bad_request("this video is already uploaded"))?;
+    let sizes = part_sizes(v.size_bytes, v.part_size);
+    let mut out = Vec::with_capacity(numbers.len());
+    for &n in numbers {
+        let size = *sizes.get((n as usize).wrapping_sub(1)).ok_or_else(|| bad_request(format!("no part {n}")))?;
+        let Upload { url, headers } = presign_part(st, &v.key, upload_id, n, size).await?;
+        out.push(PartUrl { n, size, url, headers });
+    }
+    Ok(out)
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NewVideo {
+    log_id: String,
+    item_id: String,
+    set_index: u32,
+    exercise_id: String,
+    #[serde(default)]
+    exercise_name: String,
+    content_type: String,
+    size: i64,
+    duration_sec: Option<f64>,
+    trim_start: Option<f64>,
+    trim_end: Option<f64>,
+    /// Size of the poster JPEG, when the device made one.
+    poster_size: Option<i64>,
+}
+
+pub async fn create(
+    State(st): State<AppState>,
+    ctx: Ctx,
+    Path(cid): Path<String>,
+    Json(body): Json<NewVideo>,
+) -> ApiResult<Json<Value>> {
+    let scope = client_owned(&st, &ctx, &cid).await?;
+    check_id("logId", &body.log_id)?;
+    check_id("itemId", &body.item_id)?;
+    let ext = ext_for(&body.content_type, VIDEO_TYPES)?;
+    check_size(body.size, MAX_SET_VIDEO_BYTES)?;
+    if let Some(p) = body.poster_size {
+        check_size(p, MAX_POSTER_BYTES)?;
+    }
+    // The cap applies to what gets watched: the trimmed range if there is one.
+    let watched = match (body.trim_start, body.trim_end) {
+        (Some(a), Some(b)) if a >= 0.0 && b > a => Some(b - a),
+        (None, None) => body.duration_sec,
+        _ => return Err(bad_request("trimStart and trimEnd go together, with trimEnd after trimStart")),
+    };
+    if watched.is_some_and(|s| !(0.0..=MAX_SECONDS).contains(&s)) {
+        return Err(bad_request("videos can be at most 60 seconds"));
+    }
+
+    let id = dated_id(scope.today());
+    let key = format!("media/{}/{}/videos/{id}.{ext}", scope.client.coach_id, scope.client.user_id);
+    let mp = st
+        .s3
+        .create_multipart_upload()
+        .bucket(&st.bucket)
+        .key(&key)
+        .content_type(&body.content_type)
+        .tagging(PENDING_TAG)
+        .send()
+        .await
+        .map_err(|e| ApiError::Internal(format!("s3 create multipart: {e}")))?;
+    let upload_id = mp.upload_id().ok_or_else(|| ApiError::Internal("s3 returned no upload id".into()))?.to_string();
+
+    let video = Video {
+        id,
+        log_id: body.log_id,
+        item_id: body.item_id,
+        set_index: body.set_index,
+        exercise_id: body.exercise_id,
+        exercise_name: body.exercise_name,
+        status: VideoStatus::Uploading,
+        key,
+        content_type: body.content_type,
+        size_bytes: body.size,
+        upload_id: Some(upload_id),
+        part_size: PART_SIZE,
+        poster_key: None,
+        duration_sec: body.duration_sec,
+        trim_start: body.trim_start,
+        trim_end: body.trim_end,
+        created_at: Utc::now(),
+        reviewed_at: None,
+    };
+    let numbers: Vec<i32> = (1..=part_sizes(video.size_bytes, video.part_size).len() as i32).collect();
+    let parts = part_urls(&st, &video, &numbers).await?;
+    let poster = match body.poster_size {
+        Some(size) => {
+            let Upload { url, headers } = presign_put(&st, &poster_key_for(&video.key), "image/jpeg", size, Some(PENDING_TAG)).await?;
+            Some(json!({ "url": url, "headers": headers }))
+        }
+        None => None,
+    };
+    st.store.put(&scope.pk(), &video_sk(&video.id), &video).await?;
+    Ok(Json(json!({ "video": video, "parts": parts, "poster": poster })))
+}
+
+#[derive(Deserialize)]
+pub struct PartsQuery {
+    parts: Vec<i32>,
+}
+
+/// Fresh URLs for parts whose URLs expired, e.g. after a stretch offline.
+pub async fn parts(
+    State(st): State<AppState>,
+    ctx: Ctx,
+    Path((cid, vid)): Path<(String, String)>,
+    Json(body): Json<PartsQuery>,
+) -> ApiResult<Json<Value>> {
+    let scope = client_owned(&st, &ctx, &cid).await?;
+    let v = load(&st, &scope, &vid).await?;
+    Ok(Json(json!({ "parts": part_urls(&st, &v, &body.parts).await? })))
+}
+
+#[derive(Deserialize)]
+pub struct DonePart {
+    n: i32,
+    etag: String,
+}
+
+#[derive(Deserialize)]
+pub struct Complete {
+    parts: Vec<DonePart>,
+}
+
+/// Assembles the uploaded parts and marks the video ready. Safe to repeat:
+/// a device that lost the first response just gets the ready video again.
+pub async fn complete(
+    State(st): State<AppState>,
+    ctx: Ctx,
+    Path((cid, vid)): Path<(String, String)>,
+    Json(body): Json<Complete>,
+) -> ApiResult<Json<Video>> {
+    let scope = client_owned(&st, &ctx, &cid).await?;
+    let mut v = load(&st, &scope, &vid).await?;
+    if v.status == VideoStatus::Ready {
+        return Ok(Json(v));
+    }
+    let upload_id = v.upload_id.clone().ok_or_else(|| ApiError::Internal("uploading video without an upload id".into()))?;
+    let expected = part_sizes(v.size_bytes, v.part_size).len();
+    let mut done: Vec<&DonePart> = body.parts.iter().collect();
+    done.sort_by_key(|p| p.n);
+    if done.len() != expected || done.iter().enumerate().any(|(i, p)| p.n as usize != i + 1) {
+        return Err(bad_request(format!("send all {expected} parts, numbered 1 to {expected}")));
+    }
+    let parts = done.iter().map(|p| CompletedPart::builder().part_number(p.n).e_tag(&p.etag).build()).collect();
+    let res = st
+        .s3
+        .complete_multipart_upload()
+        .bucket(&st.bucket)
+        .key(&v.key)
+        .upload_id(&upload_id)
+        .multipart_upload(CompletedMultipartUpload::builder().set_parts(Some(parts)).build())
+        .send()
+        .await;
+    if let Err(e) = res {
+        // A retry after a lost response finds the upload already assembled.
+        if !s3_object_exists(&st, &v.key).await? {
+            return Err(bad_request(format!("the upload is incomplete; upload the missing parts and try again ({e})")));
+        }
+    }
+    // Part sizes were signed into the URLs, so this only fails if parts were
+    // mixed up; such an object is useless, so it goes.
+    let size = s3_object_size(&st, &v.key).await?.unwrap_or(0);
+    if size != v.size_bytes {
+        let _ = st.s3.delete_object().bucket(&st.bucket).key(&v.key).send().await;
+        return Err(bad_request(format!("uploaded {size} bytes but expected {}; please upload the video again", v.size_bytes)));
+    }
+    untag(&st, &v.key).await?;
+    let poster = poster_key_for(&v.key);
+    if s3_object_exists(&st, &poster).await? {
+        untag(&st, &poster).await?;
+        v.poster_key = Some(poster);
+    }
+    v.status = VideoStatus::Ready;
+    v.upload_id = None;
+    st.store.put(&scope.pk(), &video_sk(&v.id), &v).await?;
+    Ok(Json(v))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListQuery {
+    log_id: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VideoOut {
+    #[serde(flatten)]
+    video: Video,
+    url: String,
+    poster_url: Option<String>,
+}
+
+/// Ready videos, newest first, with short-lived playback URLs. The client
+/// and their coach can list them.
+pub async fn list(
+    State(st): State<AppState>,
+    ctx: Ctx,
+    Path(cid): Path<String>,
+    Query(q): Query<ListQuery>,
+) -> ApiResult<Json<Vec<VideoOut>>> {
+    let scope = client_scope(&st, &ctx, &cid).await?;
+    audit(&st, &ctx, &scope, "view-videos").await;
+    let mut videos: Vec<Video> = st.store.query_prefix(&scope.pk(), "VIDEO#").await?;
+    videos.retain(|v| v.status == VideoStatus::Ready && q.log_id.as_ref().is_none_or(|l| *l == v.log_id));
+    videos.sort_by_key(|v| std::cmp::Reverse(v.created_at));
+    let out = try_join_all(videos.into_iter().map(|video| {
+        let st = &st;
+        async move {
+            let url = presign_get(st, &video.key).await?;
+            let poster_url = match &video.poster_key {
+                Some(k) => Some(presign_get(st, k).await?),
+                None => None,
+            };
+            ApiResult::Ok(VideoOut { video, url, poster_url })
+        }
+    }))
+    .await?;
+    Ok(Json(out))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn splits_into_parts() {
+        assert_eq!(part_sizes(1, PART_SIZE), vec![1]);
+        assert_eq!(part_sizes(PART_SIZE, PART_SIZE), vec![PART_SIZE]);
+        assert_eq!(part_sizes(PART_SIZE + 5, PART_SIZE), vec![PART_SIZE, 5]);
+        let big = part_sizes(MAX_SET_VIDEO_BYTES, PART_SIZE);
+        assert_eq!(big.len(), 63);
+        assert_eq!(big.iter().sum::<i64>(), MAX_SET_VIDEO_BYTES);
+        assert!(big[..big.len() - 1].iter().all(|&p| p == PART_SIZE));
+        assert!(part_sizes(0, PART_SIZE).is_empty());
+    }
+
+    #[test]
+    fn poster_sits_next_to_the_video() {
+        assert_eq!(poster_key_for("media/c/k/videos/2026-10-27-ab.mp4"), "media/c/k/videos/2026-10-27-ab.jpg");
+    }
+}

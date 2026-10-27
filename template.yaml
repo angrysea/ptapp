@@ -64,6 +64,8 @@ Resources:
           - AllowedMethods: [GET, PUT]
             AllowedOrigins: [!Sub "https://${Distribution.DomainName}", !Ref LocalDevOrigin]
             AllowedHeaders: ["*"]
+            # Video uploads read each part's ETag to complete the multipart upload.
+            ExposedHeaders: [ETag]
             MaxAge: 3000
       LifecycleConfiguration:
         Rules:

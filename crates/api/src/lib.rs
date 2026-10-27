@@ -71,6 +71,9 @@ pub fn router(state: AppState) -> Router {
         .route("/clients/{cid}/metrics/{mid}", delete(metrics::remove))
         .route("/clients/{cid}/photos", get(metrics::list_photos).post(metrics::create_photo))
         .route("/clients/{cid}/photos/{pid}", delete(metrics::remove_photo))
+        .route("/clients/{cid}/videos", get(videos::list).post(videos::create))
+        .route("/clients/{cid}/videos/{vid}/parts", post(videos::parts))
+        .route("/clients/{cid}/videos/{vid}/complete", post(videos::complete))
         // API Gateway owns CORS in AWS; this layer only matters for local dev.
         .layer(CorsLayer::new().allow_origin(Any).allow_methods(Any).allow_headers(Any))
         .with_state(state)
