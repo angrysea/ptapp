@@ -2,8 +2,11 @@
 # Build the Rust Lambda, deploy the SAM stack, generate web/js/config.js and
 # publish the PWA. Run from Linux, macOS, WSL or Git Bash (see docs/DEPLOY.md).
 #
-#   COGNITO_DOMAIN_PREFIX=myptapp-dev ./scripts/deploy.sh
+#   COGNITO_DOMAIN_PREFIX=myptapp-dev ADMIN_EMAILS=you@example.com ./scripts/deploy.sh
 #
+# ADMIN_EMAILS lists who may set up an admin account (admins onboard
+# coaches). Pass it on every deploy: leaving it out clears the list, though
+# admin accounts that already exist keep working.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -11,6 +14,7 @@ STAGE="${STAGE:-dev}"
 STACK="${STACK:-ptapp-$STAGE}"
 REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-us-east-1}}"
 : "${COGNITO_DOMAIN_PREFIX:?set COGNITO_DOMAIN_PREFIX to a globally unique name, e.g. myptapp-dev}"
+ADMIN_EMAILS="${ADMIN_EMAILS:-}"
 
 echo "==> building Lambda (arm64)"
 cargo lambda build --release --arm64 --bin api
@@ -24,7 +28,7 @@ sam deploy \
   --resolve-s3 \
   --no-confirm-changeset \
   --no-fail-on-empty-changeset \
-  --parameter-overrides "Stage=$STAGE" "CognitoDomainPrefix=$COGNITO_DOMAIN_PREFIX"
+  --parameter-overrides "Stage=$STAGE" "CognitoDomainPrefix=$COGNITO_DOMAIN_PREFIX" "AdminEmails=$ADMIN_EMAILS"
 
 out() {
   aws cloudformation describe-stacks --region "$REGION" --stack-name "$STACK" \

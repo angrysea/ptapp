@@ -5,6 +5,7 @@
 //!   USER#{sub}      PROFILE
 //!   COACH#{coach}   CLIENT#{client} | INVITE#{code} | EXERCISE#{id} | PROGRAM#{id}
 //!   INVITE#{code}   INVITE
+//!   ADMIN           INVITE#{code} | COACH#{coach} | REQUEST#{sub}
 //!   CLIENT#{client} INTAKE | WAIVER#{ts} | ASSIGN#{id} | SCHED#{date}#{id} | LOG#{date}#{id}
 //!                   COMMENT#{ts}#{id} | METRIC#{date-id} | PHOTO#{date-id} | AUDIT#{ts}#{id}
 

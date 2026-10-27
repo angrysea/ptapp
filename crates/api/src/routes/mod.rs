@@ -1,3 +1,4 @@
+pub mod admin;
 pub mod clients;
 pub mod comments;
 pub mod exercises;

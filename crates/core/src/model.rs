@@ -82,14 +82,65 @@ impl Profile {
 #[serde(rename_all = "camelCase")]
 pub struct Invite {
     pub code: String,
+    /// Client invites: what the invitee joins as. Coach invites come from an
+    /// admin and create a new coach account.
+    #[serde(default)]
+    pub kind: InviteKind,
+    /// The coach (tenant) a client joins; empty on coach invites.
     pub coach_id: String,
+    /// Shown on the join screen: the coach's name, or the app's on coach invites.
     pub coach_name: String,
     pub email: String,
+    /// The invitee's name as the inviter typed it (client or new coach).
     pub client_name: String,
     pub created_at: DateTime<Utc>,
     pub accepted_by: Option<String>,
     /// DynamoDB TTL (epoch seconds); unaccepted invites expire.
     pub ttl: i64,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum InviteKind {
+    #[default]
+    Client,
+    Coach,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum RequestStatus {
+    Pending,
+    Approved,
+    Declined,
+}
+
+/// A signed-in user asking to become a coach (`ADMIN` / `REQUEST#{user}`).
+/// Approval turns their account into a coach account directly.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CoachRequest {
+    pub user_id: String,
+    pub email: String,
+    pub name: String,
+    #[serde(default)]
+    pub business_name: Option<String>,
+    #[serde(default)]
+    pub message: String,
+    pub status: RequestStatus,
+    pub created_at: DateTime<Utc>,
+    #[serde(default)]
+    pub decided_at: Option<DateTime<Utc>>,
+}
+
+/// An admin's list of coaches (`ADMIN` / `COACH#{id}`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CoachEntry {
+    pub coach_id: String,
+    pub name: String,
+    pub email: String,
+    pub joined_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

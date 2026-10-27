@@ -6,5 +6,6 @@ export const session = {
   /** Library cache keyed by exercise id. */
   exercises: null,
   get isCoach() { return this.profile?.role === 'coach'; },
+  get isAdmin() { return this.profile?.role === 'admin'; },
   get userId() { return this.profile?.userId; },
 };

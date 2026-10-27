@@ -17,6 +17,10 @@ async fn main() {
         if std::env::var("MEDIA_BUCKET").is_err() {
             std::env::set_var("MEDIA_BUCKET", "ptapp-local-media");
         }
+        // Sign in as dev user "admin" to set up the admin account.
+        if std::env::var("ADMIN_EMAILS").is_err() {
+            std::env::set_var("ADMIN_EMAILS", "admin@dev.local");
+        }
     }
     let mut state = api::AppState::from_env().await;
 

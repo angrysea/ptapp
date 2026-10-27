@@ -30,12 +30,32 @@ with sync_playwright() as p:
     browser = p.chromium.launch(channel=os.environ.get("BROWSER_CHANNEL", "msedge"), headless=True)
     mobile = dict(viewport={"width": 390, "height": 844}, device_scale_factor=2, is_mobile=True, has_touch=True)
 
-    # ---------------- coach signs up
+    # ---------------- admin invites the coach (there is no open coach signup)
+    # The local API lets dev user "admin" (admin@dev.local) set up the admin
+    # account; on a re-run against the same emulator it already exists.
+    admin_ctx = browser.new_context(**mobile)
+    admin = admin_ctx.new_page(); watch(admin, "admin")
+    sign_in(admin, "admin")
+    expect(admin.get_by_role("heading", name=re.compile("^(Welcome|Coaches)$")).first).to_be_visible()
+    setup = admin.get_by_role("button", name="Set up admin account")
+    if setup.count():
+        admin.get_by_label("Your name").fill("Ada Admin")
+        setup.click()
+    expect(admin.get_by_role("heading", name="Coaches").first).to_be_visible()
+    admin.get_by_role("button", name="+ Invite coach").click()
+    admin.get_by_label("Coach name").fill("Alex Coach")
+    admin.get_by_label("Email").fill(f"coach{RUN}@dev.local")
+    admin.get_by_role("button", name="Create invite").click()
+    expect(admin.get_by_role("heading", name="Coach invite")).to_be_visible()
+    coach_code = admin.locator(".sheet input").input_value().rsplit("/", 1)[-1]
+    shot(admin, "00-admin-coach-invite")
+
+    # ---------------- coach accepts the invite
     coach_ctx = browser.new_context(**mobile)
     coach = coach_ctx.new_page(); watch(coach, "coach")
-    sign_in(coach, "coach" + RUN)
-    coach.get_by_label("Your name").fill("Alex Coach")
-    coach.get_by_role("button", name="Create coach account").click()
+    sign_in(coach, "coach" + RUN, BASE + "#/join/" + coach_code)
+    expect(coach.get_by_role("heading", name="Coach on PT Coach")).to_be_visible()
+    coach.get_by_role("button", name="Accept invite").click()
     expect(coach.get_by_role("heading", name="Clients")).to_be_visible()
 
     # ---------------- invite
@@ -174,6 +194,27 @@ with sync_playwright() as p:
     client.get_by_role("link", name="Coach").click()
     expect(client.get_by_text(re.compile("Keep the chest up"))).to_be_visible()
     shot(client, "14-client-messages")
+
+    # ---------------- a coach requests an account; the admin approves it
+    applicant_ctx = browser.new_context(**mobile)
+    applicant = applicant_ctx.new_page(); watch(applicant, "applicant")
+    sign_in(applicant, "applicant" + RUN, BASE + "#/become-a-coach")
+    expect(applicant.get_by_role("heading", name="Request a coach account")).to_be_visible()
+    applicant.get_by_label("Your name").fill("Riley Coach")
+    applicant.get_by_label("About your coaching").fill("Strength coach, 5 years")
+    applicant.get_by_role("button", name="Send request").click()
+    expect(applicant.get_by_text(re.compile("being reviewed"))).to_be_visible()
+    shot(applicant, "15-coach-request")
+
+    admin.reload()
+    card = admin.locator(".card", has_text="Riley Coach")
+    expect(card).to_be_visible()
+    shot(admin, "16-admin-requests")
+    card.get_by_role("button", name="Approve").click()
+    expect(admin.get_by_text("Riley Coach is now a coach")).to_be_visible()
+
+    applicant.reload()
+    expect(applicant.get_by_role("heading", name="Clients")).to_be_visible()
 
     browser.close()
 

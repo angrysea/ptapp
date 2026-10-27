@@ -6,11 +6,12 @@ import { kv } from './idb.js';
 import { route, start } from './router.js';
 import { session } from './session.js';
 import { $app, errorToast, h, mount, toast } from './ui.js';
+import { renderAdmin } from './views/admin.js';
 import { renderClient, renderRoster } from './views/coach.js';
 import { loadExercises, renderExercises } from './views/exercises.js';
 import { renderIntake, renderWaiver } from './views/intake.js';
 import { renderMetrics } from './views/metrics.js';
-import { captureInvite, renderOnboarding } from './views/onboarding.js';
+import { COACH_REQUEST_PATH, captureInvite, renderOnboarding } from './views/onboarding.js';
 import { renderThread } from './views/comments.js';
 import { renderProfile } from './views/profile.js';
 import { renderProgramEditor, renderPrograms } from './views/programs.js';
@@ -39,7 +40,8 @@ function landing() {
       h('h1', {}, 'PT Coach'),
       h('p', { class: 'muted' }, 'Train with your coach: workouts, progress and feedback in one place.'),
       h('button', { class: 'primary', onclick: login }, 'Sign in or create account'),
-      location.hash.startsWith('#/join/') && h('p', { class: 'small muted' }, 'You’ve been invited. Create an account with the email your coach used.')));
+      location.hash.startsWith('#/join/') && h('p', { class: 'small muted' }, 'You’ve been invited. Create an account with the email your invite was sent to.'),
+      location.hash === `#${COACH_REQUEST_PATH}` && h('p', { class: 'small muted' }, 'Coaches: create an account (or sign in), then send us a short request.')));
 }
 
 async function boot() {
@@ -82,7 +84,10 @@ async function boot() {
   loadExercises().catch(() => {});
 
   let highlight;
-  if (session.isCoach) {
+  if (session.isAdmin) {
+    highlight = tabs([['/', '🧑‍🏫', 'Coaches'], ['/me', '⚙️', 'Profile']]);
+    route('/', renderAdmin);
+  } else if (session.isCoach) {
     document.getElementById('title').textContent = me.profile.businessName || 'PT Coach';
     highlight = tabs([['/', '👥', 'Clients'], ['/programs', '🗓️', 'Programs'], ['/exercises', '🏋️', 'Exercises'], ['/me', '⚙️', 'Profile']]);
     route('/', renderRoster);

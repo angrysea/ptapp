@@ -21,7 +21,7 @@ docs/         ARCHITECTURE, DEVELOPMENT, DEPLOY, ROADMAP
 
 | Area | Implemented (BRD ids) |
 |---|---|
-| Onboarding | Coach self-signup; invite by link/code with email draft (ON-1); intake questionnaire (ON-2); PAR-Q+-style screening and a signed waiver with timestamp, IP and user agent (ON-3) |
+| Onboarding | Admin role that onboards coaches by invite or by approving coach requests (no open coach signup); client invite by link/code with email draft (ON-1); intake questionnaire (ON-2); PAR-Q+-style screening and a signed waiver with timestamp, IP and user agent (ON-3) |
 | Library & builder | 34 built-in exercises plus coach custom exercises with cues, tags, demo link or uploaded demo video (WB-1); sets/reps/load/tempo/rest/RPE/RIR/notes (WB-2); straight, superset, circuit, AMRAP, EMOM and interval blocks (WB-3); multi-week calendar builder with copy week, move/copy workout, duplicate program, templates (WB-4) |
 | Logging | Today view; per-set reps/load/RPE logging pre-filled from the prescription (LG-1); rest timer plus EMOM/AMRAP/interval timers with beeps and wake lock (LG-2); **fully offline** with an outbox and last-write-wins sync (LG-3); complete/modified/skipped plus comment (LG-4) |
 | Coach dashboard | Roster with 28-day adherence and flags (pain, needs clearance, no waiver, no program, missed); per-client adherence, missed dates, weekly volume, e1RM trends, check-ins (LG-6) |

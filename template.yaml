@@ -13,6 +13,10 @@ Parameters:
     Type: String
     Default: http://localhost:8080
     Description: Extra origin allowed for CORS and OAuth callbacks while developing the web app locally
+  AdminEmails:
+    Type: String
+    Default: ""
+    Description: Comma-separated emails that may set up an admin account (admins onboard coaches; there is no open coach signup)
 
 Globals:
   Function:
@@ -166,6 +170,7 @@ Resources:
         Variables:
           TABLE_NAME: !Ref Table
           MEDIA_BUCKET: !Ref MediaBucket
+          ADMIN_EMAILS: !Ref AdminEmails
           RUST_LOG: info
       LoggingConfig:
         LogGroup: !Ref ApiLogGroup

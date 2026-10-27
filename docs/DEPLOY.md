@@ -15,7 +15,9 @@ The script:
 3. copies `web/` to a temporary folder and writes its `js/config.js` from the stack outputs (your checkout is left untouched)
 4. stamps the service-worker version in the copy, syncs it to S3 (no-cache on `index.html`, `sw.js`, `config.js`) and invalidates CloudFront
 
-It prints the app URL (`https://dxxxx.cloudfront.net`). The first coach signs up through **Sign in → Sign up** on the Cognito page, then picks "I'm a coach".
+It prints the app URL (`https://dxxxx.cloudfront.net`).
+
+**First admin.** Coaches can't sign themselves up; an admin invites them or approves their request. Pass `ADMIN_EMAILS` (comma-separated) on every deploy. Someone whose verified email is on the list signs up through **Sign in → Sign up** on the Cognito page and sees **Set up admin account**. Their admin account then stays even if the list changes. Coaches can request an account at `<app URL>#/become-a-coach`; the admin's Coaches page shows the requests and that link.
 
 ## Signing in and deploying from Windows
 
@@ -26,7 +28,7 @@ Deploys run from a developer machine, not from GitHub. (The AWS Organization thi
 3. Deploy from Git Bash in a new terminal (so it sees the new tools). SAM installs as `sam.cmd`, which Git Bash cannot call as `sam`, so wrap it:
    ```bash
    sam() { "/c/Program Files/Amazon/AWSSAMCLI/bin/sam.cmd" "$@"; }; export -f sam
-   AWS_PROFILE=ptapp AWS_REGION=us-east-2 STAGE=dev COGNITO_DOMAIN_PREFIX=ptapp-online ./scripts/deploy.sh
+   AWS_PROFILE=ptapp AWS_REGION=us-east-2 STAGE=dev COGNITO_DOMAIN_PREFIX=ptapp-online ADMIN_EMAILS=you@example.com ./scripts/deploy.sh
    ```
 
 ## After the first deploy

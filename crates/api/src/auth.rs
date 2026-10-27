@@ -83,6 +83,14 @@ impl Ctx {
         self.profile.role == Role::Coach
     }
 
+    pub fn require_admin(&self) -> ApiResult<&str> {
+        if self.profile.role == Role::Admin {
+            Ok(&self.profile.user_id)
+        } else {
+            Err(ApiError::Forbidden("admin only"))
+        }
+    }
+
     pub fn require_coach(&self) -> ApiResult<&str> {
         if self.is_coach() {
             Ok(&self.profile.user_id)

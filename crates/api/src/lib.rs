@@ -23,6 +23,10 @@ pub struct AppState {
     pub s3: aws_sdk_s3::Client,
     pub bucket: String,
     pub presign_ttl: Duration,
+    /// Lowercased emails allowed to set up an admin account (ADMIN_EMAILS,
+    /// comma-separated). Only needed to bootstrap: an admin profile stays
+    /// once created.
+    pub admin_emails: Vec<String>,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -31,10 +35,18 @@ pub fn router(state: AppState) -> Router {
         .route("/health", get(|| async { Json(json!({ "ok": true })) }))
         // identity + onboarding
         .route("/me", get(me::get_me).put(me::update_me))
-        .route("/coach/register", post(me::register_coach))
+        .route("/coach-request", put(admin::submit_request))
         .route("/invites", get(invites::list).post(invites::create))
         .route("/invites/{code}", get(invites::peek).delete(invites::revoke))
         .route("/invites/{code}/accept", post(invites::accept))
+        // admin: coach invites and coach requests (no open coach signup)
+        .route("/admin/register", post(admin::register))
+        .route("/admin/coaches", get(admin::coaches))
+        .route("/admin/invites", get(admin::list_invites).post(admin::create_invite))
+        .route("/admin/invites/{code}", delete(admin::revoke_invite))
+        .route("/admin/requests", get(admin::requests))
+        .route("/admin/requests/{uid}/approve", post(admin::approve))
+        .route("/admin/requests/{uid}/decline", post(admin::decline))
         // coach library
         .route("/exercises", get(exercises::list).post(exercises::create))
         .route("/exercises/{id}", put(exercises::update).delete(exercises::remove))
@@ -75,6 +87,17 @@ impl AppState {
             s3: aws_sdk_s3::Client::new(&config),
             bucket: std::env::var("MEDIA_BUCKET").expect("MEDIA_BUCKET"),
             presign_ttl: Duration::from_secs(900),
+            admin_emails: std::env::var("ADMIN_EMAILS")
+                .unwrap_or_default()
+                .split(',')
+                .map(|e| e.trim().to_lowercase())
+                .filter(|e| e.contains('@'))
+                .collect(),
         }
+    }
+
+    /// Whether this signed-in user may set up an admin account.
+    pub fn is_admin_email(&self, caller: &auth::Caller) -> bool {
+        caller.email_verified && self.admin_emails.contains(&caller.email.trim().to_lowercase())
     }
 }

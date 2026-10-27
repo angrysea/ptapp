@@ -8,7 +8,7 @@ const CACHE = `ptapp-${VERSION}`;
 const SHELL = [
   './', 'index.html', 'manifest.webmanifest', 'icon.svg', 'css/app.css',
   'js/app.js', 'js/api.js', 'js/auth.js', 'js/config.js', 'js/idb.js', 'js/router.js', 'js/session.js', 'js/timer.js', 'js/ui.js',
-  'js/views/coach.js', 'js/views/comments.js', 'js/views/exercises.js', 'js/views/intake.js', 'js/views/metrics.js',
+  'js/views/admin.js', 'js/views/coach.js', 'js/views/comments.js', 'js/views/exercises.js', 'js/views/intake.js', 'js/views/metrics.js',
   'js/views/onboarding.js', 'js/views/profile.js', 'js/views/programs.js', 'js/views/workout.js',
 ];
 

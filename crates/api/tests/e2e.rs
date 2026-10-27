@@ -43,6 +43,7 @@ async fn full_client_journey() {
         std::env::set_var("AWS_ACCESS_KEY_ID", "test");
         std::env::set_var("AWS_SECRET_ACCESS_KEY", "test");
         std::env::set_var("DEV_AUTH", "1");
+        std::env::set_var("ADMIN_EMAILS", "Admin1@dev.local, other@example.com");
         std::env::set_var("TABLE_NAME", format!("e2e-{}", uuid::Uuid::new_v4().simple()));
         std::env::set_var("MEDIA_BUCKET", format!("e2e-{}", &uuid::Uuid::new_v4().simple().to_string()[..12]));
     }
@@ -75,11 +76,65 @@ async fn full_client_journey() {
     assert!(me["profile"].is_null());
     assert_eq!(t.call("GET", "/clients", Some("coach1"), None).await.0, StatusCode::FORBIDDEN);
 
-    // --- coach onboarding + invite (ON-1)
-    let (s, p) = t.call("POST", "/coach/register", Some("coach1"), Some(json!({ "name": "Coach One" }))).await;
+    // --- admin bootstrap: only emails on ADMIN_EMAILS may set up an admin account
+    assert_eq!(me["adminEligible"], false);
+    let (_, me_admin) = t.call("GET", "/me", Some("admin1"), None).await;
+    assert_eq!(me_admin["adminEligible"], true);
+    assert_eq!(t.call("POST", "/admin/register", Some("coach1"), Some(json!({ "name": "x" }))).await.0, StatusCode::FORBIDDEN);
+    let (s, a) = t.call("POST", "/admin/register", Some("admin1"), Some(json!({ "name": "Ada Admin" }))).await;
+    assert_eq!(s, StatusCode::OK, "{a}");
+    assert_eq!(a["role"], "admin");
+    assert_eq!(t.call("POST", "/admin/register", Some("admin1"), Some(json!({ "name": "x" }))).await.0, StatusCode::CONFLICT);
+
+    // --- no open coach signup: coaches come from an admin invite...
+    assert_eq!(t.call("POST", "/coach/register", Some("coach1"), Some(json!({ "name": "x" }))).await.0, StatusCode::NOT_FOUND);
+    assert_eq!(t.call("POST", "/admin/invites", Some("coach1"), Some(json!({ "email": "coach1@dev.local", "name": "x" }))).await.0, StatusCode::FORBIDDEN);
+    let (s, ci) = t.call("POST", "/admin/invites", Some("admin1"), Some(json!({ "email": "coach1@dev.local", "name": "Coach One" }))).await;
+    assert_eq!(s, StatusCode::OK, "{ci}");
+    assert_eq!(ci["kind"], "coach");
+    let coach_code = ci["code"].as_str().unwrap().to_string();
+    let (_, peek) = t.call("GET", &format!("/invites/{coach_code}"), Some("coach1"), None).await;
+    assert_eq!(peek["kind"], "coach");
+    assert_eq!(t.call("POST", &format!("/invites/{coach_code}/accept"), Some("coach9"), Some(json!({}))).await.0, StatusCode::FORBIDDEN);
+    let (s, p) = t.call("POST", &format!("/invites/{coach_code}/accept"), Some("coach1"), Some(json!({}))).await;
     assert_eq!(s, StatusCode::OK, "{p}");
     assert_eq!(p["role"], "coach");
-    assert_eq!(t.call("POST", "/coach/register", Some("coach1"), Some(json!({ "name": "x" }))).await.0, StatusCode::CONFLICT);
+    assert_eq!(p["coachId"], "coach1");
+    assert_eq!(p["name"], "Coach One");
+    let (_, admin_invites) = t.call("GET", "/admin/invites", Some("admin1"), None).await;
+    assert_eq!(admin_invites.as_array().unwrap().len(), 0);
+
+    // ...or an approved request from a signed-in user
+    let (s, rq) = t
+        .call("PUT", "/coach-request", Some("coach2"), Some(json!({ "name": "Coach Two", "businessName": "Two Fit", "message": "10 years" })))
+        .await;
+    assert_eq!(s, StatusCode::OK, "{rq}");
+    assert_eq!(rq["status"], "pending");
+    let (_, me2) = t.call("GET", "/me", Some("coach2"), None).await;
+    assert_eq!(me2["coachRequest"]["status"], "pending");
+    assert_eq!(t.call("GET", "/admin/requests", Some("coach1"), None).await.0, StatusCode::FORBIDDEN);
+    let (_, reqs) = t.call("GET", "/admin/requests", Some("admin1"), None).await;
+    assert_eq!(reqs[0]["userId"], "coach2");
+    let (s, c2) = t.call("POST", "/admin/requests/coach2/approve", Some("admin1"), None).await;
+    assert_eq!(s, StatusCode::OK, "{c2}");
+    assert_eq!(c2["role"], "coach");
+    assert_eq!(c2["businessName"], "Two Fit");
+    assert_eq!(t.call("POST", "/admin/requests/coach2/approve", Some("admin1"), None).await.0, StatusCode::CONFLICT);
+    assert_eq!(t.call("PUT", "/coach-request", Some("coach2"), Some(json!({ "name": "again" }))).await.0, StatusCode::CONFLICT);
+    // a declined request can be sent again
+    t.call("PUT", "/coach-request", Some("coach3"), Some(json!({ "name": "Coach Three" }))).await;
+    assert_eq!(t.call("POST", "/admin/requests/coach3/decline", Some("admin1"), None).await.0, StatusCode::OK);
+    let (_, me3) = t.call("GET", "/me", Some("coach3"), None).await;
+    assert_eq!(me3["coachRequest"]["status"], "declined");
+    assert!(me3["profile"].is_null());
+    assert_eq!(t.call("POST", "/admin/requests/coach3/approve", Some("admin1"), None).await.0, StatusCode::CONFLICT);
+    let (_, coaches) = t.call("GET", "/admin/coaches", Some("admin1"), None).await;
+    let names: Vec<&str> = coaches.as_array().unwrap().iter().map(|c| c["name"].as_str().unwrap()).collect();
+    assert_eq!(names, ["Coach One", "Coach Two"]);
+    // admins see no coach or client data
+    assert_eq!(t.call("GET", "/clients", Some("admin1"), None).await.0, StatusCode::FORBIDDEN);
+
+    // --- client invite (ON-1)
     // the device's time zone is stored so "today" is the user's local date
     assert_eq!(t.call("PUT", "/me", Some("coach1"), Some(json!({ "timeZone": "Not/AZone" }))).await.0, StatusCode::BAD_REQUEST);
     let (s, p) = t.call("PUT", "/me", Some("coach1"), Some(json!({ "timeZone": "America/Chicago" }))).await;
@@ -316,7 +371,6 @@ async fn full_client_journey() {
     assert_eq!(cs[0]["authorRole"], "coach");
 
     // --- tenant isolation
-    t.call("POST", "/coach/register", Some("coach2"), Some(json!({ "name": "Coach Two" }))).await;
     for path in ["/clients/client1/metrics", "/clients/client1/photos", "/clients/client1/logs", "/clients/client1"] {
         assert_eq!(t.call("GET", path, Some("coach2"), None).await.0, StatusCode::FORBIDDEN, "{path}");
     }

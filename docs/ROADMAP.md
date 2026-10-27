@@ -93,7 +93,7 @@ Use the server-side render approach from the BRD: the browser records an **edit 
 * `POST /billing/portal` → Billing Portal session (cancel, update card).
 * `POST /stripe/webhook` (no JWT; verify the `Stripe-Signature` HMAC with the secret from Secrets Manager; dedupe with an idempotency `EVT#{id}` item) handles `checkout.session.completed`, `customer.subscription.updated|deleted` and `invoice.payment_failed` → `CLIENT#{id}/SUB` `{status, currentPeriodEnd}`.
 * Gating: a `past_due`/`canceled` status shows a banner and stops new program assignment. **Never** block offline logging.
-* SaaS billing for coaches themselves (if you sell to many coaches): a separate Stripe subscription on the coach profile, checked in `register_coach` and `Ctx`.
+* SaaS billing for coaches themselves (if you sell to many coaches): a separate Stripe subscription on the coach profile, checked when an admin approves or invites a coach, and in `Ctx`.
 
 ### 5. MVP hardening (NFRs)
 
@@ -104,7 +104,7 @@ Use the server-side render approach from the BRD: the browser records an **edit 
 * **Observability:** CloudWatch alarms on Lambda errors/throttles, HTTP API 5xx, and DLQ depth → SNS email. Use structured `tracing` JSON logs (already in place). Worth doing before the first real users, ahead of the video work.
 * **Backups:** an AWS Backup plan (daily, 35 days) and a scripted quarterly restore test into a scratch table.
 * ✅ **CI/CD:** done. `.github/workflows/ci.yml` runs clippy (`-D warnings`), unit tests, `cfn-lint`, a web syntax check, the e2e test with moto as a service container and the Playwright journey on every push and pull request. Deploys run locally with `scripts/deploy.sh`: the AWS Organization blocks the OIDC provider a GitHub deploy would need. Revisit if its admin allows one (the removed deploy job and role template are in git history).
-* **Coach signups:** anyone who creates an account can register as a coach. Gate `register_coach` once open question 1 is answered (admin approval, or an active SaaS subscription, see section 4).
+* ✅ **Coach signups:** done. There is no open coach signup: an admin (bootstrapped from `ADMIN_EMAILS`) invites coaches or approves requests sent from `#/become-a-coach`. Still open: emailing the admin when a request arrives and emailing the coach when it's decided (needs SES, see ON-1 email above), and suspending a coach.
 * **Photo list:** `GET /photos` still checks S3 once per photo on every load. Move photos to the upload + confirm pattern the exercise demos use, which also lets the pending-tag lifecycle rule clean up abandoned photo uploads.
 
 **Phase 1 exit gate (BRD):** clients log at least 80% of assigned workouts for 4 weeks, which the dashboard's adherence % measures directly; coach video review takes under 5 minutes.
@@ -175,7 +175,7 @@ Use the server-side render approach from the BRD: the browser records an **edit 
 
 ## Open questions from the BRD (answers needed before the phase they affect)
 
-1. **Single coach vs. SaaS.** Built multi-tenant (one coach = one tenant). Decide whether coaches pay you (Phase 1b, BZ-1). This also decides how coach signup is gated (see 1b hardening).
+1. **Single coach vs. SaaS.** Built multi-tenant (one coach = one tenant). Decide whether coaches pay you (Phase 1b, BZ-1). Coach onboarding is admin-gated already (1b hardening); a SaaS plan would add a subscription check to it.
 2. **Where local AI runs.** The design assumes a GPU box pulling from SQS (Phase 3).
 3. **Lifts for form review.** Pick 3-5 before Phase 3; start labeling clips in Phase 1b.
 4. **Nutrition in scope?** Phase 4 by default.

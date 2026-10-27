@@ -167,6 +167,7 @@ mod tests {
             s3: aws_sdk_s3::Client::from_conf(conf),
             bucket: "b".into(),
             presign_ttl: std::time::Duration::from_secs(60),
+            admin_emails: vec![],
         };
         let up = super::presign_put(&state, "k", "image/jpeg", 1234, Some(super::PENDING_TAG)).await.unwrap();
         assert!(up.url.contains("X-Amz-SignedHeaders=content-length%3B"), "{}", up.url);

@@ -43,8 +43,11 @@ When a coach reads intake, waiver, metrics or photos, an `AUDIT#` item is writte
 |---|---|---|
 | `USER#{sub}` | `PROFILE` | Profile: role, coachId, name, units, sex, birthDate |
 | `COACH#{coach}` | `CLIENT#{client}` | roster entry |
-| `COACH#{coach}` | `INVITE#{code}` | pending invite (deleted on accept) |
-| `INVITE#{code}` | `INVITE` | invite lookup, `ttl` 14 days |
+| `COACH#{coach}` | `INVITE#{code}` | pending client invite (deleted on accept) |
+| `INVITE#{code}` | `INVITE` | invite lookup (client or coach invite), `ttl` 14 days |
+| `ADMIN` | `INVITE#{code}` | pending coach invite from an admin (deleted on accept) |
+| `ADMIN` | `COACH#{coach}` | coach list entry, written when a coach joins |
+| `ADMIN` | `REQUEST#{sub}` | coach request: pending, approved or declined |
 | `COACH#{coach}` | `EXERCISE#{id}` | custom exercise (built-ins are compiled into the binary) |
 | `COACH#{coach}` | `PROGRAM#{id}` | whole program document |
 | `CLIENT#{client}` | `INTAKE` | intake answers |
