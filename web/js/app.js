@@ -1,7 +1,8 @@
 // App bootstrap: auth, profile, role-based tabs and routes.
 
-import { flush, get, onSync } from './api.js';
+import { flush, get, onSync, put } from './api.js';
 import { handleCallback, login, signedIn } from './auth.js';
+import { kv } from './idb.js';
 import { route, start } from './router.js';
 import { session } from './session.js';
 import { $app, errorToast, h, mount, toast } from './ui.js';
@@ -14,6 +15,8 @@ import { renderThread } from './views/comments.js';
 import { renderProfile } from './views/profile.js';
 import { renderProgramEditor, renderPrograms } from './views/programs.js';
 import { renderToday, renderWorkout } from './views/workout.js';
+
+const OWNER = 'pt.owner';
 
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 
@@ -51,8 +54,21 @@ async function boot() {
     if (e.status === 401) return landing();
     return mount($app(), h('p', { class: 'center muted' }, 'Can’t reach the server and nothing is cached yet. Check your connection.'));
   }
+  // Cached reads, drafts and unsynced copies belong to whoever was signed in.
+  // A different user on this device must not see them (queued writes are
+  // kept per user in the outbox, see api.js).
+  try {
+    if (localStorage.getItem(OWNER) !== me.userId) {
+      if (localStorage.getItem(OWNER)) await kv.clear();
+      localStorage.setItem(OWNER, me.userId);
+    }
+  } catch { /* storage unavailable: nothing cached to leak */ }
   if (!me.profile) return renderOnboarding(me);
   session.profile = me.profile;
+  // The server judges "today" (missed workouts, adherence) in the user's own
+  // time zone, so keep it current; travel or a DST rule change updates it.
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  if (tz && me.profile.timeZone !== tz) put('/me', { timeZone: tz }).then((p) => { session.profile = p; }).catch(() => {});
 
   const syncEl = document.getElementById('sync');
   onSync((n, failure) => {

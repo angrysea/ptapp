@@ -1,7 +1,7 @@
 use axum::extract::State;
 use axum::Json;
 use chrono::{NaiveDate, Utc};
-use ptcore::model::{Profile, Role, Sex, UnitSystem};
+use ptcore::model::{valid_time_zone, Profile, Role, Sex, UnitSystem};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -24,6 +24,7 @@ pub struct UpdateMe {
     sex: Option<Sex>,
     birth_date: Option<NaiveDate>,
     business_name: Option<String>,
+    time_zone: Option<String>,
 }
 
 pub async fn update_me(State(st): State<AppState>, ctx: Ctx, Json(body): Json<UpdateMe>) -> ApiResult<Json<Profile>> {
@@ -42,6 +43,12 @@ pub async fn update_me(State(st): State<AppState>, ctx: Ctx, Json(body): Json<Up
     }
     if p.role == Role::Coach && body.business_name.is_some() {
         p.business_name = body.business_name;
+    }
+    if let Some(tz) = body.time_zone {
+        if !valid_time_zone(&tz) {
+            return Err(bad_request(format!("unknown time zone '{tz}'")));
+        }
+        p.time_zone = Some(tz);
     }
     st.store.put(&format!("USER#{}", p.user_id), "PROFILE", &p).await?;
     Ok(Json(p))
@@ -74,6 +81,7 @@ pub async fn register_coach(
         sex: None,
         birth_date: None,
         business_name: body.business_name,
+        time_zone: None,
         created_at: Utc::now(),
     };
     if !st.store.put_new(&format!("USER#{}", caller.sub), "PROFILE", &profile).await? {

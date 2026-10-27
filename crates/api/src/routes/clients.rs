@@ -3,8 +3,8 @@
 
 use axum::extract::{Path, Query, State};
 use axum::Json;
-use chrono::{Duration, Utc};
-use futures::future::join_all;
+use chrono::{Duration, NaiveDate, Utc};
+use futures::stream::{self, StreamExt};
 use ptcore::model::{Assignment, Intake, ParqAnswer, Profile, RosterEntry, ScheduledWorkout, Waiver, WorkoutLog};
 use ptcore::stats::{adherence, strength_trends, weekly_volume};
 use serde::Deserialize;
@@ -12,12 +12,13 @@ use serde_json::{json, Value};
 
 use crate::auth::{client_scope, ClientScope, Ctx};
 use crate::error::{bad_request, ApiError, ApiResult};
-use crate::util::{audit, new_id, today};
+use crate::util::{audit, new_id};
 use crate::AppState;
 
-async fn recent(st: &AppState, pk: &str, days: i64) -> ApiResult<(Vec<ScheduledWorkout>, Vec<WorkoutLog>)> {
-    let from = today() - Duration::days(days);
-    let to = today();
+/// Scheduled workouts and logs from `days` before `today` through `today`.
+async fn recent(st: &AppState, pk: &str, today: NaiveDate, days: i64) -> ApiResult<(Vec<ScheduledWorkout>, Vec<WorkoutLog>)> {
+    let from = today - Duration::days(days);
+    let to = today;
     let (s_from, s_to) = (format!("SCHED#{from}"), format!("SCHED#{to}#~"));
     let (l_from, l_to) = (format!("LOG#{from}"), format!("LOG#{to}#~"));
     let sched = st.store.query_between(pk, &s_from, &s_to, true);
@@ -31,37 +32,50 @@ async fn latest_waiver(st: &AppState, pk: &str) -> ApiResult<Option<Waiver>> {
     Ok(w.pop())
 }
 
+const ROSTER_CONCURRENCY: usize = 8;
+
 /// Roster with a 28-day adherence summary and flags the coach should act on.
 pub async fn roster(State(st): State<AppState>, ctx: Ctx) -> ApiResult<Json<Vec<Value>>> {
     let coach = ctx.require_coach()?;
     let entries: Vec<RosterEntry> = st.store.query_prefix(&format!("COACH#{coach}"), "CLIENT#").await?;
-    let rows = join_all(entries.into_iter().map(|e| {
-        let st = st.clone();
-        async move {
-            let pk = format!("CLIENT#{}", e.client_id);
-            let (sched, logs) = recent(&st, &pk, 28).await?;
-            let waiver = latest_waiver(&st, &pk).await?;
-            // `recent` stops at today, so look at assignments for anything ahead.
-            let assignments: Vec<Assignment> = st.store.query_prefix(&pk, "ASSIGN#").await?;
-            let a = adherence(&sched, &logs, today());
-            let last_workout = logs.iter().filter(|l| l.status.counts_as_done()).map(|l| l.date).max();
-            let pain_since = today() - Duration::days(14);
-            let pain = logs
-                .iter()
-                .any(|l| l.date >= pain_since && l.check.as_ref().is_some_and(|c| c.pain));
-            let upcoming = sched.iter().any(|s| s.date >= today()) || assignments.iter().any(|a| a.end_date >= today());
-            ApiResult::Ok(json!({
-                "client": e,
-                "adherence": a,
-                "lastWorkout": last_workout,
-                "painFlag": pain,
-                "waiverSigned": waiver.is_some(),
-                "parqFlagged": waiver.is_some_and(|w| w.parq_flagged),
-                "hasUpcoming": upcoming,
-            }))
-        }
-    }))
-    .await;
+    // Clients are summarized a few at a time (each takes five reads) so a big
+    // roster doesn't fire hundreds of DynamoDB requests at once.
+    let rows: Vec<ApiResult<Value>> = stream::iter(entries)
+        .map(|e| {
+            let st = st.clone();
+            async move {
+                let pk = format!("CLIENT#{}", e.client_id);
+                // The client's own profile holds their time zone, so "missed" is
+                // judged by their calendar, not UTC's.
+                let profile: Option<Profile> = st.store.get(&format!("USER#{}", e.client_id), "PROFILE").await?;
+                let today = profile.map_or_else(|| Utc::now().date_naive(), |p| p.today(Utc::now()));
+                // `recent` stops at today, so look at assignments for anything ahead.
+                let ((sched, logs), waiver, assignments) = tokio::try_join!(
+                    recent(&st, &pk, today, 28),
+                    latest_waiver(&st, &pk),
+                    st.store.query_prefix::<Assignment>(&pk, "ASSIGN#"),
+                )?;
+                let a = adherence(&sched, &logs, today);
+                let last_workout = logs.iter().filter(|l| l.status.counts_as_done()).map(|l| l.date).max();
+                let pain_since = today - Duration::days(14);
+                let pain = logs
+                    .iter()
+                    .any(|l| l.date >= pain_since && l.check.as_ref().is_some_and(|c| c.pain));
+                let upcoming = sched.iter().any(|s| s.date >= today) || assignments.iter().any(|a| a.end_date >= today);
+                Ok(json!({
+                    "client": e,
+                    "adherence": a,
+                    "lastWorkout": last_workout,
+                    "painFlag": pain,
+                    "waiverSigned": waiver.is_some(),
+                    "parqFlagged": waiver.is_some_and(|w| w.parq_flagged),
+                    "hasUpcoming": upcoming,
+                }))
+            }
+        })
+        .buffered(ROSTER_CONCURRENCY)
+        .collect()
+        .await;
     rows.into_iter().collect::<ApiResult<Vec<_>>>().map(Json)
 }
 
@@ -171,9 +185,10 @@ pub async fn dashboard(
     let weeks = q.weeks.unwrap_or(8).clamp(1, 26);
     // Fetch at least 28 days so the "last28" adherence is always a 28-day
     // window; each reported window then filters explicitly.
-    let (sched, logs) = recent(&st, &scope.pk(), (weeks * 7).max(28)).await?;
-    let win_start = today() - Duration::days(weeks * 7);
-    let l28_start = today() - Duration::days(28);
+    let today = scope.today();
+    let (sched, logs) = recent(&st, &scope.pk(), today, (weeks * 7).max(28)).await?;
+    let win_start = today - Duration::days(weeks * 7);
+    let l28_start = today - Duration::days(28);
     let sched_w = sched.iter().filter(|s| s.date >= win_start).cloned().collect::<Vec<_>>();
     let logs_w = logs.iter().filter(|l| l.date >= win_start).cloned().collect::<Vec<_>>();
     let checks: Vec<Value> = logs_w
@@ -184,11 +199,11 @@ pub async fn dashboard(
         .collect();
     Ok(Json(json!({
         "weeks": weeks,
-        "adherence": adherence(&sched_w, &logs_w, today()),
+        "adherence": adherence(&sched_w, &logs_w, today),
         "last28": adherence(
             &sched.iter().filter(|s| s.date >= l28_start).cloned().collect::<Vec<_>>(),
             &logs.iter().filter(|l| l.date >= l28_start).cloned().collect::<Vec<_>>(),
-            today(),
+            today,
         ),
         "weeklyVolume": weekly_volume(&logs_w),
         "strength": strength_trends(&logs_w),

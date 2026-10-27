@@ -66,6 +66,12 @@ Resources:
           - Id: abort-incomplete-uploads
             Status: Enabled
             AbortIncompleteMultipartUpload: { DaysAfterInitiation: 2 }
+          # Uploads are tagged state=pending until the API confirms them
+          # (util::PENDING_TAG); anything never confirmed is removed.
+          - Id: expire-unconfirmed-uploads
+            Status: Enabled
+            TagFilters: [{ Key: state, Value: pending }]
+            ExpirationInDays: 2
 
   MediaBucketPolicy:
     Type: AWS::S3::BucketPolicy
@@ -166,6 +172,11 @@ Resources:
       Policies:
         - DynamoDBCrudPolicy: { TableName: !Ref Table }
         - S3CrudPolicy: { BucketName: !Ref MediaBucket }
+        # Presigned uploads carry a pending tag, and confirming removes it.
+        - Statement:
+            - Effect: Allow
+              Action: [s3:PutObjectTagging, s3:DeleteObjectTagging]
+              Resource: !Sub "${MediaBucket.Arn}/*"
       Events:
         Api:
           Type: HttpApi

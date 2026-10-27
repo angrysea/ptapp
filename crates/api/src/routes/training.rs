@@ -1,19 +1,21 @@
 //! Assigning programs to a client's calendar and logging workouts
 //! (WB-4, LG-1, LG-3, LG-4, FB-2).
 
-use aws_sdk_dynamodb::types::AttributeValue;
+use std::collections::HashSet;
+
+use aws_sdk_dynamodb::types::{AttributeValue, Delete, Put, TransactWriteItem};
 use axum::extract::{Path, Query, State};
 use axum::Json;
-use chrono::{Duration, Utc};
+use chrono::{Duration, NaiveDate, Utc};
 use ptcore::model::{Assignment, Program, ScheduledWorkout, WorkoutLog};
 use ptcore::schedule::{end_date, materialize};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::auth::{client_scope, Ctx};
 use crate::error::{bad_request, ApiError, ApiResult};
-use crate::store::keyed;
-use crate::util::{audit, new_id, parse_date, today};
+use crate::store::{key, keyed, s};
+use crate::util::{audit, new_id, parse_date};
 use crate::AppState;
 
 /// Highest sort-key suffix; ids and dates only use ASCII below '~'.
@@ -52,6 +54,21 @@ pub async fn assign(
             to = clash.end_date,
         )));
     }
+    // Workouts can outlive their assignment (unassign keeps today's and past
+    // ones), so also refuse to put a second workout on a day that has one.
+    let dates = materialize(&program, start);
+    let new_days: HashSet<NaiveDate> = dates.iter().map(|(d, _)| *d).collect();
+    let taken: Vec<ScheduledWorkout> = st
+        .store
+        .query_between(&scope.pk(), &format!("SCHED#{start}"), &format!("SCHED#{end}#{HIGH}"), true)
+        .await?;
+    if let Some(clash) = taken.iter().find(|s| new_days.contains(&s.date)) {
+        return Err(bad_request(format!(
+            "{date} already has {name} scheduled; pick a start date that avoids it",
+            date = clash.date,
+            name = clash.workout.name,
+        )));
+    }
     let assignment = Assignment {
         id: new_id(),
         program_id: program.id.clone(),
@@ -62,7 +79,7 @@ pub async fn assign(
     };
     let pk = scope.pk();
     let mut items = vec![keyed(&pk, &format!("ASSIGN#{}", assignment.id), &assignment)?];
-    for (date, idx) in materialize(&program, start) {
+    for (date, idx) in dates {
         let pw = &program.workouts[idx];
         let sw = ScheduledWorkout {
             id: new_id(),
@@ -97,9 +114,10 @@ pub async fn unassign(
     ctx.require_coach()?;
     let scope = client_scope(&st, &ctx, &cid).await?;
     let pk = scope.pk();
-    let from = format!("SCHED#{}", today() + Duration::days(1));
+    let today = scope.today();
+    let from = format!("SCHED#{}", today + Duration::days(1));
     let future: Vec<ScheduledWorkout> = st.store.query_between(&pk, &from, &format!("SCHED#{HIGH}"), true).await?;
-    let logged: Vec<WorkoutLog> = st.store.query_between(&pk, &format!("LOG#{}", today()), &format!("LOG#{HIGH}"), true).await?;
+    let logged: Vec<WorkoutLog> = st.store.query_between(&pk, &format!("LOG#{today}"), &format!("LOG#{HIGH}"), true).await?;
     let keys: Vec<(String, String)> = future
         .into_iter()
         .filter(|s| s.assignment_id == aid)
@@ -119,15 +137,16 @@ pub struct Range {
 }
 
 impl Range {
-    /// Defaults to one week back through four weeks ahead; capped at ~6 months.
-    fn resolve(&self) -> ApiResult<(chrono::NaiveDate, chrono::NaiveDate)> {
+    /// Defaults to one week back through four weeks ahead of the client's
+    /// `today`; capped at ~6 months.
+    fn resolve(&self, today: NaiveDate) -> ApiResult<(NaiveDate, NaiveDate)> {
         let from = match &self.from {
             Some(f) => parse_date(f)?,
-            None => today() - Duration::days(7),
+            None => today - Duration::days(7),
         };
         let to = match &self.to {
             Some(t) => parse_date(t)?,
-            None => today() + Duration::days(28),
+            None => today + Duration::days(28),
         };
         if to < from || (to - from).num_days() > 190 {
             return Err(bad_request("date range must be ascending and at most 190 days"));
@@ -144,7 +163,7 @@ pub async fn schedule(
 ) -> ApiResult<Json<Vec<ScheduledWorkout>>> {
     let scope = client_scope(&st, &ctx, &cid).await?;
     audit(&st, &ctx, &scope, "view-schedule").await;
-    let (from, to) = r.resolve()?;
+    let (from, to) = r.resolve(scope.today())?;
     let items = st
         .store
         .query_between(&scope.pk(), &format!("SCHED#{from}"), &format!("SCHED#{to}#{HIGH}"), true)
@@ -160,12 +179,38 @@ pub async fn logs(
 ) -> ApiResult<Json<Vec<WorkoutLog>>> {
     let scope = client_scope(&st, &ctx, &cid).await?;
     audit(&st, &ctx, &scope, "view-logs").await;
-    let (from, to) = r.resolve()?;
+    let (from, to) = r.resolve(scope.today())?;
     let items = st
         .store
         .query_between(&scope.pk(), &format!("LOG#{from}"), &format!("LOG#{to}#{HIGH}"), true)
         .await?;
     Ok(Json(items))
+}
+
+/// Where a log's live copy is filed. The log's sort key includes its date,
+/// so this pointer (`LOGREF#{id}`) is how a write finds a copy filed under an
+/// older date without scanning the client's whole log history.
+#[derive(Serialize, Deserialize)]
+struct LogRef {
+    date: NaiveDate,
+    ver: i64,
+}
+
+fn log_sk(date: NaiveDate, id: &str) -> String {
+    format!("LOG#{date}#{id}")
+}
+
+/// The stored copy of a log, wherever it is filed, for a 409 body.
+async fn current_log(st: &AppState, pk: &str, log: &WorkoutLog) -> ApiResult<Option<WorkoutLog>> {
+    let date = match st.store.get::<LogRef>(pk, &format!("LOGREF#{}", log.id)).await? {
+        Some(r) => r.date,
+        None => log.date,
+    };
+    st.store.get(pk, &log_sk(date, &log.id)).await
+}
+
+fn build<T, E: std::fmt::Display>(r: Result<T, E>) -> ApiResult<T> {
+    r.map_err(|e| ApiError::Internal(e.to_string()))
 }
 
 /// Idempotent upsert keyed by a client-generated id. Offline devices replay
@@ -178,6 +223,9 @@ pub async fn put_log(
     Json(mut log): Json<WorkoutLog>,
 ) -> ApiResult<Json<WorkoutLog>> {
     let scope = client_scope(&st, &ctx, &cid).await?;
+    if scope.by_coach {
+        return Err(ApiError::Forbidden("only the client logs their workouts"));
+    }
     if log.id != lid {
         return Err(bad_request("log id in body does not match the URL"));
     }
@@ -189,44 +237,54 @@ pub async fn put_log(
         log.updated_at = now; // a phone clock far in the future must not win forever
     }
     let pk = scope.pk();
-    let sk = format!("LOG#{}#{}", log.date, log.id);
+    let sk = log_sk(log.date, &log.id);
+    let ref_sk = format!("LOGREF#{}", log.id);
     let ver = log.updated_at.timestamp_millis();
-    // One log id must have exactly one live item: if an offline device edited
-    // the log's date, the old-dated copy is replaced, not left alongside it.
-    // The conditional put below only sees the new date's key, so an older
-    // replay carrying a different date is refused here, before anything is
-    // written or deleted.
-    let prior: Vec<WorkoutLog> = st.store.query_prefix(&pk, "LOG#").await?;
-    let moved: Vec<&WorkoutLog> = prior.iter().filter(|l| l.id == log.id && l.date != log.date).collect();
-    if let Some(newer) = moved.iter().find(|l| l.updated_at.timestamp_millis() > ver) {
-        return Err(ApiError::Conflict(serde_json::to_value(newer).unwrap_or(Value::Null)));
-    }
-    let mut item = keyed(&pk, &sk, &log)?;
-    item.insert("ver".into(), AttributeValue::N(ver.to_string()));
+    let t = &st.store.table;
 
-    let res = st
-        .store
-        .ddb
-        .put_item()
-        .table_name(&st.store.table)
-        .set_item(Some(item))
-        .condition_expression("attribute_not_exists(pk) OR ver <= :v")
-        .expression_attribute_values(":v", AttributeValue::N(ver.to_string()))
-        .send()
-        .await;
-    match res {
-        Ok(_) => {
-            // Only drop the old-dated copies once the new one is safely stored.
-            let stale: Vec<(String, String)> = moved.iter().map(|l| (pk.clone(), format!("LOG#{}#{}", l.date, l.id))).collect();
-            if !stale.is_empty() {
-                st.store.batch_delete(stale).await?;
-            }
-            Ok(Json(log))
+    // One log id must have exactly one live item: if an offline device edited
+    // the log's date, the old-dated copy is replaced in the same transaction.
+    // The pointer is the version gate. Its condition matches exactly what was
+    // read, so a write that lands in between cancels this one, and the loop
+    // re-reads and tries again (or reports 409 if that write was newer).
+    for _ in 0..3 {
+        let prior: Option<LogRef> = st.store.get(&pk, &ref_sk).await?;
+        if prior.as_ref().is_some_and(|p| p.ver > ver) {
+            let current = current_log(&st, &pk, &log).await?;
+            return Err(ApiError::Conflict(serde_json::to_value(current).unwrap_or(Value::Null)));
         }
-        Err(e) if e.as_service_error().is_some_and(|se| se.is_conditional_check_failed_exception()) => {
-            let current: Option<WorkoutLog> = st.store.get(&pk, &sk).await?;
-            Err(ApiError::Conflict(serde_json::to_value(current).unwrap_or(Value::Null)))
+        let mut item = keyed(&pk, &sk, &log)?;
+        item.insert("ver".into(), AttributeValue::N(ver.to_string()));
+        // Logs written before pointers existed have none; their own `ver` still guards them.
+        let put_log = Put::builder()
+            .table_name(t)
+            .set_item(Some(item))
+            .condition_expression("attribute_not_exists(pk) OR ver <= :v")
+            .expression_attribute_values(":v", AttributeValue::N(ver.to_string()));
+        let mut put_ref = Put::builder().table_name(t).set_item(Some(keyed(&pk, &ref_sk, &LogRef { date: log.date, ver })?));
+        put_ref = match &prior {
+            None => put_ref.condition_expression("attribute_not_exists(pk)"),
+            Some(p) => put_ref
+                .condition_expression("ver = :pv AND #d = :pd")
+                .expression_attribute_names("#d", "date")
+                .expression_attribute_values(":pv", AttributeValue::N(p.ver.to_string()))
+                .expression_attribute_values(":pd", s(p.date.to_string())),
+        };
+        let mut items = vec![
+            TransactWriteItem::builder().put(build(put_log.build())?).build(),
+            TransactWriteItem::builder().put(build(put_ref.build())?).build(),
+        ];
+        if let Some(p) = prior.as_ref().filter(|p| p.date != log.date) {
+            let stale = Delete::builder().table_name(t).set_key(Some(key(&pk, &log_sk(p.date, &log.id))));
+            items.push(TransactWriteItem::builder().delete(build(stale.build())?).build());
         }
-        Err(e) => Err(e.into()),
+        match st.store.ddb.transact_write_items().set_transact_items(Some(items)).send().await {
+            Ok(_) => return Ok(Json(log)),
+            Err(e) if e.as_service_error().is_some_and(|se| se.is_transaction_canceled_exception()) => continue,
+            Err(e) => return Err(e.into()),
+        }
     }
+    // Still refused after re-reading: a newer copy is stored.
+    let current = current_log(&st, &pk, &log).await?;
+    Err(ApiError::Conflict(serde_json::to_value(current).unwrap_or(Value::Null)))
 }

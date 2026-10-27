@@ -16,7 +16,7 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_dynamo::aws_sdk_dynamodb_1::{from_item, to_item};
 
-use crate::error::{ApiError, ApiResult};
+use crate::error::{bad_request, ApiError, ApiResult};
 
 pub type Item = HashMap<String, AttributeValue>;
 
@@ -30,7 +30,22 @@ pub fn s(v: impl Into<String>) -> AttributeValue {
     AttributeValue::S(v.into())
 }
 
+/// DynamoDB refuses items over 400 KB, which would surface as a 500. An
+/// item's JSON is close to (and for text, a bit over) its DynamoDB size, so
+/// this leaves headroom for the difference and the key attributes.
+const MAX_ITEM_JSON_BYTES: usize = 350 * 1024;
+
+/// Every write builds its item here, so this is where oversized ones are
+/// turned into a 400 the user can act on.
 pub fn keyed<T: Serialize>(pk: &str, sk: &str, value: &T) -> ApiResult<Item> {
+    let json_len = serde_json::to_vec(value).map_err(|e| ApiError::Internal(format!("serialize: {e}")))?.len();
+    if json_len > MAX_ITEM_JSON_BYTES {
+        return Err(bad_request(format!(
+            "this is too large to save ({} KB, limit {} KB); split it up or shorten the notes",
+            json_len / 1024,
+            MAX_ITEM_JSON_BYTES / 1024
+        )));
+    }
     let mut item: Item = to_item(value)?;
     item.insert("pk".into(), s(pk));
     item.insert("sk".into(), s(sk));
@@ -171,5 +186,18 @@ impl Store {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::error::ApiError;
+
+    #[test]
+    fn oversized_items_are_a_bad_request() {
+        let small = serde_json::json!({ "notes": "x".repeat(1000) });
+        assert!(super::keyed("p", "s", &small).is_ok());
+        let big = serde_json::json!({ "notes": "x".repeat(400 * 1024) });
+        assert!(matches!(super::keyed("p", "s", &big), Err(ApiError::BadRequest(_))));
     }
 }

@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use aws_sdk_s3::presigning::PresigningConfig;
 use chrono::{NaiveDate, Utc};
 use serde::Serialize;
@@ -24,9 +26,6 @@ pub fn invite_code() -> String {
         .collect()
 }
 
-pub fn today() -> NaiveDate {
-    Utc::now().date_naive()
-}
 
 pub fn parse_date(s: &str) -> ApiResult<NaiveDate> {
     NaiveDate::parse_from_str(s, "%Y-%m-%d").map_err(|_| bad_request(format!("bad date '{s}', expected YYYY-MM-DD")))
@@ -43,17 +42,51 @@ pub fn ext_for(content_type: &str, allowed: &[(&'static str, &'static str)]) -> 
 pub const IMAGE_TYPES: &[(&str, &str)] = &[("image/jpeg", "jpg"), ("image/png", "png"), ("image/webp", "webp")];
 pub const VIDEO_TYPES: &[(&str, &str)] = &[("video/mp4", "mp4"), ("video/quicktime", "mov"), ("video/webm", "webm")];
 
-pub async fn presign_put(state: &AppState, key: &str, content_type: &str) -> ApiResult<String> {
+/// Photos are shrunk in the browser first, so this is generous.
+pub const MAX_PHOTO_BYTES: i64 = 15 * 1024 * 1024;
+pub const MAX_VIDEO_BYTES: i64 = 250 * 1024 * 1024;
+
+pub fn check_size(size: i64, max: i64) -> ApiResult<()> {
+    if size <= 0 || size > max {
+        return Err(bad_request(format!("file must be 1 byte to {} MB", max / (1024 * 1024))));
+    }
+    Ok(())
+}
+
+/// S3 tag on an upload that has not been confirmed yet. The media bucket's
+/// lifecycle rule expires objects still carrying it after two days, so
+/// abandoned uploads clean themselves up (see template.yaml).
+pub const PENDING_TAG: &str = "state=pending";
+
+/// A presigned upload: the browser PUTs to `url` sending exactly `headers`.
+pub struct Upload {
+    pub url: String,
+    pub headers: BTreeMap<String, String>,
+}
+
+/// A PUT URL for exactly `size` bytes. Content-Length is one of the signed
+/// headers, so S3 refuses an upload of any other size: the size checked here
+/// is the size that lands. A `tagging` value is signed too, so the browser
+/// must send it (it is in `headers`).
+pub async fn presign_put(state: &AppState, key: &str, content_type: &str, size: i64, tagging: Option<&str>) -> ApiResult<Upload> {
     let req = state
         .s3
         .put_object()
         .bucket(&state.bucket)
         .key(key)
         .content_type(content_type)
+        .content_length(size)
+        .set_tagging(tagging.map(str::to_owned))
         .presigned(PresigningConfig::expires_in(state.presign_ttl)?)
         .await
         .map_err(|e| crate::error::ApiError::Internal(format!("presign put: {e}")))?;
-    Ok(req.uri().to_string())
+    // Browsers set Content-Length themselves and refuse to let scripts do it.
+    let headers = req
+        .headers()
+        .filter(|(k, _)| !k.eq_ignore_ascii_case("content-length"))
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+    Ok(Upload { url: req.uri().to_string(), headers })
 }
 
 pub async fn presign_get(state: &AppState, key: &str) -> ApiResult<String> {
@@ -116,4 +149,32 @@ mod tests {
         assert_eq!(c.len(), 10);
         assert!(!c.contains(['0', 'O', '1', 'I', 'L']));
     }
+
+    /// The upload size limit depends on the SDK signing Content-Length.
+    #[tokio::test]
+    async fn presigned_put_signs_the_content_length() {
+        use aws_sdk_s3::config::{BehaviorVersion, Credentials, Region};
+        let conf = aws_sdk_s3::Config::builder()
+            .behavior_version(BehaviorVersion::latest())
+            .region(Region::new("us-east-1"))
+            .credentials_provider(Credentials::new("AKID", "SECRET", None, None, "test"))
+            .build();
+        let ddb = aws_sdk_dynamodb::Client::from_conf(
+            aws_sdk_dynamodb::Config::builder().behavior_version(BehaviorVersion::latest()).region(Region::new("us-east-1")).build(),
+        );
+        let state = crate::AppState {
+            store: crate::store::Store { ddb, table: "t".into() },
+            s3: aws_sdk_s3::Client::from_conf(conf),
+            bucket: "b".into(),
+            presign_ttl: std::time::Duration::from_secs(60),
+        };
+        let up = super::presign_put(&state, "k", "image/jpeg", 1234, Some(super::PENDING_TAG)).await.unwrap();
+        assert!(up.url.contains("X-Amz-SignedHeaders=content-length%3B"), "{}", up.url);
+        assert_eq!(up.headers.get("x-amz-tagging").map(String::as_str), Some(super::PENDING_TAG));
+        assert!(!up.headers.contains_key("content-length"));
+        assert!(super::check_size(0, super::MAX_PHOTO_BYTES).is_err());
+        assert!(super::check_size(super::MAX_PHOTO_BYTES + 1, super::MAX_PHOTO_BYTES).is_err());
+    }
 }
+
+

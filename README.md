@@ -40,7 +40,7 @@ Not in this build, and planned by phase in **[docs/ROADMAP.md](docs/ROADMAP.md)*
 ## Tests
 
 ```bash
-cargo test                                                     # core unit tests (13)
+cargo test                                                     # unit tests (core + api)
 E2E_ENDPOINT=http://127.0.0.1:5055 cargo test -p api --test e2e  # API journey against moto (about 100 requests)
 python tests/ui/journey.py                                     # browser journey: coach + client, offline sync
 ```

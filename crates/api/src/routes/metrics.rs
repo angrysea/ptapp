@@ -7,13 +7,13 @@ use axum::Json;
 use chrono::{Duration, NaiveDate, Utc};
 use futures::future::try_join_all;
 use ptcore::bodycomp::{compute, DensityEquation, SkinfoldInput, SkinfoldMethod};
-use ptcore::model::{Metric, MetricKind, Photo, PhotoPose, SkinfoldRecord, TAPE_SITES};
+use ptcore::model::{Metric, MetricKind, Photo, PhotoPose, Role, SkinfoldRecord, TAPE_SITES};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::auth::{client_scope, Ctx};
 use crate::error::{bad_request, ApiError, ApiResult};
-use crate::util::{audit, dated_id, ext_for, presign_get, presign_put, s3_object_exists, IMAGE_TYPES};
+use crate::util::{audit, check_size, dated_id, ext_for, presign_get, presign_put, s3_object_exists, IMAGE_TYPES, MAX_PHOTO_BYTES};
 use crate::AppState;
 
 #[derive(Deserialize)]
@@ -133,7 +133,12 @@ pub async fn remove(
     Path((cid, mid)): Path<(String, String)>,
 ) -> ApiResult<Json<Value>> {
     let scope = client_scope(&st, &ctx, &cid).await?;
-    st.store.delete(&scope.pk(), &format!("METRIC#{mid}")).await?;
+    let sk = format!("METRIC#{mid}");
+    let m: Metric = st.store.get(&scope.pk(), &sk).await?.ok_or(ApiError::NotFound("metric"))?;
+    if m.taken_by != scope.actor_role() {
+        return Err(ApiError::Forbidden("only whoever recorded an entry can delete it"));
+    }
+    st.store.delete(&scope.pk(), &sk).await?;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -176,6 +181,7 @@ pub struct PhotoIn {
     date: NaiveDate,
     pose: PhotoPose,
     content_type: String,
+    size: i64,
 }
 
 /// Creates the photo record and returns a short-lived presigned PUT URL.
@@ -188,12 +194,21 @@ pub async fn create_photo(
 ) -> ApiResult<Json<Value>> {
     let scope = client_scope(&st, &ctx, &cid).await?;
     let ext = ext_for(&body.content_type, IMAGE_TYPES)?;
+    check_size(body.size, MAX_PHOTO_BYTES)?;
     let id = dated_id(body.date);
     let key = format!("media/{}/{}/photos/{id}.{ext}", scope.client.coach_id, scope.client.user_id);
-    let photo = Photo { id, date: body.date, pose: body.pose, key, content_type: body.content_type, created_at: Utc::now() };
-    let upload_url = presign_put(&st, &photo.key, &photo.content_type).await?;
+    let photo = Photo {
+        id,
+        date: body.date,
+        pose: body.pose,
+        key,
+        content_type: body.content_type,
+        taken_by: Some(scope.actor_role()),
+        created_at: Utc::now(),
+    };
+    let upload = presign_put(&st, &photo.key, &photo.content_type, body.size, None).await?;
     st.store.put(&scope.pk(), &format!("PHOTO#{}", photo.id), &photo).await?;
-    Ok(Json(json!({ "photo": photo, "uploadUrl": upload_url })))
+    Ok(Json(json!({ "photo": photo, "uploadUrl": upload.url, "uploadHeaders": upload.headers })))
 }
 
 pub async fn remove_photo(
@@ -207,6 +222,10 @@ pub async fn remove_photo(
         .get(&scope.pk(), &format!("PHOTO#{pid}"))
         .await?
         .ok_or(ApiError::NotFound("photo"))?;
+    // Clients control their own photos; a coach may only remove ones they took.
+    if scope.by_coach && photo.taken_by != Some(Role::Coach) {
+        return Err(ApiError::Forbidden("only the client can delete photos they uploaded"));
+    }
     st.s3
         .delete_object()
         .bucket(&st.bucket)

@@ -39,6 +39,7 @@ pub fn router(state: AppState) -> Router {
         .route("/exercises", get(exercises::list).post(exercises::create))
         .route("/exercises/{id}", put(exercises::update).delete(exercises::remove))
         .route("/exercises/{id}/demo-upload", post(exercises::demo_upload))
+        .route("/exercises/{id}/demo-confirm", post(exercises::demo_confirm))
         .route("/programs", get(programs::list).post(programs::create))
         .route("/programs/{id}", get(programs::get_one).put(programs::update).delete(programs::remove))
         .route("/programs/{id}/copy", post(programs::copy))

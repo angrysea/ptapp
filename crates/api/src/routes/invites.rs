@@ -102,6 +102,11 @@ pub async fn accept(
     Json(body): Json<Accept>,
 ) -> ApiResult<Json<Profile>> {
     let inv = open_invite(&st, &code).await?;
+    // The code alone is not enough: a forwarded or leaked link must not let
+    // someone else join as this client.
+    if !caller.email_verified || !caller.email.trim().eq_ignore_ascii_case(&inv.email) {
+        return Err(ApiError::Forbidden("this invite is for a different email address; sign in with the one your coach invited"));
+    }
     let now = Utc::now();
     let name = body
         .name
@@ -114,11 +119,12 @@ pub async fn accept(
         role: Role::Client,
         coach_id: inv.coach_id.clone(),
         name: name.clone(),
-        email: if caller.email.is_empty() { inv.email.clone() } else { caller.email.clone() },
+        email: inv.email.clone(),
         units: UnitSystem::Metric,
         sex: None,
         birth_date: None,
         business_name: None,
+        time_zone: None,
         created_at: now,
     };
     let roster = RosterEntry { client_id: caller.sub.clone(), name, email: profile.email.clone(), joined_at: now };

@@ -59,6 +59,7 @@ pub fn builtin_exercises() -> Vec<Exercise> {
             cues: s.cues.iter().map(|m| m.to_string()).collect(),
             demo_url: None,
             demo_key: None,
+            pending_demo_key: None,
             custom: false,
         })
         .collect()

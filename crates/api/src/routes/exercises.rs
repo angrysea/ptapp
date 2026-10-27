@@ -2,7 +2,6 @@
 
 use axum::extract::{Path, State};
 use axum::Json;
-use futures::future::try_join_all;
 use ptcore::library::{builtin_exercises, is_builtin};
 use ptcore::model::Exercise;
 use serde::{Deserialize, Serialize};
@@ -10,7 +9,7 @@ use serde_json::{json, Value};
 
 use crate::auth::Ctx;
 use crate::error::{bad_request, ApiError, ApiResult};
-use crate::util::{ext_for, new_id, presign_get, presign_put, s3_object_exists, VIDEO_TYPES};
+use crate::util::{check_size, ext_for, new_id, presign_get, presign_put, s3_object_exists, MAX_VIDEO_BYTES, PENDING_TAG, VIDEO_TYPES};
 use crate::AppState;
 
 #[derive(Serialize)]
@@ -27,20 +26,13 @@ pub async fn list(State(st): State<AppState>, ctx: Ctx) -> ApiResult<Json<Vec<Ex
     let custom: Vec<Exercise> = st.store.query_prefix(&format!("COACH#{}", ctx.profile.coach_id), "EXERCISE#").await?;
     all.extend(custom);
     all.sort_by_key(|e| e.name.to_lowercase());
-    // Only link demos whose upload has landed. A missing object may still be
-    // uploading, so the key is kept; the next demo upload replaces it anyway.
-    let present = try_join_all(all.iter().map(|e| async {
-        match &e.demo_key {
-            Some(k) => s3_object_exists(&st, k).await,
-            None => Ok(false),
-        }
-    }))
-    .await?;
+    // `demo_key` is only set once demo_confirm has seen the object, so no
+    // per-exercise S3 check is needed here. Presigning is local (no request).
     let mut out = Vec::with_capacity(all.len());
-    for (e, exists) in all.into_iter().zip(present) {
-        let demo_video_url = match (&e.demo_key, exists) {
-            (Some(k), true) => Some(presign_get(&st, k).await?),
-            _ => None,
+    for e in all {
+        let demo_video_url = match &e.demo_key {
+            Some(k) => Some(presign_get(&st, k).await?),
+            None => None,
         };
         out.push(ExerciseOut { exercise: e, demo_video_url });
     }
@@ -77,6 +69,7 @@ pub async fn create(State(st): State<AppState>, ctx: Ctx, Json(body): Json<Exerc
         cues: clean(body.cues),
         demo_url: body.demo_url.filter(|u| u.starts_with("https://")),
         demo_key: None,
+        pending_demo_key: None,
         custom: true,
     };
     st.store.put(&format!("COACH#{coach}"), &format!("EXERCISE#{}", ex.id), &ex).await?;
@@ -112,14 +105,20 @@ pub async fn update(
     Ok(Json(ex))
 }
 
+/// Best effort: a failure is logged and the object stays (it is not tagged
+/// pending, so no lifecycle rule removes it; search the logs to clean up).
+async fn delete_object(st: &AppState, key: &str) {
+    if let Err(e) = st.s3.delete_object().bucket(&st.bucket).key(key).send().await {
+        tracing::warn!("media {key} delete failed: {e}");
+    }
+}
+
 pub async fn remove(State(st): State<AppState>, ctx: Ctx, Path(id): Path<String>) -> ApiResult<Json<Value>> {
     let coach = ctx.require_coach()?;
     let ex = load_custom(&st, coach, &id).await?;
     st.store.delete(&format!("COACH#{coach}"), &format!("EXERCISE#{id}")).await?;
-    if let Some(k) = ex.demo_key {
-        if let Err(e) = st.s3.delete_object().bucket(&st.bucket).key(&k).send().await {
-            tracing::warn!("demo video {k} delete failed: {e}"); // bucket lifecycle will reclaim it
-        }
+    for k in ex.demo_key.iter().chain(&ex.pending_demo_key) {
+        delete_object(&st, k).await;
     }
     Ok(Json(json!({ "ok": true })))
 }
@@ -128,9 +127,11 @@ pub async fn remove(State(st): State<AppState>, ctx: Ctx, Path(id): Path<String>
 #[serde(rename_all = "camelCase")]
 pub struct DemoUpload {
     content_type: String,
+    size: i64,
 }
 
-/// Returns a presigned PUT URL for the coach's own demo video.
+/// Step 1 of a demo upload: a presigned PUT URL for the coach's video. The
+/// current demo keeps playing until step 2 (`demo_confirm`) swaps it.
 pub async fn demo_upload(
     State(st): State<AppState>,
     ctx: Ctx,
@@ -140,13 +141,39 @@ pub async fn demo_upload(
     let coach = ctx.require_coach()?;
     let mut ex = load_custom(&st, coach, &id).await?;
     let ext = ext_for(&body.content_type, VIDEO_TYPES)?;
+    check_size(body.size, MAX_VIDEO_BYTES)?;
     let key = format!("media/{coach}/exercises/{id}/{}.{ext}", &new_id()[..8]);
-    let upload_url = presign_put(&st, &key, &body.content_type).await?;
-    if let Some(old) = ex.demo_key.replace(key) {
-        if let Err(e) = st.s3.delete_object().bucket(&st.bucket).key(&old).send().await {
-            tracing::warn!("old demo video {old} delete failed: {e}");
-        }
+    let upload = presign_put(&st, &key, &body.content_type, body.size, Some(PENDING_TAG)).await?;
+    // An earlier upload that was never confirmed is abandoned.
+    if let Some(old) = ex.pending_demo_key.replace(key) {
+        delete_object(&st, &old).await;
     }
     st.store.put(&format!("COACH#{coach}"), &format!("EXERCISE#{id}"), &ex).await?;
-    Ok(Json(json!({ "uploadUrl": upload_url, "contentType": body.content_type })))
+    Ok(Json(json!({ "uploadUrl": upload.url, "uploadHeaders": upload.headers, "contentType": body.content_type })))
+}
+
+/// Step 2: once the browser's PUT has succeeded, make the new video the demo
+/// and delete the one it replaces.
+pub async fn demo_confirm(State(st): State<AppState>, ctx: Ctx, Path(id): Path<String>) -> ApiResult<Json<Exercise>> {
+    let coach = ctx.require_coach()?;
+    let mut ex = load_custom(&st, coach, &id).await?;
+    let pending = ex.pending_demo_key.clone().ok_or_else(|| bad_request("no demo upload is pending"))?;
+    if !s3_object_exists(&st, &pending).await? {
+        return Err(bad_request("the video upload has not arrived; try uploading again"));
+    }
+    // Untag first: a confirmed demo must not be expired by the lifecycle rule.
+    st.s3
+        .delete_object_tagging()
+        .bucket(&st.bucket)
+        .key(&pending)
+        .send()
+        .await
+        .map_err(|e| ApiError::Internal(format!("s3 untag: {e}")))?;
+    ex.pending_demo_key = None;
+    let old = ex.demo_key.replace(pending);
+    st.store.put(&format!("COACH#{coach}"), &format!("EXERCISE#{id}"), &ex).await?;
+    if let Some(old) = old {
+        delete_object(&st, &old).await;
+    }
+    Ok(Json(ex))
 }

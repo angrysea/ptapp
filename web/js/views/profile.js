@@ -1,4 +1,4 @@
-import { put } from '../api.js';
+import { myOutbox, put } from '../api.js';
 import { logout } from '../auth.js';
 import { kv, outbox } from '../idb.js';
 import { session } from '../session.js';
@@ -9,7 +9,8 @@ export async function renderProfile() {
   const name = h('input', { value: p.name });
   const unitsSel = select([['metric', 'Metric (kg, cm)'], ['imperial', 'Imperial (lb, in)']], p.units);
   const business = p.role === 'coach' && h('input', { value: p.businessName || '' });
-  const pending = (await outbox.all()).length;
+  const mine = await myOutbox();
+  const pending = mine.length;
   mount($app(),
     h('h1', {}, 'Profile'),
     h('div', { class: 'card' },
@@ -34,7 +35,8 @@ export async function renderProfile() {
         class: 'block danger',
         onclick: async () => {
           if (pending && !confirm('Some changes have not synced yet and will be lost. Sign out anyway?')) return;
-          await kv.clear(); await outbox.clear();
+          // Only this user's queued writes go; another user's stay until they sign in.
+          await kv.clear(); for (const i of mine) await outbox.del(i.key);
           logout();
         },
       }, 'Sign out')),

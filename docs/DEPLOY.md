@@ -12,8 +12,8 @@ The script:
 
 1. `cargo lambda build --release --arm64 --bin api` → `target/lambda/api/bootstrap`
 2. `sam deploy` creates the stack `ptapp-dev`: DynamoDB (PITR, SSE, TTL), media bucket (private, AES256, TLS-only, CORS for the app origin), Cognito user pool, hosted domain and web client (code + PKCE), HTTP API with JWT authorizer, throttling and CORS, Lambda (arm64, 256 MB, 30-day logs), and web bucket with CloudFront (OAC, security headers)
-3. writes `web/js/config.js` from the stack outputs
-4. syncs `web/` to S3 (no-cache on `index.html`, `sw.js`, `config.js`), stamps the service-worker version and invalidates CloudFront
+3. copies `web/` to a temporary folder and writes its `js/config.js` from the stack outputs (your checkout is left untouched)
+4. stamps the service-worker version in the copy, syncs it to S3 (no-cache on `index.html`, `sw.js`, `config.js`) and invalidates CloudFront
 
 It prints the app URL (`https://dxxxx.cloudfront.net`). The first coach signs up through **Sign in → Sign up** on the Cognito page, then picks "I'm a coach".
 

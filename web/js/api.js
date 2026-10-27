@@ -5,6 +5,7 @@
 import cfg from './config.js';
 import { devMode, devUser, idToken } from './auth.js';
 import { kv, outbox } from './idb.js';
+import { session } from './session.js';
 
 export class ApiError extends Error {
   constructor(status, message, body) { super(message); this.status = status; this.body = body; }
@@ -50,13 +51,24 @@ export const del = (p) => api('DELETE', p);
 
 const listeners = new Set();
 export const onSync = (fn) => listeners.add(fn);
-const notify = async () => { const n = (await outbox.all()).length; listeners.forEach((fn) => fn(n)); };
+
+/** Queued writes belonging to the signed-in user. Another user's writes stay
+ * queued (their token is needed to send them) until that user signs in again;
+ * items from before owners were recorded count as the current user's. */
+export async function myOutbox() {
+  const me = session.userId;
+  return me ? (await outbox.all()).filter((i) => !i.owner || i.owner === me) : [];
+}
+const notify = async () => { const n = (await myOutbox()).length; listeners.forEach((fn) => fn(n)); };
 
 /** Queue a write. Pass `key` to dedupe (a newer write with the same key replaces
  * the old one, e.g. `log:{id}`); the default key is unique so same-path writes
  * (chat, video) never silently replace each other. */
 export async function enqueue(method, path, body, key = null) {
-  await outbox.put({ key: key ?? `${method} ${path} ${Date.now()}-${Math.random().toString(36).slice(2)}`, method, path, body });
+  const owner = session.userId;
+  const k = key ?? `${method} ${path} ${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  // Keys are per user so two people's edits on one device never replace each other.
+  await outbox.put({ key: `${owner}|${k}`, ref: k, owner, method, path, body });
   await notify();
   flush();
 }
@@ -66,7 +78,7 @@ export async function flush() {
   if (flushing || !navigator.onLine) return notify();
   flushing = true;
   try {
-    for (const item of await outbox.all()) {
+    for (const item of await myOutbox()) {
       try {
         await api(item.method, item.path, item.body);
         // Only drop the queued write if it is still the one we just sent; if

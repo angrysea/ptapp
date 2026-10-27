@@ -18,6 +18,8 @@ use crate::AppState;
 pub struct Caller {
     pub sub: String,
     pub email: String,
+    /// Cognito's `email_verified` claim; invites are bound to a verified address.
+    pub email_verified: bool,
     pub source_ip: Option<String>,
     pub user_agent: Option<String>,
 }
@@ -36,7 +38,8 @@ impl<S: Send + Sync> FromRequestParts<S> for Caller {
             let claims = ctx.authorizer.as_ref().and_then(|a| a.jwt.as_ref()).map(|j| &j.claims);
             if let Some(sub) = claims.and_then(|c| c.get("sub")) {
                 let email = claims.and_then(|c| c.get("email")).cloned().unwrap_or_default();
-                return Ok(Caller { sub: sub.clone(), email, source_ip: ctx.http.source_ip.clone(), user_agent });
+                let email_verified = claims.and_then(|c| c.get("email_verified")).is_some_and(|v| v == "true");
+                return Ok(Caller { sub: sub.clone(), email, email_verified, source_ip: ctx.http.source_ip.clone(), user_agent });
             }
         }
 
@@ -44,7 +47,7 @@ impl<S: Send + Sync> FromRequestParts<S> for Caller {
         if std::env::var("DEV_AUTH").as_deref() == Ok("1")
             && let Some(user) = parts.headers.get("x-dev-user").and_then(|v| v.to_str().ok())
         {
-            return Ok(Caller { sub: user.to_string(), email: format!("{user}@dev.local"), source_ip: None, user_agent });
+            return Ok(Caller { sub: user.to_string(), email: format!("{user}@dev.local"), email_verified: true, source_ip: None, user_agent });
         }
         Err(ApiError::Unauthorized)
     }
@@ -98,6 +101,11 @@ pub struct ClientScope {
 impl ClientScope {
     pub fn pk(&self) -> String {
         format!("CLIENT#{}", self.client.user_id)
+    }
+
+    /// The client's local date, which is what their workouts are dated in.
+    pub fn today(&self) -> chrono::NaiveDate {
+        self.client.today(chrono::Utc::now())
     }
 
     pub fn actor_role(&self) -> Role {

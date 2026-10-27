@@ -51,10 +51,27 @@ pub struct Profile {
     pub birth_date: Option<NaiveDate>,
     #[serde(default)]
     pub business_name: Option<String>,
+    /// IANA time zone reported by the user's device (e.g. "America/Chicago").
+    /// Workouts are dated in local time, so "today" must be too.
+    #[serde(default)]
+    pub time_zone: Option<String>,
     pub created_at: DateTime<Utc>,
 }
 
+/// Whether `tz` is a time zone name `Profile::today` understands.
+pub fn valid_time_zone(tz: &str) -> bool {
+    tz.parse::<chrono_tz::Tz>().is_ok()
+}
+
 impl Profile {
+    /// The user's local calendar date at `now`; UTC if no time zone is known.
+    pub fn today(&self, now: DateTime<Utc>) -> NaiveDate {
+        match self.time_zone.as_deref().and_then(|tz| tz.parse::<chrono_tz::Tz>().ok()) {
+            Some(tz) => now.with_timezone(&tz).date_naive(),
+            None => now.date_naive(),
+        }
+    }
+
     pub fn age_on(&self, date: NaiveDate) -> Option<f64> {
         self.birth_date
             .map(|b| (date - b).num_days() as f64 / 365.2425)
@@ -145,8 +162,13 @@ pub struct Exercise {
     #[serde(default)]
     pub demo_url: Option<String>,
     /// S3 key of a coach-uploaded demo video; served via presigned URL.
+    /// Only set once the upload is confirmed to have landed.
     #[serde(default)]
     pub demo_key: Option<String>,
+    /// Key handed out for an upload that has not been confirmed yet. The
+    /// current demo stays in place until it is.
+    #[serde(default)]
+    pub pending_demo_key: Option<String>,
     #[serde(default)]
     pub custom: bool,
 }
@@ -439,6 +461,9 @@ pub struct Photo {
     pub pose: PhotoPose,
     pub key: String,
     pub content_type: String,
+    /// Who uploaded it; None on photos from before this was recorded.
+    #[serde(default)]
+    pub taken_by: Option<Role>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -510,5 +535,33 @@ mod tests {
         let json = serde_json::to_value(program(1, 1, item(3, None))).unwrap();
         assert!(json["workouts"][0]["workout"]["blocks"][0]["items"][0]["exerciseName"].is_string());
         assert!(json["isTemplate"].is_boolean());
+    }
+
+    #[test]
+    fn today_is_local_to_the_profile_time_zone() {
+        use chrono::TimeZone;
+        let mut p = Profile {
+            user_id: "u".into(),
+            role: Role::Client,
+            coach_id: "c".into(),
+            name: "N".into(),
+            email: "n@x".into(),
+            units: UnitSystem::Metric,
+            sex: None,
+            birth_date: None,
+            business_name: None,
+            time_zone: None,
+            created_at: Utc::now(),
+        };
+        // 5 pm Oct 27 in Los Angeles is already Oct 28 in UTC.
+        let now = Utc.with_ymd_and_hms(2026, 10, 28, 0, 30, 0).unwrap();
+        assert_eq!(p.today(now), NaiveDate::from_ymd_opt(2026, 10, 28).unwrap());
+        p.time_zone = Some("America/Los_Angeles".into());
+        assert_eq!(p.today(now), NaiveDate::from_ymd_opt(2026, 10, 27).unwrap());
+        p.time_zone = Some("Pacific/Auckland".into());
+        assert_eq!(p.today(now), NaiveDate::from_ymd_opt(2026, 10, 28).unwrap());
+        p.time_zone = Some("Not/AZone".into());
+        assert_eq!(p.today(now), NaiveDate::from_ymd_opt(2026, 10, 28).unwrap());
+        assert!(valid_time_zone("Europe/London") && !valid_time_zone("Not/AZone"));
     }
 }

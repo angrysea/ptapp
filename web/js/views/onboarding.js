@@ -54,12 +54,17 @@ async function renderJoin(code, me) {
     return renderOnboarding(me);
   }
   const name = h('input', { value: invite.clientName || '', autocomplete: 'name' });
+  // The API only lets the invited address accept; say so up front.
+  const wrongEmail = (me.email || '').toLowerCase() !== invite.email.toLowerCase();
   mount($app(),
     h('h1', {}, `Join ${invite.coachName}`),
     h('div', { class: 'card' },
       h('p', {}, `${invite.coachName} invited ${invite.email} to train with them.`),
-      field('Your name', name),
-      h('button', {
+      wrongEmail && h('p', { class: 'banner' },
+        `You’re signed in as ${me.email}. Sign out and create an account with ${invite.email} to accept.`),
+      wrongEmail && h('button', { class: 'block', onclick: logout }, 'Sign out'),
+      !wrongEmail && field('Your name', name),
+      !wrongEmail && h('button', {
         class: 'primary block',
         onclick: (e) => busy(e.currentTarget, async () => {
           await post(`/invites/${encodeURIComponent(code)}/accept`, { name: name.value });

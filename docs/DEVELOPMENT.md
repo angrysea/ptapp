@@ -36,7 +36,7 @@ python3 -m http.server 8080 -d web
 
 Open <http://localhost:8080>, click **Sign in**, and enter a user id such as `coach1`. Register as a coach and create an invite. In a private window, open the invite link (`#/join/CODE`) and sign in as `client1`.
 
-`web/js/config.js` is the dev config (`devUser: true`, `apiUrl: http://localhost:9000`). The deploy script overwrites it. **Never deploy with `devUser: true`**; the deployed Lambda ignores the dev header anyway because `DEV_AUTH` is not set there.
+`web/js/config.js` is the dev config (`devUser: true`, `apiUrl: http://localhost:9000`). The deploy script publishes a generated config instead and leaves this file alone. **Never deploy with `devUser: true`**; the deployed Lambda ignores the dev header anyway because `DEV_AUTH` is not set there.
 
 Photo and video uploads in dev go to moto's S3. The browser PUT to moto may hit CORS limits; test uploads against a real dev stack.
 

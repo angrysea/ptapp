@@ -56,6 +56,12 @@ export function renderMetrics(el, client, initial = 'weight') {
   show(initial);
 }
 
+// Mirrors the API: an entry can be deleted by whoever recorded it; photos by
+// the client, or by the coach if the coach took them.
+const myRole = () => (session.isCoach ? 'coach' : 'client');
+const canDeleteMetric = (m) => m.takenBy === myRole();
+const canDeletePhoto = (p) => !session.isCoach || p.takenBy === 'coach';
+
 const metricsPath = (client, kind) => `/clients/${client.userId}/metrics?kind=${kind}`;
 
 async function deleteMetric(client, m, rerender) {
@@ -111,7 +117,7 @@ async function weight(el, client) {
     list.length > 0 && h('div', { class: 'card' }, h('h3', {}, 'Entries'),
       h('table', {}, [...list].reverse().slice(0, 30).map((m) => h('tr', {},
         h('td', {}, fmtDate(m.date)), h('td', {}, `${u.toW(m.weightKg)} ${u.w}`), h('td', { class: 'muted small' }, m.takenBy),
-        h('td', {}, h('button', { class: 'small ghost', onclick: () => deleteMetric(client, m, () => weight(el, client)) }, '✕')))))),
+        h('td', {}, canDeleteMetric(m) && h('button', { class: 'small ghost', onclick: () => deleteMetric(client, m, () => weight(el, client)) }, '✕')))))),
   );
 }
 
@@ -234,7 +240,7 @@ async function skinfold(el, client) {
           h('td', {}, fmtDate(m.date)), h('td', {}, m.skinfold.result.bodyFatPct),
           h('td', {}, m.skinfold.result.leanMassKg != null ? u.toW(m.skinfold.result.leanMassKg) : '—'),
           h('td', { class: 'small muted' }, `${METHODS.find(([k]) => k === m.skinfold.method)[1]} / ${m.skinfold.equation} · by ${m.takenBy}`),
-          h('td', {}, h('button', { class: 'small ghost', onclick: () => deleteMetric(client, m, () => skinfold(el, client)) }, '✕')))))),
+          h('td', {}, canDeleteMetric(m) && h('button', { class: 'small ghost', onclick: () => deleteMetric(client, m, () => skinfold(el, client)) }, '✕')))))),
   );
 }
 
@@ -282,8 +288,8 @@ async function photos(el, client) {
         onclick: (e) => busy(e.currentTarget, async () => {
           if (!file.files[0]) throw new Error('Choose a photo');
           const blob = await shrink(file.files[0]);
-          const { uploadUrl } = await post(`/clients/${client.userId}/photos`, { date: date.value, pose: pose.value, contentType: 'image/jpeg' });
-          const res = await fetch(uploadUrl, { method: 'PUT', headers: { 'content-type': 'image/jpeg' }, body: blob });
+          const { uploadUrl, uploadHeaders } = await post(`/clients/${client.userId}/photos`, { date: date.value, pose: pose.value, contentType: 'image/jpeg', size: blob.size });
+          const res = await fetch(uploadUrl, { method: 'PUT', headers: uploadHeaders, body: blob });
           if (!res.ok) throw new Error(`Upload failed (${res.status})`);
           toast('Photo uploaded');
           photos(el, client);
@@ -294,7 +300,7 @@ async function photos(el, client) {
     dates.map((d) => h('div', { class: 'card' }, h('h3', {}, fmtDate(d)),
       h('div', { class: 'photo-grid' }, ['front', 'side', 'back'].map((p) => byDate[d][p]
         ? h('div', {}, h('img', { src: byDate[d][p].url, alt: `${p} ${d}`, loading: 'lazy' }),
-          h('button', {
+          canDeletePhoto(byDate[d][p]) && h('button', {
             class: 'small ghost', onclick: async () => {
               if (!(await confirmSheet('Delete this photo permanently?', 'Delete'))) return;
               await del(`/clients/${client.userId}/photos/${byDate[d][p].id}`);

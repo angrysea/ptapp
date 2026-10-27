@@ -41,7 +41,8 @@ with sync_playwright() as p:
     # ---------------- invite
     coach.get_by_role("button", name="+ Invite").click()
     coach.get_by_label("Client name").fill("Sam Client")
-    coach.get_by_label("Email").fill("sam@example.com")
+    # Invites can only be accepted by the invited address; dev users are {id}@dev.local.
+    coach.get_by_label("Email").fill(f"client{RUN}@dev.local")
     coach.get_by_role("button", name="Create invite").click()
     expect(coach.get_by_role("heading", name="Invite link")).to_be_visible()
     link = coach.locator(".sheet input").input_value()

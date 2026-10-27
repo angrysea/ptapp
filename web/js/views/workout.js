@@ -3,12 +3,27 @@
 // in-progress sets are saved as a local draft, and the finished log goes
 // through the outbox with a client-generated id.
 
-import { enqueue, get } from '../api.js';
+import { enqueue, get, onSync } from '../api.js';
 import { kv } from '../idb.js';
 import { go } from '../router.js';
 import { session } from '../session.js';
 import { blockTimer, restTimer } from '../timer.js';
 import { $app, addDays, field, fmtDate, h, mount, num, select, sheet, toast, todayIso, uid, units } from '../ui.js';
+
+// A finished workout the server refused for good (not a 409, which means a
+// newer copy is already saved) goes back to being a draft, so it is neither
+// lost nor stuck showing "Done" from the local copy.
+onSync(async (_, failure) => {
+  const ref = failure?.item.ref || '';
+  if (!ref.startsWith('log:') || failure.error.status === 409) return;
+  const local = (await kv.get('localLogs')) || {};
+  const log = local[ref.slice(4)];
+  if (!log) return;
+  delete local[log.id];
+  await kv.set('localLogs', local);
+  if (log.scheduledId) await kv.set(`draft:${log.scheduledId}`, log);
+  toast('Your workout was kept as a draft so you can fix it and save again.', 'error');
+});
 
 const KIND_LABEL = { straight: '', superset: 'Superset', circuit: 'Circuit', amrap: 'AMRAP', emom: 'EMOM', interval: 'Intervals' };
 

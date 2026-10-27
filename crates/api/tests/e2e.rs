@@ -80,8 +80,13 @@ async fn full_client_journey() {
     assert_eq!(s, StatusCode::OK, "{p}");
     assert_eq!(p["role"], "coach");
     assert_eq!(t.call("POST", "/coach/register", Some("coach1"), Some(json!({ "name": "x" }))).await.0, StatusCode::CONFLICT);
+    // the device's time zone is stored so "today" is the user's local date
+    assert_eq!(t.call("PUT", "/me", Some("coach1"), Some(json!({ "timeZone": "Not/AZone" }))).await.0, StatusCode::BAD_REQUEST);
+    let (s, p) = t.call("PUT", "/me", Some("coach1"), Some(json!({ "timeZone": "America/Chicago" }))).await;
+    assert_eq!(s, StatusCode::OK, "{p}");
+    assert_eq!(p["timeZone"], "America/Chicago");
 
-    let (s, inv) = t.call("POST", "/invites", Some("coach1"), Some(json!({ "email": "c@x.com", "clientName": "Cli Ent" }))).await;
+    let (s, inv) = t.call("POST", "/invites", Some("coach1"), Some(json!({ "email": "Client1@dev.local", "clientName": "Cli Ent" }))).await;
     assert_eq!(s, StatusCode::OK, "{inv}");
     let code = inv["code"].as_str().unwrap().to_string();
     let (_, pending) = t.call("GET", "/invites", Some("coach1"), None).await;
@@ -90,6 +95,8 @@ async fn full_client_journey() {
     let (s, peek) = t.call("GET", &format!("/invites/{code}"), Some("client1"), None).await;
     assert_eq!(s, StatusCode::OK);
     assert_eq!(peek["coachName"], "Coach One");
+    // only the invited address can accept (dev users are {id}@dev.local)
+    assert_eq!(t.call("POST", &format!("/invites/{code}/accept"), Some("client2"), Some(json!({}))).await.0, StatusCode::FORBIDDEN);
     let (s, cp) = t.call("POST", &format!("/invites/{code}/accept"), Some("client1"), Some(json!({}))).await;
     assert_eq!(s, StatusCode::OK, "{cp}");
     assert_eq!(cp["role"], "client");
@@ -132,9 +139,31 @@ async fn full_client_journey() {
     assert!(lib.iter().any(|e| e["id"] == "back-squat"));
     assert!(lib.iter().any(|e| e["id"] == custom_id.as_str()));
     assert_eq!(t.call("PUT", "/exercises/back-squat", Some("coach1"), Some(json!({ "name": "x" }))).await.0, StatusCode::FORBIDDEN);
-    let (s, up) = t.call("POST", &format!("/exercises/{custom_id}/demo-upload"), Some("coach1"), Some(json!({ "contentType": "video/mp4" }))).await;
+    let demo_upload = |size: i64| json!({ "contentType": "video/mp4", "size": size });
+    let upload_path = format!("/exercises/{custom_id}/demo-upload");
+    assert_eq!(t.call("POST", &upload_path, Some("coach1"), Some(demo_upload(1 << 40))).await.0, StatusCode::BAD_REQUEST);
+    let (s, up) = t.call("POST", &upload_path, Some("coach1"), Some(demo_upload(3))).await;
     assert_eq!(s, StatusCode::OK, "{up}");
-    assert!(up["uploadUrl"].as_str().unwrap().contains("X-Amz-Signature"));
+    assert!(up["uploadUrl"].as_str().unwrap().contains("X-Amz-SignedHeaders=content-length"));
+    assert_eq!(up["uploadHeaders"]["x-amz-tagging"], "state=pending");
+    // confirming before the upload lands is refused, and the library links no demo yet
+    let confirm_path = format!("/exercises/{custom_id}/demo-confirm");
+    assert_eq!(t.call("POST", &confirm_path, Some("coach1"), Some(json!({}))).await.0, StatusCode::BAD_REQUEST);
+    let (_, lib) = t.call("GET", "/exercises", Some("client1"), None).await;
+    assert!(lib.as_array().unwrap().iter().any(|e| e["id"] == custom_id.as_str() && e["demoVideoUrl"].is_null()));
+    let (_, ex_now) = t.call("GET", "/exercises", Some("coach1"), None).await;
+    let pending = ex_now.as_array().unwrap().iter().find(|e| e["id"] == custom_id.as_str()).unwrap()["pendingDemoKey"].as_str().unwrap().to_string();
+    let bucket = std::env::var("MEDIA_BUCKET").unwrap();
+    // stand in for the browser's PUT, which sends the signed pending tag
+    s3.put_object().bucket(&bucket).key(&pending).tagging("state=pending").body(b"mp4".to_vec().into()).send().await.unwrap();
+    let (s, confirmed) = t.call("POST", &confirm_path, Some("coach1"), Some(json!({}))).await;
+    assert_eq!(s, StatusCode::OK, "{confirmed}");
+    // confirmed demos lose the tag, so the lifecycle rule won't expire them
+    let tags = s3.get_object_tagging().bucket(&bucket).key(&pending).send().await.unwrap();
+    assert!(tags.tag_set().is_empty(), "{:?}", tags.tag_set());
+    assert_eq!(confirmed["demoKey"], pending.as_str());
+    let (_, lib) = t.call("GET", "/exercises", Some("client1"), None).await;
+    assert!(lib.as_array().unwrap().iter().any(|e| e["id"] == custom_id.as_str() && e["demoVideoUrl"].is_string()));
 
     // --- program + assignment (WB-2..4)
     let item = |id: &str| json!({ "exerciseId": "back-squat", "exerciseName": "Back Squat", "sets": 3, "reps": "5", "loadKg": 100.0, "restSec": 120, "rpe": 8, "id": id });
@@ -187,6 +216,7 @@ async fn full_client_journey() {
     let now = chrono::Utc::now();
     let newer = (now - chrono::Duration::minutes(1)).to_rfc3339();
     let older = (now - chrono::Duration::minutes(10)).to_rfc3339();
+    assert_eq!(t.call("PUT", "/clients/client1/logs/log-abc", Some("coach1"), Some(log(&newer, 5))).await.0, StatusCode::FORBIDDEN);
     let (s, l) = t.call("PUT", "/clients/client1/logs/log-abc", Some("client1"), Some(log(&newer, 5))).await;
     assert_eq!(s, StatusCode::OK, "{l}");
     let (s, conflict) = t.call("PUT", "/clients/client1/logs/log-abc", Some("client1"), Some(log(&older, 3))).await;
@@ -239,6 +269,10 @@ async fn full_client_journey() {
     let (_, ms) = t.call("GET", "/clients/client1/metrics?kind=skinfold", Some("client1"), None).await;
     assert_eq!(ms.as_array().unwrap().len(), 1);
     assert_eq!(ms[0]["skinfold"]["sitesMm"]["chest"][1], 15.4);
+    // entries can only be deleted by whoever recorded them
+    let metric_path = |m: &Value| format!("/clients/client1/metrics/{}", m["id"].as_str().unwrap());
+    assert_eq!(t.call("DELETE", &metric_path(&sf), Some("client1"), None).await.0, StatusCode::FORBIDDEN);
+    assert_eq!(t.call("DELETE", &metric_path(&m), Some("coach1"), None).await.0, StatusCode::FORBIDDEN);
     let (s, _) = t
         .call("POST", "/clients/client1/metrics", Some("client1"), Some(json!({ "date": today.to_string(), "kind": "tape", "tapeCm": { "elbow": 30 } })))
         .await;
@@ -254,7 +288,7 @@ async fn full_client_journey() {
 
     // --- photos (BM-7)
     let (s, ph) = t
-        .call("POST", "/clients/client1/photos", Some("client1"), Some(json!({ "date": today.to_string(), "pose": "front", "contentType": "image/jpeg" })))
+        .call("POST", "/clients/client1/photos", Some("client1"), Some(json!({ "date": today.to_string(), "pose": "front", "contentType": "image/jpeg", "size": 4 })))
         .await;
     assert_eq!(s, StatusCode::OK, "{ph}");
     assert!(ph["photo"]["key"].as_str().unwrap().starts_with("media/coach1/client1/photos/"));
@@ -268,6 +302,10 @@ async fn full_client_journey() {
         .unwrap();
     let (_, photos) = t.call("GET", "/clients/client1/photos", Some("coach1"), None).await;
     assert!(photos[0]["url"].as_str().unwrap().contains("X-Amz-Signature"));
+    assert_eq!(photos[0]["takenBy"], "client");
+    // the client's own photo is theirs to delete, not the coach's
+    let photo_path = format!("/clients/client1/photos/{}", photos[0]["id"].as_str().unwrap());
+    assert_eq!(t.call("DELETE", &photo_path, Some("coach1"), None).await.0, StatusCode::FORBIDDEN);
 
     // --- comments (FB-1)
     let (s, _) = t
@@ -294,6 +332,12 @@ async fn full_client_journey() {
         .await;
     assert_eq!(s, StatusCode::OK);
     assert_eq!(un["removed"], 1);
+    // the kept past workout still blocks re-scheduling the same day
+    let (s, e) = t
+        .call("POST", "/clients/client1/assignments", Some("coach1"), Some(json!({ "programId": pid, "startDate": start.to_string() })))
+        .await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+    assert!(e["error"].as_str().unwrap().contains("already has"), "{e}");
 
     // --- audit trail of coach access
     let audits: Vec<Value> = {

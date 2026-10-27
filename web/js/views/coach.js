@@ -6,7 +6,7 @@ import { del, get, post } from '../api.js';
 import { go } from '../router.js';
 import { session } from '../session.js';
 import {
-  $app, addDays, barChart, busy, confirmSheet, errorToast, field, fmtDate, fmtDateTime, h, lineChart, mount, round, select,
+  $app, addDays, barChart, busy, confirmSheet, errorToast, field, fmtDate, fmtDateTime, h, isoDate, lineChart, mount, round, select,
   sheet, subtabs, toast, todayIso, units,
 } from '../ui.js';
 import { commentOn, renderThread } from './comments.js';
@@ -142,7 +142,7 @@ async function calendar(el, client) {
   for (const s of sched) {
     const d = new Date(s.date + 'T12:00:00');
     d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
-    (weeks[d.toISOString().slice(0, 10)] ||= []).push(s);
+    (weeks[isoDate(d)] ||= []).push(s);
   }
   mount(el,
     h('div', { class: 'card' }, h('h3', {}, 'Assign a program'),

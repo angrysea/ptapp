@@ -63,9 +63,10 @@ function editSheet(ex) {
           const saved = ex ? await put(`/exercises/${ex.id}`, body()) : await post('/exercises', body());
           const f = video.files?.[0];
           if (f) {
-            const { uploadUrl } = await post(`/exercises/${saved.id}/demo-upload`, { contentType: f.type });
-            const res = await fetch(uploadUrl, { method: 'PUT', headers: { 'content-type': f.type }, body: f });
+            const { uploadUrl, uploadHeaders } = await post(`/exercises/${saved.id}/demo-upload`, { contentType: f.type, size: f.size });
+            const res = await fetch(uploadUrl, { method: 'PUT', headers: uploadHeaders, body: f });
             if (!res.ok) throw new Error(`Video upload failed (${res.status})`);
+            await post(`/exercises/${saved.id}/demo-confirm`);
           }
           toast('Saved');
           sh.close();
