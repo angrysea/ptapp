@@ -5,6 +5,8 @@
 pub mod auth;
 pub mod error;
 pub mod mail;
+pub mod push;
+pub mod realtime;
 pub mod routes;
 pub mod store;
 pub mod util;
@@ -36,6 +38,10 @@ pub struct AppState {
     /// Days after upload that reviewed set videos are deleted (template
     /// parameter VideoRetentionDays, which also sets the S3 lifecycle rule).
     pub video_retention_days: i64,
+    /// Live delivery to open apps (EVENTS_HTTP_DOMAIN); None turns it off.
+    pub realtime: Option<realtime::Realtime>,
+    /// Web Push (VAPID_PARAM); None turns it off.
+    pub push: Option<push::Push>,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -51,9 +57,16 @@ pub fn router(state: AppState) -> Router {
         // admin: coach invites by email (no open coach signup)
         .route("/admin/register", post(admin::register))
         .route("/admin/coaches", get(admin::coaches))
+        .route("/admin/coaches/{id}", get(coaches::admin_get))
+        .route("/admin/coaches/{id}/hidden", put(coaches::admin_hide))
         .route("/admin/invites", get(admin::list_invites).post(admin::create_invite))
         .route("/admin/invites/{code}", delete(admin::revoke_invite))
         .route("/admin/invites/{code}/resend", post(admin::resend_invite))
+        // coach profiles and the public directory (no sign-in for /public)
+        .route("/me/coach-profile", get(coaches::get_mine).put(coaches::put_mine))
+        .route("/me/coach-profile/photo", post(coaches::photo_upload))
+        .route("/public/coaches", get(coaches::public_list))
+        .route("/public/coaches/{id}", get(coaches::public_one))
         // coach library
         .route("/exercises", get(exercises::list).post(exercises::create))
         .route("/exercises/{id}", put(exercises::update).delete(exercises::remove))
@@ -84,6 +97,10 @@ pub fn router(state: AppState) -> Router {
         .route("/clients/{cid}/videos/{vid}", delete(videos::remove))
         .route("/clients/{cid}/videos/{vid}/reviewed", post(videos::reviewed))
         .route("/videos/queue", get(videos::queue))
+        // chat transport (tasks/chat): the push key, and spike checks to remove
+        .route("/push/key", get(dev::public_key))
+        .route("/dev/ping", post(dev::ping))
+        .route("/dev/push", post(dev::push))
         // API Gateway owns CORS in AWS; this layer only matters for local dev.
         .layer(CorsLayer::new().allow_origin(Any).allow_methods(Any).allow_headers(Any))
         .with_state(state)
@@ -92,6 +109,9 @@ pub fn router(state: AppState) -> Router {
 impl AppState {
     pub async fn from_env() -> Self {
         let config = aws_config::load_from_env().await;
+        // Never follows redirects: push endpoints come from browsers (push.rs).
+        let http = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).build().expect("HTTP client");
+        let app_url = std::env::var("APP_URL").unwrap_or_else(|_| "http://localhost:8080".into());
         AppState {
             store: Store {
                 ddb: aws_sdk_dynamodb::Client::new(&config),
@@ -100,7 +120,9 @@ impl AppState {
             s3: aws_sdk_s3::Client::new(&config),
             ses: aws_sdk_sesv2::Client::new(&config),
             invite_from: std::env::var("INVITE_FROM").ok().filter(|f| f.contains('@')),
-            app_url: std::env::var("APP_URL").unwrap_or_else(|_| "http://localhost:8080".into()),
+            realtime: realtime::Realtime::from_env(&config, http.clone()),
+            push: push::Push::from_env(&config, http, &app_url).await,
+            app_url,
             bucket: std::env::var("MEDIA_BUCKET").expect("MEDIA_BUCKET"),
             presign_ttl: Duration::from_secs(900),
             video_retention_days: std::env::var("VIDEO_RETENTION_DAYS").ok().and_then(|d| d.parse().ok()).unwrap_or(180),

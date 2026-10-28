@@ -131,6 +131,81 @@ async fn full_client_journey() {
     // admins see no coach or client data
     assert_eq!(t.call("GET", "/clients", Some("admin1"), None).await.0, StatusCode::FORBIDDEN);
 
+    // --- coach profiles and the public directory (tasks/coaches)
+    let (_, me) = t.call("GET", "/me", Some("coach1"), None).await;
+    assert_eq!(me["coachProfileComplete"], false);
+    let (_, mine) = t.call("GET", "/me/coach-profile", Some("coach1"), None).await;
+    assert_eq!(mine["profile"], Value::Null);
+    let mut cp = json!({
+        "legalName": "Jordan Q. One", "phone": "(512) 555-0100",
+        "address": { "line1": "1 Main St", "city": "Austin", "state": "TX", "postalCode": "78701", "country": "US" },
+        "cprExpires": "2027-05-01", "insurance": null,
+        "displayName": "Coach One", "headline": "Strength for busy parents",
+        "bio": "I help busy parents get strong in three short sessions a week, with plans that fit around real life.",
+        "photoKey": null, "specialties": ["Strength training"],
+        "certifications": [{ "name": "CSCS", "issuer": "NSCA", "number": "SECRET-123", "expires": null }],
+        "yearsExperience": 8, "formats": ["inPerson", "online"], "languages": ["English"], "rates": "From $60/session",
+        "contactEmail": "Coach1@Example.com", "website": "", "instagram": "", "acceptingClients": true, "listed": true
+    });
+    // incomplete profiles are refused with what's missing
+    let mut short = cp.clone();
+    short["bio"] = json!("Too short");
+    short["phone"] = json!("555");
+    let (s, e) = t.call("PUT", "/me/coach-profile", Some("coach1"), Some(short)).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+    let msg = e["error"].as_str().unwrap_or_default();
+    assert!(msg.contains("Bio") && msg.contains("Phone"), "{e}");
+    // a photo key must be the coach's own
+    let mut theirs = cp.clone();
+    theirs["photoKey"] = json!("media/coach2/profile/x.jpg");
+    assert_eq!(t.call("PUT", "/me/coach-profile", Some("coach1"), Some(theirs)).await.0, StatusCode::BAD_REQUEST);
+    let (s, up) = t.call("POST", "/me/coach-profile/photo", Some("coach1"), Some(json!({ "contentType": "image/jpeg", "size": 1000 }))).await;
+    assert_eq!(s, StatusCode::OK, "{up}");
+    cp["photoKey"] = up["photoKey"].clone();
+    let (s, saved) = t.call("PUT", "/me/coach-profile", Some("coach1"), Some(cp.clone())).await;
+    assert_eq!(s, StatusCode::OK, "{saved}");
+    assert_eq!(saved["listed"], true);
+    assert_eq!(saved["profile"]["contactEmail"], "coach1@example.com");
+    assert_eq!(t.call("GET", "/me", Some("coach1"), None).await.1["coachProfileComplete"], true);
+    // a new display name reaches the admin's list too
+    let mut renamed = cp.clone();
+    renamed["displayName"] = json!("Coach Uno");
+    t.call("PUT", "/me/coach-profile", Some("coach1"), Some(renamed)).await;
+    let (_, coaches) = t.call("GET", "/admin/coaches", Some("admin1"), None).await;
+    assert!(coaches.as_array().unwrap().iter().any(|c| c["name"] == "Coach Uno"), "{coaches}");
+    t.call("PUT", "/me/coach-profile", Some("coach1"), Some(cp.clone())).await;
+    // only coaches have one
+    assert_eq!(t.call("PUT", "/me/coach-profile", Some("admin1"), Some(cp.clone())).await.0, StatusCode::FORBIDDEN);
+
+    // anyone, signed in or not, sees the public copy, and nothing private
+    let (s, list) = t.call("GET", "/public/coaches", None, None).await;
+    assert_eq!(s, StatusCode::OK, "{list}");
+    assert_eq!(list.as_array().unwrap().len(), 1);
+    let (s, page) = t.call("GET", "/public/coaches/coach1", None, None).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!((page["displayName"].as_str(), page["city"].as_str()), (Some("Coach One"), Some("Austin")));
+    assert!(page["photoUrl"].as_str().is_some_and(|u| u.contains("profile")), "{page}");
+    let public = format!("{list}{page}");
+    for private in ["Jordan Q. One", "555-0100", "1 Main St", "78701", "SECRET-123", "cprExpires", "legalName"] {
+        assert!(!public.contains(private), "{private} leaked into the directory: {public}");
+    }
+    assert_eq!(t.call("GET", "/public/coaches/coach2", None, None).await.0, StatusCode::NOT_FOUND);
+    // an admin sees everything and can hide a coach; the coach's saves keep it hidden
+    let (s, full) = t.call("GET", "/admin/coaches/coach1", Some("admin1"), None).await;
+    assert_eq!(s, StatusCode::OK, "{full}");
+    assert_eq!(full["profile"]["legalName"], "Jordan Q. One");
+    assert_eq!(t.call("GET", "/admin/coaches/coach1", Some("coach2"), None).await.0, StatusCode::FORBIDDEN);
+    assert_eq!(t.call("PUT", "/admin/coaches/coach1/hidden", Some("admin1"), Some(json!({ "hidden": true }))).await.1["listed"], false);
+    t.call("PUT", "/me/coach-profile", Some("coach1"), Some(cp.clone())).await;
+    assert_eq!(t.call("GET", "/public/coaches", None, None).await.1.as_array().unwrap().len(), 0);
+    assert_eq!(t.call("PUT", "/admin/coaches/coach1/hidden", Some("admin1"), Some(json!({ "hidden": false }))).await.1["listed"], true);
+    // unlisting takes the coach out of the directory
+    let mut unlisted = cp.clone();
+    unlisted["listed"] = json!(false);
+    t.call("PUT", "/me/coach-profile", Some("coach1"), Some(unlisted)).await;
+    assert_eq!(t.call("GET", "/public/coaches/coach1", None, None).await.0, StatusCode::NOT_FOUND);
+    t.call("PUT", "/me/coach-profile", Some("coach1"), Some(cp)).await;
+
     // --- client invite (ON-1)
     // the device's time zone is stored so "today" is the user's local date
     assert_eq!(t.call("PUT", "/me", Some("coach1"), Some(json!({ "timeZone": "Not/AZone" }))).await.0, StatusCode::BAD_REQUEST);

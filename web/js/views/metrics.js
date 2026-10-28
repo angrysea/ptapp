@@ -4,7 +4,7 @@
 import { del, get, post } from '../api.js';
 import { session } from '../session.js';
 import {
-  addDays, busy, confirmSheet, field, fmtDate, h, isoDate, lineChart, mount, num, round, select, subtabs, toast, todayIso, units,
+  addDays, busy, confirmSheet, field, fmtDate, h, isoDate, lineChart, mount, num, round, select, shrinkImage, subtabs, toast, todayIso, units,
 } from '../ui.js';
 
 const TAPE = [['neck', 'Neck'], ['chest', 'Chest'], ['waist', 'Waist'], ['hips', 'Hips'], ['armL', 'Arm (L)'], ['armR', 'Arm (R)'],
@@ -248,17 +248,6 @@ export const stat = (value, label) => h('div', {}, h('div', { class: 'stat' }, v
 
 // ------------------------------------------------------------ photos (BM-7)
 
-/** Downscale to max 1600px JPEG before upload to save storage and egress. */
-async function shrink(file) {
-  const bmp = await createImageBitmap(file);
-  const scale = Math.min(1, 1600 / Math.max(bmp.width, bmp.height));
-  const canvas = document.createElement('canvas');
-  canvas.width = Math.round(bmp.width * scale);
-  canvas.height = Math.round(bmp.height * scale);
-  canvas.getContext('2d').drawImage(bmp, 0, 0, canvas.width, canvas.height);
-  return new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.85));
-}
-
 async function photos(el, client) {
   const list = await get(`/clients/${client.userId}/photos`);
   const byDate = {};
@@ -287,7 +276,7 @@ async function photos(el, client) {
         class: 'primary block',
         onclick: (e) => busy(e.currentTarget, async () => {
           if (!file.files[0]) throw new Error('Choose a photo');
-          const blob = await shrink(file.files[0]);
+          const blob = await shrinkImage(file.files[0]);
           const { uploadUrl, uploadHeaders } = await post(`/clients/${client.userId}/photos`, { date: date.value, pose: pose.value, contentType: 'image/jpeg', size: blob.size });
           const res = await fetch(uploadUrl, { method: 'PUT', headers: uploadHeaders, body: blob });
           if (!res.ok) throw new Error(`Upload failed (${res.status})`);

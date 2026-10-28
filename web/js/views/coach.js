@@ -20,7 +20,7 @@ export async function renderRoster() {
   const [rows, invites] = await Promise.all([get('/clients', { cache: true }), get('/invites').catch(() => [])]);
   rows.sort((a, b) => (b.painFlag - a.painFlag) || ((a.adherence.pct ?? 101) - (b.adherence.pct ?? 101)));
   mount($app(),
-    h('div', { class: 'spread' }, h('h1', {}, 'Clients'), h('button', { class: 'primary', onclick: inviteSheet }, '+ Invite')),
+    h('div', { class: 'spread page-head' }, h('h1', {}, 'Clients'), h('button', { class: 'primary', onclick: inviteSheet }, '+ Invite')),
     rows.length === 0 && h('div', { class: 'card muted' }, 'No clients yet. Invite your first client to get started.'),
     rows.map((r) => {
       const a = r.adherence;

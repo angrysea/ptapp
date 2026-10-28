@@ -9,13 +9,15 @@ import { session } from './session.js';
 import { $app, errorToast, h, mount, toast } from './ui.js';
 import { renderAdmin } from './views/admin.js';
 import { renderClient, renderRoster } from './views/coach.js';
+import { renderCoachSetup } from './views/coachprofile.js';
+import { renderCoachPage, renderDirectory } from './views/directory.js';
 import { loadExercises, renderExercises } from './views/exercises.js';
 import { renderIntake, renderWaiver } from './views/intake.js';
 import { renderMetrics } from './views/metrics.js';
 import { captureInvite, renderOnboarding } from './views/onboarding.js';
-import { renderInviteSignUp } from './views/signup.js';
+import { renderInviteSignedIn, renderInviteSignUp, resumeAfterSignOut } from './views/signup.js';
 import { renderThread } from './views/comments.js';
-import { renderProfile } from './views/profile.js';
+import { renderProfile, signOut } from './views/profile.js';
 import { renderProgramEditor, renderPrograms } from './views/programs.js';
 import { refreshVideoBadge, renderVideoQueue } from './views/videos.js';
 import { renderToday, renderWorkout } from './views/workout.js';
@@ -31,7 +33,7 @@ function tabs(items) {
   return (current) => {
     for (const a of nav.querySelectorAll('a')) {
       const p = a.dataset.path;
-      a.classList.toggle('active', p === '/' ? current === '/' || /^\/(workout|c)\//.test(current) : current.startsWith(p));
+      a.classList.toggle('active', p === '/' ? current === '/' || /^\/(workout|c)\//.test(current) : current === p || current.startsWith(`${p}/`));
     }
   };
 }
@@ -43,17 +45,28 @@ function landing() {
       h('h1', {}, 'PT Coach'),
       h('p', { class: 'muted' }, 'Train with your coach: workouts, progress and feedback in one place.'),
       h('button', { class: 'primary', onclick: () => login() }, 'Sign in'),
+      h('p', {}, h('a', { class: 'btn', href: '#/coaches' }, 'Find a coach')),
       h('p', { class: 'small muted' }, 'New here? Accounts are by invitation: use the link in your invitation email.')));
 }
 
 async function boot() {
+  resumeAfterSignOut();
   captureInvite();
   try { await handleCallback(); } catch (e) { errorToast(e); }
   if (!signedIn()) {
     // An invitation link opens the sign-up page, with the invited email filled in.
     const invite = location.hash.match(/^#\/join\/([A-Za-z0-9]+)/);
-    return invite ? renderInviteSignUp(invite[1].toUpperCase()) : landing();
+    if (invite) return renderInviteSignUp(invite[1].toUpperCase());
+    // Signed out: the landing page and the public coach directory.
+    route('/', landing);
+    route('/coaches', renderDirectory);
+    route('/coaches/:id', renderCoachPage);
+    return start({ home: '/' });
   }
+
+  const out = document.getElementById('signout');
+  out.hidden = false;
+  out.onclick = () => signOut().catch(errorToast);
 
   let me;
   try {
@@ -71,8 +84,13 @@ async function boot() {
       localStorage.setItem(OWNER, me.userId);
     }
   } catch { /* storage unavailable: nothing cached to leak */ }
+  // An invitation link opened while signed in (for example as the admin who sent it).
+  const invite = location.hash.match(/^#\/join\/([A-Za-z0-9]+)/);
+  if (invite && await renderInviteSignedIn(invite[1].toUpperCase(), me)) return;
   if (!me.profile) return renderOnboarding(me);
   session.profile = me.profile;
+  // Coaches fill in their profile before anything else (tasks/coaches).
+  if (session.isCoach && me.coachProfileComplete === false) return renderCoachSetup({ onboarding: true });
   // The server judges "today" (missed workouts, adherence) in the user's own
   // time zone, so keep it current; travel or a DST rule change updates it.
   const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -92,7 +110,7 @@ async function boot() {
 
   let highlight;
   if (session.isAdmin) {
-    highlight = tabs([['/', '🧑‍🏫', 'Coaches'], ['/me', '⚙️', 'Profile']]);
+    highlight = tabs([['/', '🧑‍🏫', 'Coaches'], ['/coaches', '🔎', 'Directory'], ['/me', '⚙️', 'Profile']]);
     route('/', renderAdmin);
   } else if (session.isCoach) {
     document.getElementById('title').textContent = me.profile.businessName || 'PT Coach';
@@ -115,6 +133,9 @@ async function boot() {
     route('/waiver', renderWaiver);
   }
   route('/me', renderProfile);
+  route('/coaches', renderDirectory);
+  route('/coaches/:id', renderCoachPage);
+  if (session.isCoach) route('/coach-profile', () => renderCoachSetup());
   start({ home: '/', afterRender: highlight });
 }
 

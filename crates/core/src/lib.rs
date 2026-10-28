@@ -2,6 +2,7 @@
 //! Everything here is unit-tested and shared by the Lambda functions.
 
 pub mod bodycomp;
+pub mod coach;
 pub mod library;
 pub mod model;
 pub mod schedule;

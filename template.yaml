@@ -232,6 +232,9 @@ Resources:
           INVITE_FROM: !Ref InviteFromAddress
           APP_URL: !If [HasAppDomain, !Sub "https://${AppDomain}", !Sub "https://${Distribution.DomainName}"]
           VIDEO_RETENTION_DAYS: !Ref VideoRetentionDays
+          EVENTS_HTTP_DOMAIN: !GetAtt EventApi.Dns.Http
+          # Web Push key, an SSM SecureString made once by scripts/deploy.sh.
+          VAPID_PARAM: !Sub /ptapp/${Stage}/vapid-private-key
           RUST_LOG: info
       LoggingConfig:
         LogGroup: !Ref ApiLogGroup
@@ -245,11 +248,24 @@ Resources:
             - Effect: Allow
               Action: [s3:PutObjectTagging, s3:DeleteObjectTagging, s3:AbortMultipartUpload]
               Resource: !Sub "${MediaBucket.Arn}/*"
-        # Invitation emails (mail.rs), from this account's SES identities.
+        # Invitation emails (mail.rs), from this account's SES identities. An
+        # identity can carry a default configuration set (the SES console's
+        # setup adds "my-first-configuration-set"); sending then needs that too.
         - Statement:
             - Effect: Allow
               Action: ses:SendEmail
-              Resource: !Sub "arn:aws:ses:${AWS::Region}:${AWS::AccountId}:identity/*"
+              Resource:
+                - !Sub "arn:aws:ses:${AWS::Region}:${AWS::AccountId}:identity/*"
+                - !Sub "arn:aws:ses:${AWS::Region}:${AWS::AccountId}:configuration-set/*"
+        # Chat: publish to users' inbox channels (realtime.rs), and read the
+        # Web Push key (push.rs; the AWS-managed SSM key decrypts it).
+        - Statement:
+            - Effect: Allow
+              Action: appsync:EventPublish
+              Resource: !Sub "${EventApi.ApiArn}/channelNamespace/inbox"
+            - Effect: Allow
+              Action: ssm:GetParameter
+              Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/ptapp/${Stage}/vapid-private-key"
       Events:
         Api:
           Type: HttpApi
@@ -275,6 +291,14 @@ Resources:
             Path: /{proxy+}
             Method: OPTIONS
             Auth: { Authorizer: NONE }
+        # The public coach directory (routes/coaches.rs): read-only, no sign-in.
+        PublicDirectory:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /public/{proxy+}
+            Method: GET
+            Auth: { Authorizer: NONE }
         # The sign-up page reads an invitation (to fill in its email) before
         # the person has an account; the code itself is the secret.
         PublicInvite:
@@ -284,6 +308,39 @@ Resources:
             Path: /invites/{code}/public
             Method: GET
             Auth: { Authorizer: NONE }
+
+  # ------------------------------------------------------------------ chat
+  # Live delivery to open apps (MS-1, tasks/chat/plan.md decision 3). Each
+  # user subscribes to /inbox/{their Cognito sub} with their ID token; the
+  # handler refuses any other channel. Only the API Lambda publishes (IAM).
+  EventApi:
+    Type: AWS::AppSync::Api
+    Properties:
+      Name: !Sub ptapp-${Stage}-events
+      EventConfig:
+        AuthProviders:
+          - AuthType: AMAZON_COGNITO_USER_POOLS
+            CognitoConfig:
+              UserPoolId: !Ref UserPool
+              AwsRegion: !Ref AWS::Region
+          - AuthType: AWS_IAM
+        ConnectionAuthModes: [{ AuthType: AMAZON_COGNITO_USER_POOLS }]
+        DefaultPublishAuthModes: [{ AuthType: AWS_IAM }]
+        DefaultSubscribeAuthModes: [{ AuthType: AMAZON_COGNITO_USER_POOLS }]
+
+  InboxNamespace:
+    Type: AWS::AppSync::ChannelNamespace
+    Properties:
+      ApiId: !GetAtt EventApi.ApiId
+      Name: inbox
+      PublishAuthModes: [{ AuthType: AWS_IAM }]
+      SubscribeAuthModes: [{ AuthType: AMAZON_COGNITO_USER_POOLS }]
+      CodeHandlers: |
+        import { util } from '@aws-appsync/utils';
+        export function onSubscribe(ctx) {
+          const s = ctx.info.channel.segments;
+          if (s.length !== 2 || s[1] !== ctx.identity.sub) util.unauthorized();
+        }
 
   ApiLogGroup:
     Type: AWS::Logs::LogGroup
@@ -401,6 +458,10 @@ Outputs:
     Value: !Ref UserPoolClient
   WebBucketName:
     Value: !Ref WebBucket
+  EventsHttpDomain:
+    Value: !GetAtt EventApi.Dns.Http
+  EventsRealtimeDomain:
+    Value: !GetAtt EventApi.Dns.Realtime
   DistributionId:
     Value: !Ref Distribution
   TableName:

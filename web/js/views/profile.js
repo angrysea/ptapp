@@ -5,6 +5,19 @@ import { kv, outbox } from '../idb.js';
 import { session } from '../session.js';
 import { $app, busy, field, h, mount, select, toast } from '../ui.js';
 
+/** Signs out from this device: warns about unsynced changes, then clears
+ * this user's cached data, queued changes and pending videos. Used by the
+ * Profile page and the header's sign-out button. */
+export async function signOut() {
+  const mine = await myOutbox();
+  const videos = await pendingUploads();
+  if ((mine.length || videos.length) && !confirm('Some changes have not synced yet and will be lost. Sign out anyway?')) return;
+  // Only this user's queued writes go; another user's stay until they sign in.
+  await kv.clear(); for (const i of mine) await outbox.del(i.key);
+  for (const v of videos) await removeUpload(v.key); // clips stay off a shared device
+  logout();
+}
+
 export async function renderProfile() {
   const p = session.profile;
   const name = h('input', { value: p.name });
@@ -27,7 +40,13 @@ export async function renderProfile() {
           toast('Saved');
         }),
       }, 'Save')),
+    p.role === 'coach' && h('div', { class: 'card' },
+      h('a', { class: 'btn block', href: '#/coach-profile' }, 'Edit coach profile'),
+      h('div', { style: 'height:8px' }),
+      h('a', { class: 'btn block', href: `#/coaches/${p.userId}` }, 'View my public page')),
     p.role === 'client' && h('div', { class: 'card' },
+      h('a', { class: 'btn block', href: '#/coaches' }, 'Browse coaches'),
+      h('div', { style: 'height:8px' }),
       h('a', { class: 'btn block', href: '#/intake' }, 'Intake questionnaire'),
       h('div', { style: 'height:8px' }),
       h('a', { class: 'btn block', href: '#/waiver' }, 'Health screening & waiver')),
@@ -35,15 +54,6 @@ export async function renderProfile() {
       h('p', { class: 'small muted' }, pending
         ? [mine.length && `${mine.length} change(s)`, videos.length && `${videos.length} video(s)`].filter(Boolean).join(' and ') + ' waiting to sync.'
         : 'Everything is synced.'),
-      h('button', {
-        class: 'block danger',
-        onclick: async () => {
-          if (pending && !confirm('Some changes have not synced yet and will be lost. Sign out anyway?')) return;
-          // Only this user's queued writes go; another user's stay until they sign in.
-          await kv.clear(); for (const i of mine) await outbox.del(i.key);
-          for (const v of videos) await removeUpload(v.key); // clips stay off a shared device
-          logout();
-        },
-      }, 'Sign out')),
+      h('button', { class: 'block danger', onclick: signOut }, 'Sign out')),
   );
 }

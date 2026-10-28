@@ -27,7 +27,7 @@ export async function renderExercises() {
   };
   search.addEventListener('input', draw);
   mount($app(),
-    h('div', { class: 'spread' }, h('h1', {}, 'Exercises'), h('button', { class: 'primary', onclick: () => editSheet(null) }, '+ New')),
+    h('div', { class: 'spread page-head' }, h('h1', {}, 'Exercises'), h('button', { class: 'primary', onclick: () => editSheet(null) }, '+ New')),
     search, h('div', { style: 'height:12px' }), box);
   draw();
 }

@@ -20,7 +20,7 @@ Status legend: ✅ done in MVP · 🟡 partial · ⬜ not started
 
 | Area | Must (MVP) | Should / Could |
 |---|---|---|
-| Onboarding | ON-1 🟡 (link + mailto, bound to the invited verified email; SES email in 1b) · ON-2 ✅ · ON-3 ✅ | ON-4 ⬜ · ON-5 ⬜ |
+| Onboarding | ON-1 ✅ (emailed with SES, bound to the invited verified email) · ON-2 ✅ · ON-3 ✅ · coach profiles + public coach directory ✅ (`tasks/coaches`; tax IDs left to Stripe in BZ-1) | ON-4 ⬜ · ON-5 ⬜ |
 | Builder | WB-1 ✅ · WB-2 ✅ · WB-3 ✅ · WB-4 ✅ | WB-5 ⬜ · WB-6 ⬜ · WB-7 ⬜ |
 | Logging | LG-1 ✅ · LG-2 ✅ · LG-3 ✅ · LG-4 ✅ · LG-6 ✅ | LG-5 🟡 (e1RM trend; no PR events) · LG-7 🟡 (roster flags; no alerts) · LG-8 ⬜ |
 | Video submission | VS-1 ✅ · VS-2 ✅ · VS-3 ✅ · VS-4 ✅ (real-device checks pending, see `tasks/todo.md`) | VS-5 ⬜ |

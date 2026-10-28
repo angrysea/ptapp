@@ -56,6 +56,8 @@ a { color: var(--accent); }
 .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .row > .grow { flex: 1 1 140px; }
 .spread { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+/* A page title with a button beside it; the button is taller than the title, so the row needs its own gap below. */
+.page-head { margin-bottom: 12px; }
 .stack > * + * { margin-top: 12px; }
 .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; }
 .hidden { display: none !important; }
@@ -68,6 +70,11 @@ a { color: var(--accent); }
   font-weight: 600;
 }
 #sync { font-size: 0.8rem; background: rgba(0,0,0,.18); padding: 2px 10px; border-radius: 999px; }
+.top-right { display: flex; align-items: center; gap: 8px; }
+#signout { display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 40px; min-height: 0; padding: 0; margin: -8px -8px -8px 0;
+  background: transparent; border: 0; border-radius: 50%; color: var(--accent-ink); }
+#signout:hover, #signout:focus-visible { background: rgba(0,0,0,.18); }
+#signout[hidden] { display: none; }
 
 main { max-width: 960px; margin: 0 auto; padding: 16px; }
 
@@ -225,3 +232,27 @@ video.player { width: 100%; max-height: 70vh; border-radius: 10px; background: #
 .body-fig .site { fill: var(--line); }
 .body-fig .site.on { fill: var(--accent); }
 .body-fig .outline { fill: none; stroke: var(--muted); stroke-width: 2; }
+
+/* Coach profiles and the public directory (views/coachprofile.js, views/directory.js). */
+.checks { display: flex; flex-wrap: wrap; gap: 0 16px; }
+.checks .check { flex: 1 1 200px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.coach-photo { width: 64px; height: 64px; border-radius: 50%; object-fit: cover; background: var(--line); flex: none; }
+.coach-photo.large { width: 112px; height: 112px; }
+a.coach-card { display: flex; gap: 12px; align-items: flex-start; color: inherit; text-decoration: none; }
+a.coach-card .grow { flex: 1; min-width: 0; }
+.coach-head { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+.coach-head h1 { margin: 0 0 4px; }
+.coach-head p { margin: 0 0 4px; }
+
+/* ⓘ buttons that explain a term (ui.js infoButton, effort.js). The visible
+   circle is small; the padding keeps the tap target comfortable. */
+.label-row { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+.label-row label { margin: 0; }
+button.info { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; min-height: 0; padding: 0; margin-left: 4px;
+  border-radius: 50%; border: 1px solid var(--accent); background: transparent; color: var(--accent); font: italic 700 0.75rem/1 Georgia, serif; vertical-align: middle; position: relative; margin-block: -4px; }
+button.info::after { content: ''; position: absolute; inset: -12px; }
+.sethead button.info { margin-left: 3px; }
+table.scale { width: 100%; border-collapse: collapse; margin: 8px 0; }
+table.scale th, table.scale td { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--line); }
+table.scale td:first-child { font-weight: 700; white-space: nowrap; }

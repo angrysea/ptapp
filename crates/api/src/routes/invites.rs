@@ -178,7 +178,7 @@ pub async fn accept(
         coach_id,
         name: name.clone(),
         email: inv.email.clone(),
-        units: UnitSystem::Metric,
+        units: UnitSystem::default(),
         sex: None,
         birth_date: None,
         business_name: None,

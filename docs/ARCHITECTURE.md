@@ -47,6 +47,8 @@ When a coach reads intake, waiver, metrics or photos, an `AUDIT#` item is writte
 | `INVITE#{code}` | `INVITE` | invite lookup (client or coach invite), `ttl` 14 days |
 | `ADMIN` | `INVITE#{code}` | pending coach invite from an admin (deleted on accept) |
 | `ADMIN` | `COACH#{coach}` | coach list entry, written when a coach joins |
+| `USER#{coach}` | `COACHPROFILE` | coach profile: private business details (legal name, phone, address, certification numbers, CPR, insurance) and the public profile; read only by the coach and admins |
+| `DIRECTORY` | `COACH#{coach}` | public copy of a complete, listed profile (no private fields); the only item the unauthenticated `/public/coaches` routes read |
 | `COACH#{coach}` | `EXERCISE#{id}` | custom exercise (built-ins are compiled into the binary) |
 | `COACH#{coach}` | `PROGRAM#{id}` | whole program document |
 | `COACH#{coach}` | `REVIEW#{createdAt}#{video}` | unreviewed set video in the coach's review queue (oldest first); deleted when marked reviewed |

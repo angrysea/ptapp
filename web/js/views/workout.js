@@ -8,6 +8,7 @@ import { kv } from '../idb.js';
 import { go } from '../router.js';
 import { session } from '../session.js';
 import { blockTimer, restTimer } from '../timer.js';
+import { rpeLogInfo, sessionRpeInfo } from '../effort.js';
 import { $app, addDays, busy, confirmSheet, field, fmtDate, h, mount, num, select, sheet, toast, todayIso, uid, units } from '../ui.js';
 import { CannotEncode, canEncode, encodeClip } from '../encode.js';
 import { onUploads, pendingUploads, queueVideo, removeUpload, retryUpload } from '../uploads.js';
@@ -377,7 +378,7 @@ export async function renderWorkout(date, schedId) {
               h('button', { class: 'small ghost', onclick: () => showExercise(info) }, 'How to')),
           h('div', { class: 'prescription' }, prescription(it)),
           it.notes && h('div', { class: 'small' }, it.notes),
-          h('div', { class: 'sethead' }, h('span', {}, 'Set'), h('span', {}, 'Reps'), h('span', {}, u.w), h('span', {}, 'RPE'), h('span', {})),
+          h('div', { class: 'sethead' }, h('span', {}, 'Set'), h('span', {}, 'Reps'), h('span', {}, u.w), h('span', {}, 'RPE', rpeLogInfo()), h('span', {})),
           setsFor(it.id).map((set) => setRow(set, it, b)),
           videoBar(it));
       }));
@@ -411,7 +412,7 @@ export async function renderWorkout(date, schedId) {
       field('Comment', comment),
       h('h3', {}, 'Post-workout check'),
       h('div', { class: 'grid2' },
-        field('Session RPE (1-10)', rpe),
+        field('Session RPE (1-10)', rpe, null, sessionRpeInfo()),
         field('Energy (1-5)', energy),
         field('Sleep last night (1-5)', sleep),
         field('Soreness (1-5)', soreness)),

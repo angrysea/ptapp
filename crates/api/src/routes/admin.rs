@@ -48,7 +48,7 @@ pub async fn register(State(st): State<AppState>, caller: Caller, Json(body): Js
         coach_id: String::new(),
         name: clean_name(&body.name)?,
         email: caller.email.trim().to_lowercase(),
-        units: UnitSystem::Metric,
+        units: UnitSystem::default(),
         sex: None,
         birth_date: None,
         business_name: None,

@@ -30,6 +30,15 @@ CREATE_SENDER_IDENTITY="${CREATE_SENDER_IDENTITY:-true}"
 echo "==> building Lambda (arm64)"
 cargo lambda build --release --arm64 --bin api
 
+# Web Push key (push.rs): made once per stage, kept in SSM, never printed.
+# MSYS_NO_PATHCONV stops Git Bash turning the /ptapp/... name into a Windows path.
+VAPID_PARAM="/ptapp/$STAGE/vapid-private-key"
+if ! MSYS_NO_PATHCONV=1 aws ssm get-parameter --region "$REGION" --name "$VAPID_PARAM" >/dev/null 2>&1; then
+  echo "==> creating the Web Push key $VAPID_PARAM"
+  MSYS_NO_PATHCONV=1 aws ssm put-parameter --region "$REGION" --name "$VAPID_PARAM" --type SecureString \
+    --value "$(cargo run -q --release -p api --bin vapid_keys)" >/dev/null
+fi
+
 echo "==> deploying stack $STACK to $REGION"
 sam deploy \
   --template-file template.yaml \
@@ -52,6 +61,8 @@ COGNITO_DOMAIN="$(out CognitoDomain)"
 CLIENT_ID="$(out UserPoolClientId)"
 WEB_BUCKET="$(out WebBucketName)"
 DIST_ID="$(out DistributionId)"
+EVENTS_HTTP="$(out EventsHttpDomain)"
+EVENTS_REALTIME="$(out EventsRealtimeDomain)"
 
 # Publish from a copy so the generated config and the stamped service-worker
 # version never touch the tracked files (web/js/config.js stays the dev config).
@@ -67,6 +78,8 @@ export default {
   cognitoDomain: "$COGNITO_DOMAIN",
   region: "$REGION",
   clientId: "$CLIENT_ID",
+  eventsHttp: "$EVENTS_HTTP",
+  eventsRealtime: "$EVENTS_REALTIME",
   devUser: false,
 };
 EOF

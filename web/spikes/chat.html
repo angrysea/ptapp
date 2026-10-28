@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Chat Transport Spike</title>
+<link rel="stylesheet" href="../css/app.css">
+<style>
+  /* Temporary page for tasks/chat Tasks 1-2; delete once the spike is done. */
+  main { max-width: 760px; margin: 0 auto; padding: 16px max(16px, env(safe-area-inset-right, 0px)) 48px max(16px, env(safe-area-inset-left, 0px)); }
+  pre { white-space: pre-wrap; font-size: 0.8rem; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px; max-height: 40vh; overflow: auto; }
+  .controls { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
+  .warn { background: var(--warn-soft); color: var(--text); padding: 10px 12px; border-radius: 8px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Chat spike</h1>
+  <p class="muted">Tasks 1 and 2 of the chat plan. Checks that live messages and push notifications work for this account and device. Sign in to the app first.</p>
+  <p class="small muted" id="who">Checking your sign-in…</p>
+
+  <div class="card">
+    <h2>1. Live messages</h2>
+    <p class="small muted">Connects, then checks three things: a ping reaches you, someone else's channel is refused, and you can't publish yourself.</p>
+    <div class="controls"><button id="live" class="primary">Run live test</button></div>
+  </div>
+
+  <div class="card">
+    <h2>2. Push notifications</h2>
+    <p class="small muted">Asks to allow notifications, then sends one to this device. Tap it to check it opens the app.</p>
+    <p class="warn" id="iosHint" hidden>On iPhone, push only works from the app on your Home Screen: in Safari tap Share, then Add to Home Screen, open PT Coach from there and come back to <b>/spikes/chat.html</b>.</p>
+    <div class="controls"><button id="push" class="primary">Send me a notification</button></div>
+  </div>
+
+  <div class="card">
+    <h2>3. Results</h2>
+    <pre id="results">Nothing yet.</pre>
+    <button id="copy">Copy results</button>
+  </div>
+</main>
+
+<script type="module">
+import cfg from '../js/config.js';
+import { api, get, post } from '../js/api.js';
+import { idToken } from '../js/auth.js';
+
+const $ = (id) => document.getElementById(id);
+const results = { ua: navigator.userAgent, standalone: matchMedia('(display-mode: standalone)').matches || navigator.standalone === true };
+const log = (k, v) => { results[k] = v; $('results').textContent = JSON.stringify(results, null, 2); };
+log('started', new Date().toISOString());
+$('copy').onclick = async () => {
+  try { await navigator.clipboard.writeText($('results').textContent); $('copy').textContent = 'Copied'; }
+  catch { getSelection().selectAllChildren($('results')); }
+};
+
+const ios = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+$('iosHint').hidden = !(ios && !results.standalone);
+
+let me = null;
+try {
+  me = await get('/me');
+  if (!me.profile) throw new Error('no account set up');
+  $('who').textContent = `Signed in as ${me.email} (${me.profile.role}).`;
+} catch (e) {
+  $('who').innerHTML = 'Sign in to the app first: <a href="../">open PT Coach</a>, then come back to this page.';
+  log('signInError', e.message);
+}
+
+// ---------------------------------------------------------------- live (AppSync Events)
+const b64url = (s) => btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+
+async function connect() {
+  const token = await idToken();
+  const auth = { host: cfg.eventsHttp, Authorization: token };
+  const ws = new WebSocket(`wss://${cfg.eventsRealtime}/event/realtime`, ['aws-appsync-event-ws', `header-${b64url(JSON.stringify(auth))}`]);
+  const waiting = new Map(); // id -> resolve
+  const events = [];
+  ws.onmessage = (m) => {
+    const msg = JSON.parse(m.data);
+    if (msg.type === 'data') events.push({ at: performance.now(), event: JSON.parse(msg.event) });
+    if (msg.id && waiting.has(msg.id)) { waiting.get(msg.id)(msg); waiting.delete(msg.id); }
+    if (msg.type === 'connection_ack') waiting.get('ack')?.(msg);
+    if (msg.type === 'connection_error' || msg.type === 'error') log('socketError', msg);
+  };
+  await new Promise((res, rej) => {
+    waiting.set('ack', res);
+    ws.onopen = () => ws.send(JSON.stringify({ type: 'connection_init' }));
+    ws.onerror = () => rej(new Error('WebSocket failed to open'));
+    setTimeout(() => rej(new Error('no connection_ack in 10 s')), 10000);
+  });
+  const call = (msg) => new Promise((res) => {
+    const id = crypto.randomUUID();
+    waiting.set(id, res);
+    ws.send(JSON.stringify({ ...msg, id, authorization: auth }));
+    setTimeout(() => { if (waiting.delete(id)) res({ type: 'timeout' }); }, 10000);
+  });
+  return { ws, call, events };
+}
+
+$('live').onclick = async () => {
+  if (!me?.profile) return;
+  $('live').disabled = true;
+  try {
+    if (!cfg.eventsRealtime) throw new Error('config.js has no eventsRealtime (not deployed with the chat stack)');
+    const t0 = performance.now();
+    const c = await connect();
+    log('connectMs', Math.round(performance.now() - t0));
+    const own = await c.call({ type: 'subscribe', channel: `/inbox/${me.profile.userId}` });
+    log('subscribeOwn', own.type);
+    const other = await c.call({ type: 'subscribe', channel: '/inbox/00000000-0000-0000-0000-000000000000' });
+    log('subscribeOther (want an error)', other.type);
+    const wild = await c.call({ type: 'subscribe', channel: '/inbox/*' });
+    log('subscribeWildcard (want an error)', wild.type);
+    const pub = await c.call({ type: 'publish', channel: `/inbox/${me.profile.userId}`, events: [JSON.stringify({ type: 'forged' })] });
+    log('publishAsUser (want an error)', pub.type);
+
+    const sent = performance.now();
+    await post('/dev/ping');
+    const deadline = Date.now() + 10000;
+    while (!c.events.some((e) => e.event.type === 'ping') && Date.now() < deadline) await new Promise((r) => setTimeout(r, 20));
+    const got = c.events.find((e) => e.event.type === 'ping');
+    log('pingMs (want under 1000)', got ? Math.round(got.at - sent) : 'not received');
+    log('forgedReceived (want false)', c.events.some((e) => e.event.type === 'forged'));
+    c.ws.close();
+  } catch (e) { log('liveError', e.message); }
+  $('live').disabled = false;
+};
+
+// ---------------------------------------------------------------- push (Web Push)
+function keyBytes(b64) {
+  const s = atob(b64.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - (b64.length % 4)) % 4));
+  return Uint8Array.from(s, (ch) => ch.charCodeAt(0));
+}
+
+async function subscription() {
+  if (!('serviceWorker' in navigator) || !('PushManager' in window)) throw new Error('this browser has no Web Push here');
+  log('permission', await Notification.requestPermission());
+  if (Notification.permission !== 'granted') throw new Error('notifications not allowed');
+  const reg = await navigator.serviceWorker.register('../sw.js');
+  await navigator.serviceWorker.ready;
+  const { publicKey } = await get('/push/key');
+  if (!publicKey) throw new Error('the server has no push key (VAPID) yet');
+  const sub = (await reg.pushManager.getSubscription()) || await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(publicKey) });
+  log('pushService', new URL(sub.endpoint).host);
+  return sub.toJSON();
+}
+
+$('push').onclick = async () => {
+  if (!me?.profile) return;
+  try { log('push', await api('POST', '/dev/push', await subscription())); }
+  catch (e) { log('pushError', e.message); }
+};
+</script>
+</body>
+</html>

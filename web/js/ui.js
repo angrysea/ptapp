@@ -39,11 +39,27 @@ export function errorToast(e) {
 }
 
 let fieldSeq = 0;
-/** Labelled form field; the label is associated with the control for screen readers. */
-export function field(label, input, hint) {
+/** Labelled form field; the label is associated with the control for screen
+ * readers. `info` (an `infoButton`) sits beside the label, outside it. */
+export function field(label, input, hint, info) {
   const control = input.matches?.('input, select, textarea') ? input : null;
   if (control && !control.id) control.id = `f${++fieldSeq}`;
-  return h('div', { class: 'field' }, h('label', { for: control?.id }, label), input, hint && h('div', { class: 'muted small' }, hint));
+  const lbl = h('label', { for: control?.id }, label);
+  return h('div', { class: 'field' }, info ? h('div', { class: 'label-row' }, lbl, info) : lbl, input, hint && h('div', { class: 'muted small' }, hint));
+}
+
+/** A small ⓘ button that explains `title` in a sheet. */
+export function infoButton(title, ...content) {
+  return h('button', {
+    type: 'button',
+    class: 'info',
+    'aria-label': `What is ${title}?`,
+    onclick: (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const s = sheet(h('h2', {}, title), ...content, h('button', { class: 'primary block', onclick: () => s.close() }, 'Got it'));
+    },
+  }, 'i');
 }
 
 const EYE = '<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg>';
@@ -121,6 +137,16 @@ export const addDays = (iso, n) => { const d = new Date(iso + 'T12:00:00'); d.se
 export const fmtDate = (iso, opts = { weekday: 'short', month: 'short', day: 'numeric' }) =>
   new Date(iso + 'T12:00:00').toLocaleDateString(undefined, opts);
 export const fmtDateTime = (ts) => new Date(ts).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+/** Downscales an image to at most `max` px JPEG before upload, to save storage and egress. */
+export async function shrinkImage(file, max = 1600) {
+  const bmp = await createImageBitmap(file);
+  const scale = Math.min(1, max / Math.max(bmp.width, bmp.height));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.round(bmp.width * scale);
+  canvas.height = Math.round(bmp.height * scale);
+  canvas.getContext('2d').drawImage(bmp, 0, 0, canvas.width, canvas.height);
+  return new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.85));
+}
 export const uid = () => crypto.randomUUID().replace(/-/g, '');
 
 // ------------------------------------------------------------ units (BM-8)

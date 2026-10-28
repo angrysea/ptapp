@@ -65,7 +65,43 @@ with sync_playwright() as p:
     sign_in(coach, "coach" + RUN, BASE + "#/join/" + coach_code)
     expect(coach.get_by_role("heading", name="Coach on PT Coach")).to_be_visible()
     coach.get_by_role("button", name="Accept invite").click()
+
+    # ---------------- the coach fills in their profile before anything else
+    # (tasks/coaches; the API's refusals of incomplete profiles are in e2e.rs)
+    expect(coach.get_by_role("heading", name="Set up your coach profile")).to_be_visible()
+    for label, value in [("Legal name", "Jordan Q. Coach"), ("Phone", "512 555 0100"), ("Street address", "1 Main St"),
+                         ("City", "Austin"), ("State", "TX"), ("ZIP code", "78701"), ("CPR/AED certification expires", "2030-01-01"),
+                         ("Display name", f"Coach {RUN}"), ("Headline", "Strength for busy parents"),
+                         ("Certification", "NSCA Certified Strength and Conditioning Specialist (CSCS)"), ("Issuer", "NSCA")]:
+        coach.get_by_label(label, exact=True).fill(value)
+    coach.get_by_label("About you", exact=True).fill("I help busy parents get strong in three short sessions a week, with plans that fit real life.")
+    coach.get_by_label("Strength training", exact=True).check()
+    coach.get_by_label("In person", exact=True).check()
+    shot(coach, "00b-coach-profile")
+    coach.get_by_role("button", name="Save and continue").click()
     expect(coach.get_by_role("heading", name="Clients")).to_be_visible()
+
+    # ---------------- anyone can find the coach in the directory, without signing in
+    anon_ctx = browser.new_context(**mobile)
+    anon = anon_ctx.new_page(); watch(anon, "visitor")
+    anon.goto(BASE)
+    anon.get_by_role("link", name="Find a coach").click()
+    anon.get_by_label("Search coaches").fill(f"Coach {RUN}")
+    anon.locator("a.coach-card", has_text=f"Coach {RUN}").click()
+    expect(anon.get_by_role("heading", name=f"Coach {RUN}")).to_be_visible()
+    expect(anon.get_by_text("Jordan Q. Coach")).to_have_count(0)  # the legal name is private
+    anon.get_by_role("button", name="Show email").click()
+    expect(anon.get_by_role("link", name=f"Email Coach {RUN}")).to_have_attribute("href", re.compile(f"^mailto:coach{RUN}@dev.local"))
+    shot(anon, "00c-coach-public-page")
+    anon_ctx.close()
+
+    # ---------------- the admin sees the coach's private details
+    admin.reload()
+    admin.locator(".card.link", has_text=f"coach{RUN}@dev.local").click()
+    expect(admin.locator(".sheet").get_by_text("Jordan Q. Coach")).to_be_visible()
+    expect(admin.locator(".sheet").get_by_text("In the directory")).to_be_visible()
+    shot(admin, "00d-admin-coach-details")
+    admin.locator(".sheet").get_by_role("button", name="Close").click()
 
     # ---------------- invite
     coach.get_by_role("button", name="+ Invite").click()
@@ -90,8 +126,8 @@ with sync_playwright() as p:
     days.nth(today_dow).click()  # week 1, today's weekday -> lines up with a start date of the Monday this week
     add_block(coach, "straight")
     coach.locator(".block-card select").nth(1).select_option(label="Back Squat")
-    coach.locator(".item-card").first.get_by_label("Load (kg)").fill("100")
-    coach.locator(".item-card").first.get_by_label("Load (kg)").press("Tab")
+    coach.locator(".item-card").first.get_by_label("Load (lb)").fill("225")
+    coach.locator(".item-card").first.get_by_label("Load (lb)").press("Tab")
     coach.locator(".item-card").first.get_by_label("Reps").fill("5")
     coach.locator(".item-card").first.get_by_label("Reps").press("Tab")
     add_block(coach, "emom")
@@ -110,13 +146,13 @@ with sync_playwright() as p:
     client_ctx = browser.new_context(**mobile)
     client = client_ctx.new_page(); watch(client, "client")
     sign_in(client, "client" + RUN, BASE + "#/join/" + code)
-    expect(client.get_by_role("heading", name=re.compile("Join Alex Coach"))).to_be_visible()
+    expect(client.get_by_role("heading", name=f"Join Coach {RUN}")).to_be_visible()
     client.get_by_role("button", name="Accept invite").click()
     expect(client.get_by_role("heading", name=re.compile("Step 1 of 2"))).to_be_visible()
     client.get_by_label("Goals").fill("Squat 140 kg by summer")
     client.get_by_label("Sex (for body-fat equations)").select_option("male")
     client.get_by_label("Birth date").fill("1994-03-02")
-    client.get_by_label("Height (cm)").fill("180")
+    client.get_by_label("Height (in)").fill("71")
     client.get_by_role("button", name="Next").click()
     expect(client.get_by_role("heading", name=re.compile("Step 2 of 2"))).to_be_visible()
     for r in client.get_by_label("No", exact=True).all():
@@ -124,7 +160,7 @@ with sync_playwright() as p:
     client.get_by_label("Signature").fill("Sam Client")
     client.get_by_label("I have read and agree to the waiver").check()
     shot(client, "04-waiver")
-    client.get_by_role("button", name="Sign").click()
+    client.get_by_role("button", name="Sign", exact=True).click()
     expect(client.get_by_role("heading", name="Today")).to_be_visible()
 
     # ---------------- coach assigns the program starting this Monday
@@ -141,6 +177,11 @@ with sync_playwright() as p:
     client.reload(); client.wait_for_load_state("networkidle")
     client.locator(".card.today").first.click()
     expect(client.get_by_role("heading", name=re.compile("Week 1"))).to_be_visible()
+    # the ⓘ beside RPE explains how to rate a set
+    client.get_by_role("button", name="What is RPE?").first.click()
+    expect(client.locator(".sheet").get_by_text("Could have done 2 more reps")).to_be_visible()
+    shot(client, "06b-rpe-info")
+    client.locator(".sheet").get_by_role("button", name="Got it").click()
     client_ctx.set_offline(True)
     done = client.locator(".setrow .done")
     print("set rows", done.count())
@@ -254,9 +295,9 @@ with sync_playwright() as p:
 
     # ---------------- client body metrics
     client.get_by_role("link", name="Progress").click()
-    for d, w in [(-14, 84.0), (-7, 83.2), (0, 82.5)]:
+    for d, w in [(-14, 185.0), (-7, 183.4), (0, 182.0)]:
         client.get_by_label("Date").fill((datetime.date.today() + datetime.timedelta(days=d)).isoformat())
-        client.get_by_label("Weight (kg)").fill(str(w))
+        client.get_by_label("Weight (lb)").fill(str(w))
         client.get_by_role("button", name="Log weight").click()
         expect(client.get_by_text("Saved").first).to_be_visible()
         client.wait_for_timeout(300)
@@ -272,7 +313,7 @@ with sync_playwright() as p:
     # ---------------- coach dashboard + feedback
     coach.get_by_role("button", name="Overview").click()
     print("coach url", coach.url)
-    expect(coach.get_by_text("Weekly volume (kg × reps)")).to_be_visible()
+    expect(coach.get_by_text("Weekly volume (lb × reps)")).to_be_visible()
     shot(coach, "11-coach-overview")
     coach.get_by_role("button", name="Logs").click()
     coach.once("dialog", lambda d: d.accept("Great depth. Keep the chest up on set 3"))
@@ -334,6 +375,11 @@ with sync_playwright() as p:
     client.get_by_role("link", name="Coach").click()
     expect(client.get_by_text(re.compile("Keep the chest up"))).to_be_visible()
     shot(client, "14-client-messages")
+
+    # ---------------- the header's sign-out button
+    admin.get_by_role("button", name="Sign out").click()
+    expect(admin.get_by_role("button", name="Sign in", exact=True)).to_be_visible()
+    expect(admin.get_by_role("button", name="Sign out")).to_be_hidden()
 
     # ---------------- a used invitation link stops working
     stale_ctx = browser.new_context(**mobile)

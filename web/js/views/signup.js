@@ -6,7 +6,7 @@
 // working. Coaches only ever arrive this way (no open coach signup).
 
 import cfg from '../config.js';
-import { confirmSignUp, devMode, login, resendSignUpCode, signUp } from '../auth.js';
+import { confirmSignUp, devMode, login, logout, resendSignUpCode, signUp } from '../auth.js';
 import { $app, busy, field, h, mount, passwordField } from '../ui.js';
 
 // Mirrors the user pool's password policy in template.yaml.
@@ -23,6 +23,58 @@ async function publicInvite(code) {
   if (res.status === 404) return null;
   if (!res.ok) throw new Error(`Couldn’t load the invitation (${res.status}). Check your connection and try again.`);
   return res.json();
+}
+
+// Cognito's sign-out can only return to the app's plain address, so the
+// invitation to resume is kept for this tab across it (see resumeAfterSignOut).
+const RESUME = 'pt.resumeAfterSignOut';
+
+/** After signing out to use an invitation: puts its link back in the address. */
+export function resumeAfterSignOut() {
+  try {
+    const hash = sessionStorage.getItem(RESUME);
+    sessionStorage.removeItem(RESUME);
+    if (hash) history.replaceState(null, '', hash);
+  } catch { /* storage unavailable: the person reopens the link */ }
+}
+
+/**
+ * An invitation link opened while already signed in, e.g. an admin testing
+ * the email on their own device. Returns false when the invitation is this
+ * account's own and still open, so normal onboarding accepts it; otherwise
+ * shows what to do and returns true.
+ */
+export async function renderInviteSignedIn(code, me) {
+  const back = h('button', { class: 'block', onclick: () => { location.hash = '#/'; location.reload(); } }, 'Back to the app');
+  let inv;
+  try {
+    inv = await publicInvite(code);
+  } catch (e) {
+    shell(h('h1', {}, 'PT Coach'), h('p', { class: 'banner' }, e.message), back);
+    return true;
+  }
+  if (!inv) {
+    shell(
+      h('h1', {}, 'This link doesn’t work'),
+      h('p', {}, 'The invitation is invalid, has already been used, or has expired.'),
+      back);
+    return true;
+  }
+  if (!me.profile && inv.email.toLowerCase() === (me.email || '').toLowerCase()) return false;
+  const who = inv.kind === 'coach' ? 'a coach account' : `an account to train with ${inv.coachName}`;
+  shell(
+    h('h1', {}, 'You’re signed in'),
+    h('p', {}, `This invitation is for ${inv.email} to create ${who}, but this device is signed in as ${me.email}.`),
+    h('p', { class: 'small muted' }, `If you’re ${inv.email}, sign out first. Otherwise, forward the email to them.`),
+    h('button', {
+      class: 'primary block',
+      onclick: () => {
+        try { sessionStorage.setItem(RESUME, `#/join/${code}`); } catch { /* reopen the link after signing out */ }
+        logout();
+      },
+    }, 'Sign out and create the account'),
+    back);
+  return true;
 }
 
 const shell = (...kids) => mount($app(), h('div', { class: 'auth-page' }, h('img', { src: 'icon.svg', alt: '', width: 64, height: 64 }), ...kids));

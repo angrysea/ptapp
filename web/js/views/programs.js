@@ -5,6 +5,7 @@
 import { del, get, post, put } from '../api.js';
 import { go } from '../router.js';
 import { session } from '../session.js';
+import { rirTargetInfo, rpeTargetInfo } from '../effort.js';
 import { $app, busy, confirmSheet, field, h, mount, num, select, sheet, toast, units } from '../ui.js';
 import { loadExercises } from './exercises.js';
 
@@ -14,7 +15,7 @@ const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 export async function renderPrograms() {
   const list = await get('/programs', { cache: true });
   mount($app(),
-    h('div', { class: 'spread' }, h('h1', {}, 'Programs'), h('button', { class: 'primary', onclick: () => go('/programs/new') }, '+ New')),
+    h('div', { class: 'spread page-head' }, h('h1', {}, 'Programs'), h('button', { class: 'primary', onclick: () => go('/programs/new') }, '+ New')),
     list.length === 0 && h('div', { class: 'card muted' }, 'No programs yet. Build one and assign it to clients from their Calendar tab.'),
     list.map((p) => h('div', { class: 'card' },
       h('div', { class: 'spread link', onclick: () => go(`/programs/${p.id}`), style: 'cursor:pointer' },
@@ -205,8 +206,8 @@ export async function renderProgramEditor(id) {
           field(`Load (${u.w})`, h('input', { type: 'number', inputmode: 'decimal', value: it.loadKg != null ? u.toW(it.loadKg) : '', onchange: (e) => { it.loadKg = u.fromW(e.target.value); touch(); } })),
           field('Tempo', h('input', { value: it.tempo || '', placeholder: '3-1-1-0', onchange: (e) => { it.tempo = e.target.value || null; touch(); } })),
           field('Rest (s)', numIn(it, 'restSec')),
-          field('RPE', numIn(it, 'rpe', { step: '0.5', min: 1, max: 10 })),
-          field('RIR', numIn(it, 'rir', { min: 0, max: 10 }))),
+          field('RPE', numIn(it, 'rpe', { step: '0.5', min: 1, max: 10 }), null, rpeTargetInfo()),
+          field('RIR', numIn(it, 'rir', { min: 0, max: 10 }), null, rirTargetInfo())),
         h('input', { value: it.notes, placeholder: 'Notes / cues for this exercise', onchange: (e) => { it.notes = e.target.value; touch(); } }))),
       h('div', { style: 'margin-top:8px' }, exSel),
     );

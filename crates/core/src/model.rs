@@ -28,8 +28,9 @@ pub enum Sex {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum UnitSystem {
-    #[default]
     Metric,
+    /// New accounts start in pounds and inches; anyone can switch on Profile.
+    #[default]
     Imperial,
 }
 

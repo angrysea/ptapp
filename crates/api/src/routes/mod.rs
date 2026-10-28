@@ -1,6 +1,8 @@
 pub mod admin;
 pub mod clients;
+pub mod coaches;
 pub mod comments;
+pub mod dev;
 pub mod exercises;
 pub mod invites;
 pub mod me;

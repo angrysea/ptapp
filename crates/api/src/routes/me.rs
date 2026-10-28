@@ -15,11 +15,17 @@ use crate::AppState;
 pub async fn get_me(State(st): State<AppState>, caller: Caller) -> ApiResult<Json<Value>> {
     let profile: Option<Profile> = st.store.get(&format!("USER#{}", caller.sub), "PROFILE").await?;
     let admin_eligible = profile.is_none() && st.is_admin_email(&caller);
+    // Coaches fill in their profile before using the app (tasks/coaches).
+    let coach_profile_complete = match &profile {
+        Some(p) if p.role == Role::Coach => Some(super::coaches::complete(&st, &caller.sub).await?),
+        _ => None,
+    };
     Ok(Json(json!({
         "userId": caller.sub,
         "email": caller.email,
         "profile": profile,
         "adminEligible": admin_eligible,
+        "coachProfileComplete": coach_profile_complete,
     })))
 }
 
