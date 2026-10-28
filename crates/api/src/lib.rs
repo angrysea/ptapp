@@ -109,10 +109,9 @@ pub fn router(state: AppState) -> Router {
         .route("/clients/{cid}/replies/{rid}/parts", post(replies::parts))
         .route("/clients/{cid}/replies/{rid}/complete", post(replies::complete))
         .route("/clients/{cid}/replies/{rid}/seen", post(replies::seen))
-        // chat transport (tasks/chat): the push key, and spike checks to remove
-        .route("/push/key", get(dev::public_key))
-        .route("/dev/ping", post(dev::ping))
-        .route("/dev/push", post(dev::push))
+        // push notifications (MS-2)
+        .route("/push/key", get(notify::public_key))
+        .route("/me/push", post(notify::subscribe).delete(notify::unsubscribe))
         // API Gateway owns CORS in AWS; this layer only matters for local dev.
         .layer(CorsLayer::new().allow_origin(Any).allow_methods(Any).allow_headers(Any))
         .with_state(state)

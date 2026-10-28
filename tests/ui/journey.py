@@ -434,6 +434,14 @@ with sync_playwright() as p:
     expect(client.get_by_text("Saturday works, see you then")).to_be_visible(timeout=20000)
     coach.get_by_label("Only new messages").uncheck()
 
+    # ---------------- notifications: offered in the thread; the switch on Profile
+    expect(client.get_by_text("Get a notification when your coach replies?")).to_be_visible()
+    client_ctx.grant_permissions(["notifications"])
+    client.get_by_role("link", name="Profile").click()
+    client.get_by_label("Notify me about new messages and video replies").check()
+    # no VAPID key on the local server, so it says so rather than failing
+    expect(client.get_by_text("Notifications aren’t set up on this server yet.")).to_be_visible()
+
     # ---------------- the header's sign-out button
     admin.get_by_role("button", name="Sign out").click()
     expect(admin.get_by_role("button", name="Sign in", exact=True)).to_be_visible()

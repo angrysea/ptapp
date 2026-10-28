@@ -3,7 +3,8 @@
 //! thread's summary, `COACH#{coach}` / `THREAD#{client}`, holds the last
 //! message and each side's unread count, so the coach's inbox is one query.
 //! A new message is also published to the recipient's real-time inbox
-//! (realtime.rs); open apps refresh on it, or poll when they can't connect.
+//! (realtime.rs), so open apps refresh (or poll when they can't connect),
+//! and pushed to their devices as a notification (routes/notify.rs).
 
 use aws_sdk_dynamodb::types::AttributeValue;
 use axum::extract::{Path, State};
@@ -63,6 +64,9 @@ pub async fn on_message(st: &AppState, scope: &ClientScope, c: &Comment) {
     if let Some(rt) = &st.realtime {
         rt.notify(recipient, &json!({ "type": "message", "clientId": client })).await;
     }
+    // A push notification too, for when the app isn't open; tapping it opens the thread.
+    let url = if c.author_role == Role::Client { format!("#/c/{client}/messages") } else { "#/coach".to_string() };
+    super::notify::notify_user(st, recipient, &c.author_name, &c.text, &url, &format!("thread-{client}")).await;
 }
 
 /// `POST /clients/{cid}/messages/read`: the caller has seen the conversation.

@@ -24,11 +24,11 @@ Status legend: ✅ done in MVP · 🟡 partial · ⬜ not started
 | Builder | WB-1 ✅ · WB-2 ✅ · WB-3 ✅ · WB-4 ✅ | WB-5 ⬜ · WB-6 ⬜ · WB-7 ⬜ |
 | Logging | LG-1 ✅ · LG-2 ✅ · LG-3 ✅ · LG-4 ✅ · LG-6 ✅ | LG-5 🟡 (e1RM trend; no PR events) · LG-7 🟡 (roster flags; no alerts) · LG-8 ⬜ |
 | Video submission | VS-1 ✅ · VS-2 ✅ · VS-3 ✅ · VS-4 ✅ (real-device checks pending, see `tasks/todo.md`) | VS-5 ⬜ |
-| Video reply | VR-1 ⬜ · VR-2 ⬜ · VR-3 ⬜ | VR-4…VR-7 ⬜ |
+| Video reply | VR-1 ✅ · VR-2 ✅ · VR-3 ✅ (recorded in the browser, `tasks/reply`) | VR-4…VR-7 ⬜ |
 | Feedback | FB-1 ✅ · FB-2 ✅ | FB-3 ⬜ · FB-4 ⬜ |
 | AI | AI-6/AI-7 (whenever AI ships) | AI-1…AI-5 ⬜ |
 | Body metrics | BM-1 ✅ · BM-2 ✅ · BM-3 ✅ · BM-4 ✅ · BM-7 ✅ · BM-8 ✅ | BM-5 ✅ · BM-6 ⬜ |
-| Messaging | MS-1 🟡 (async thread, text only) · MS-2 ⬜ | MS-3 🟡 (comments anchor to log/set) · MS-4 ⬜ · MS-5 ⬜ · MS-6 ⬜ |
+| Messaging | MS-1 ✅ (live via AppSync Events, polling fallback; coach inbox; text only) · MS-2 ✅ (Web Push; iPhone needs the Home Screen app) | MS-3 🟡 (comments anchor to log/set) · MS-4 ⬜ · MS-5 ⬜ · MS-6 ⬜ |
 | Business | BZ-1 ⬜ | BZ-2 ⬜ · BZ-3 ⬜ · BZ-4 ⬜ · BZ-5 ⬜ · BZ-6 ⬜ |
 | NFRs | privacy ✅ (private photos, tenant checks, per-user offline cache) · audit log ✅ · offline ✅ · upload size limits ✅ · CI ✅ (tests on every push; deploys run locally) · backups 🟡 (PITR; restore test) · MFA 🟡 (optional) · alarms ⬜ · export/delete ⬜ · video retention ⬜ | |
 

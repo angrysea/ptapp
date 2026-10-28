@@ -14,6 +14,7 @@ import { renderCoachPage, renderDirectory } from './views/directory.js';
 import { refreshMessageBadge, renderInbox } from './views/messages.js';
 import { renderReview } from './views/review.js';
 import { onLive, startLive } from './realtime.js';
+import { resync as resyncPush } from './push.js';
 import { loadExercises, renderExercises } from './views/exercises.js';
 import { renderIntake, renderWaiver } from './views/intake.js';
 import { renderMetrics } from './views/metrics.js';
@@ -143,6 +144,7 @@ async function boot() {
   // Unread messages: badges now and whenever a message arrives (realtime.js).
   if (!session.isAdmin) {
     startLive(session.userId);
+    resyncPush(); // the server keeps this device's push subscription current
     refreshMessageBadge();
     onLive(() => refreshMessageBadge());
   }

@@ -15,6 +15,11 @@ The video plans (`tasks/todo.md`, `tasks/reply/`) still have open items, so this
 - **Attachments:** photos and voice notes; no video messages (open question 3).
 - **No email fallback and no quiet hours** for now; revisit after real use (open questions 4 and 5).
 
+## Status (2026-10-28)
+
+- **Built:** Tasks 1-6. Messages arrive live (AppSync Events, polling every 10 s as a fallback); the coach has a Messages inbox with unread counts. Push notifications go to every device a user turned them on for (Profile), with an option to hide the message text. The trial pages and `/dev` routes are gone.
+- **Left:** Tasks 7-8 (photo and voice-note messages).
+
 ## Architecture Decisions
 
 1. **Build, don't buy.** A managed chat SDK (Stream, Sendbird and the like) costs roughly $300–500 a month at its first paid tier, ten times the $50/month target for the whole app. It would also hold client health conversations outside our AWS account. One coach–client thread with no group chat is small enough to build: about two weeks of work.

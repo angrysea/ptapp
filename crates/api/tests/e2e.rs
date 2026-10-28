@@ -719,6 +719,23 @@ async fn full_client_journey() {
     assert_eq!(unread("coach1").await, Some(0));
     assert_eq!(t.call("GET", "/messages", Some("coach1"), None).await.1["threads"][0]["newMessages"], json!([]));
 
+    // --- push subscriptions (MS-2): only real browser push services; idempotent; removable
+    let sub = |endpoint: &str| json!({ "endpoint": endpoint, "keys": { "p256dh": "BPkey", "auth": "authsecret" }, "preview": false });
+    for _ in 0..2 {
+        assert_eq!(t.call("POST", "/me/push", Some("client1"), Some(sub("https://fcm.googleapis.com/fcm/send/abc"))).await.0, StatusCode::OK);
+    }
+    assert_eq!(t.call("POST", "/me/push", Some("client1"), Some(sub("https://169.254.169.254/latest"))).await.0, StatusCode::BAD_REQUEST);
+    let mut keyless = sub("https://web.push.apple.com/x");
+    keyless["keys"]["auth"] = json!("");
+    assert_eq!(t.call("POST", "/me/push", Some("client1"), Some(keyless)).await.0, StatusCode::BAD_REQUEST);
+    assert_eq!(t.call("POST", "/me/push", None, Some(sub("https://fcm.googleapis.com/fcm/send/abc"))).await.0, StatusCode::UNAUTHORIZED);
+    // messages still send when push isn't configured (locally there's no VAPID key)
+    assert_eq!(t.call("POST", "/clients/client1/comments", Some("coach1"), Some(json!({ "text": "Push check" }))).await.0, StatusCode::OK);
+    assert_eq!(t.call("GET", "/push/key", Some("client1"), None).await.1["publicKey"], Value::Null);
+    let gone = json!({ "endpoint": "https://fcm.googleapis.com/fcm/send/abc" });
+    assert_eq!(t.call("DELETE", "/me/push", Some("client1"), Some(gone)).await.0, StatusCode::OK);
+    t.call("POST", "/clients/client1/messages/read", Some("client1"), None).await;
+
     // --- tenant isolation
     for path in ["/clients/client1/metrics", "/clients/client1/photos", "/clients/client1/logs", "/clients/client1"] {
         assert_eq!(t.call("GET", path, Some("coach2"), None).await.0, StatusCode::FORBIDDEN, "{path}");

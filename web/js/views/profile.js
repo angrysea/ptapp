@@ -2,6 +2,7 @@ import { myOutbox, post, put } from '../api.js';
 import { pendingUploads, removeUpload } from '../uploads.js';
 import { devMode, logout, MIN_LENGTH, policyProblem } from '../auth.js';
 import { kv, outbox } from '../idb.js';
+import { disable as pushOff, enable as pushOn, needsHomeScreen, prefetchKey, previewOn, setPreview, status as pushStatus, supported as pushSupported } from '../push.js';
 import { session } from '../session.js';
 import { $app, busy, field, h, mount, passwordField, select, sheet, toast } from '../ui.js';
 
@@ -15,7 +16,56 @@ export async function signOut() {
   // Only this user's queued writes go; another user's stay until they sign in.
   await kv.clear(); for (const i of mine) await outbox.del(i.key);
   for (const v of videos) await removeUpload(v.key); // clips stay off a shared device
+  await pushOff(); // the next person on this device doesn't get this user's notifications
   logout();
+}
+
+const BLOCKED = 'Notifications are blocked for this app. Allow them in your browser’s site settings (on iPhone: Settings → Notifications → PT Coach), then come back.';
+
+/** Push notifications for this device (push.js): on/off, and whether they show the message text. */
+function notificationsCard() {
+  const card = h('div', { class: 'card' }, h('h3', {}, 'Notifications'));
+  if (needsHomeScreen()) {
+    card.append(
+      h('p', {}, 'On iPhone and iPad, notifications only work in the app on your Home Screen.'),
+      h('ol', { class: 'small' },
+        h('li', {}, 'In Safari, tap the Share button.'),
+        h('li', {}, 'Choose “Add to Home Screen”.'),
+        h('li', {}, 'Open PT Coach from your Home Screen and turn notifications on here.')));
+    return card;
+  }
+  if (!pushSupported()) {
+    card.append(h('p', { class: 'small muted' }, 'This browser can’t show notifications from the app.'));
+    return card;
+  }
+  prefetchKey();
+  const on = h('input', { type: 'checkbox' });
+  const preview = h('input', { type: 'checkbox', checked: previewOn() });
+  const note = h('p', { class: 'small muted' });
+  const draw = (state) => {
+    on.checked = state === 'on';
+    on.disabled = state === 'denied';
+    preview.disabled = state !== 'on';
+    note.textContent = state === 'denied' ? BLOCKED
+      : state === 'unavailable' ? 'Notifications aren’t set up on this server yet.'
+        : state === 'on' ? 'You’ll be notified about new messages and video replies on this device.' : '';
+  };
+  on.addEventListener('change', async () => {
+    on.disabled = true;
+    try {
+      draw(on.checked ? await pushOn() : (await pushOff(), 'off'));
+    } catch (e) {
+      draw(await pushStatus());
+      toast(`Couldn’t change notifications: ${e.message}`, 'error');
+    }
+  });
+  preview.addEventListener('change', () => setPreview(preview.checked).catch(() => toast('Couldn’t save that; try again when online', 'error')));
+  pushStatus().then(draw);
+  card.append(
+    h('label', { class: 'check' }, on, 'Notify me about new messages and video replies'),
+    h('label', { class: 'check' }, preview, 'Show the message text in notifications'),
+    note);
+  return card;
 }
 
 /** Current password, then the new one twice; Cognito checks the current one. */
@@ -87,6 +137,7 @@ export async function renderProfile() {
       h('a', { class: 'btn block', href: '#/intake' }, 'Intake questionnaire'),
       h('div', { style: 'height:8px' }),
       h('a', { class: 'btn block', href: '#/waiver' }, 'Health screening & waiver')),
+    p.role !== 'admin' && notificationsCard(),
     !devMode() && h('div', { class: 'card' },
       h('h3', {}, 'Password'),
       h('button', { class: 'block', onclick: passwordSheet }, 'Change password')),

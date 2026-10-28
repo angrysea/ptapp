@@ -5,9 +5,30 @@
 import { get, post } from '../api.js';
 import { onLive } from '../realtime.js';
 import { session } from '../session.js';
-import { busy, fmtDateTime, h, mount } from '../ui.js';
+import { busy, fmtDateTime, h, mount, toast } from '../ui.js';
 import { playReply } from '../videos.js';
 import { markRead } from './messages.js';
+import { dismissPrompt, enable as pushOn, prefetchKey, shouldPrompt } from '../push.js';
+
+/** Offers notifications once (until dismissed) where replies are awaited. */
+export async function pushPrompt(who) {
+  if (!(await shouldPrompt())) return null;
+  prefetchKey();
+  const card = h('div', { class: 'card push-prompt' },
+    h('p', {}, `Get a notification when ${who} replies?`),
+    h('div', { class: 'row' },
+      h('button', {
+        class: 'primary small',
+        onclick: async () => {
+          const s = await pushOn().catch(() => 'off');
+          dismissPrompt();
+          card.remove();
+          toast(s === 'on' ? 'Notifications are on' : s === 'denied' ? 'Notifications are blocked; you can allow them later in your settings' : 'Notifications aren’t available here');
+        },
+      }, 'Turn on'),
+      h('button', { class: 'ghost small', onclick: () => { dismissPrompt(); card.remove(); } }, 'Not now')));
+  return card;
+}
 
 export async function renderThread(el, clientId, logsById = {}) {
   const listEl = h('div', { class: 'thread' });
@@ -53,6 +74,7 @@ export async function renderThread(el, clientId, logsById = {}) {
     if (list.some((c) => c.authorId !== session.userId) && document.visibilityState === 'visible') markRead(clientId);
   }
   mount(el,
+    await pushPrompt(session.isCoach ? 'your client' : 'your coach'),
     listEl,
     h('div', { class: 'card' }, text,
       h('button', {
