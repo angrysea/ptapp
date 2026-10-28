@@ -18,7 +18,7 @@ Phase 2 of `docs/ROADMAP.md`: make a coach fast enough to handle 30+ clients. It
 
 ### Slice A: strength programming (the 12-week block is the reference program)
 - [x] A1 WB-5 %1RM loads + client maxes (ON-4's test-lift part)
-- [ ] A2 LG-5 PR detection and celebration
+- [x] A2 LG-5 PR detection and celebration
 - [ ] A3 WB-6 progression suggestions (coach-approved)
 
 ### Checkpoint A

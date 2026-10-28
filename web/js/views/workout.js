@@ -15,6 +15,7 @@ import { onUploads, pendingUploads, queueVideo, removeUpload, retryUpload } from
 import { askBeforeCellular, onCellular, playReply, playVideo } from '../videos.js';
 import { canRecord, recordClip } from './recorder.js';
 import { trimmer } from './trim.js';
+import { celebrate } from './records.js';
 
 // A finished workout the server refused for good (not a 409, which means a
 // newer copy is already saved) goes back to being a draft, so it is neither
@@ -486,6 +487,7 @@ export async function renderWorkout(date, schedId) {
             sh.close();
             toast(navigator.onLine ? 'Workout saved' : 'Saved offline. It will sync when you’re back online.');
             go('/');
+            if (log.status !== 'skipped') celebrate(me.userId, log.id);
           },
         }, 'Save')),
     );

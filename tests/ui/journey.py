@@ -341,6 +341,9 @@ with sync_playwright() as p:
     client.get_by_role("button", name="Save max").click()
     expect(client.locator(".max-row", has_text="Back Squat").get_by_text("275 lb")).to_be_visible()
     shot(client, "10b-maxes")
+    # the logged squat set the client's starting records
+    client.get_by_role("button", name="Records").click()
+    expect(client.locator(".card", has_text="Back Squat").get_by_text("5-rep max: 225 lb")).to_be_visible()
 
     # ---------------- coach dashboard + feedback
     coach.get_by_role("button", name="Overview").click()

@@ -16,6 +16,7 @@ use serde_json::{json, Value};
 use crate::auth::{client_scope, Ctx};
 use crate::error::{bad_request, ApiError, ApiResult};
 use crate::routes::maxes::maxes_by_exercise;
+use crate::routes::records;
 use crate::store::{key, keyed, s};
 use crate::util::{audit, new_id, parse_date};
 use crate::AppState;
@@ -285,7 +286,14 @@ pub async fn put_log(
             items.push(TransactWriteItem::builder().delete(build(stale.build())?).build());
         }
         match st.store.ddb.transact_write_items().set_transact_items(Some(items)).send().await {
-            Ok(_) => return Ok(Json(log)),
+            Ok(_) => {
+                // The log is saved either way; a record missed here is found
+                // again the next time the log is saved.
+                if let Err(e) = records::record(&st, &pk, &log).await {
+                    tracing::warn!(log = %log.id, "recording PRs failed: {e:?}");
+                }
+                return Ok(Json(log));
+            }
             Err(e) if e.as_service_error().is_some_and(|se| se.is_transaction_canceled_exception()) => continue,
             Err(e) => return Err(e.into()),
         }

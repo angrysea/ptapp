@@ -304,3 +304,10 @@ button.reply.new { background: var(--accent); color: var(--accent-ink); }
 .load-input select { flex: 0 0 auto; width: auto; }
 .max-row { padding: 8px 0; border-bottom: 1px solid var(--line); }
 .max-row:last-child { border-bottom: 0; }
+
+/* Personal records (views/records.js). */
+.pr-burst { font-size: 3.5rem; line-height: 1; margin: 8px 0 4px; animation: pr-pop 0.6s ease-out; }
+@keyframes pr-pop { 0% { transform: scale(0.3); opacity: 0; } 70% { transform: scale(1.15); opacity: 1; } 100% { transform: scale(1); } }
+@media (prefers-reduced-motion: reduce) { .pr-burst { animation: none; } }
+.pr-list { padding-left: 20px; }
+.pr-list li { margin-bottom: 6px; }

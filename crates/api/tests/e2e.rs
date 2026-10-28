@@ -966,4 +966,28 @@ async fn full_client_journey() {
     assert_eq!(r["updatedWorkouts"], 1);
     assert_eq!(heavy(&t.call("GET", &sched_path, Some("client1"), None).await.1)[1]["loadKg"], Value::Null);
     assert_eq!(t.call("DELETE", "/clients/client1/maxes/bench", Some("coach1"), None).await.0, StatusCode::NOT_FOUND);
+
+    // --- personal records (LG-5): a baseline first, then a heavier set is a record
+    let pr_log = |id: &str, kg: f64| json!({
+        "id": id, "date": today.to_string(), "workoutName": "PR day", "status": "completed",
+        "updatedAt": chrono::Utc::now().to_rfc3339(),
+        "sets": [{ "itemId": "x", "exerciseId": "pr-lift", "exerciseName": "PR Lift", "setIndex": 0, "reps": 5, "loadKg": kg, "done": true }]
+    });
+    assert_eq!(t.call("PUT", "/clients/client1/logs/pr1", Some("client1"), Some(pr_log("pr1", 100.0))).await.0, StatusCode::OK);
+    assert_eq!(t.call("GET", "/clients/client1/records?log=pr1", Some("client1"), None).await.1, json!([]), "a baseline isn't celebrated");
+    assert_eq!(t.call("PUT", "/clients/client1/logs/pr2", Some("client1"), Some(pr_log("pr2", 105.0))).await.0, StatusCode::OK);
+    let (_, new) = t.call("GET", "/clients/client1/records?log=pr2", Some("client1"), None).await;
+    let keys: Vec<&str> = new.as_array().unwrap().iter().map(|r| r["key"].as_str().unwrap()).collect();
+    assert_eq!(keys, ["pr-lift#E1RM", "pr-lift#R05"]);
+    assert_eq!(new[1]["previous"]["kg"], 100.0);
+    // re-saving the same log doesn't count it again
+    assert_eq!(t.call("PUT", "/clients/client1/logs/pr2", Some("client1"), Some(pr_log("pr2", 105.0))).await.0, StatusCode::OK);
+    assert_eq!(t.call("GET", "/clients/client1/records?log=pr2", Some("client1"), None).await.1.as_array().unwrap().len(), 2);
+    assert_eq!(t.call("GET", "/clients/client1/records", Some("client2"), None).await.0, StatusCode::FORBIDDEN);
+    // the coach removes a bogus record; the one before it comes back
+    let (s, r) = t.call("DELETE", "/clients/client1/records/pr-lift%23R05", Some("coach1"), None).await;
+    assert_eq!(s, StatusCode::OK, "{r}");
+    assert_eq!(r["restored"]["kg"], 100.0);
+    let (_, all) = t.call("GET", "/clients/client1/records", Some("coach1"), None).await;
+    assert!(all.as_array().unwrap().iter().any(|r| r["key"] == "pr-lift#R05" && r["kg"] == 100.0));
 }

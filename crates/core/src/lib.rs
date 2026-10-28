@@ -6,5 +6,6 @@ pub mod coach;
 pub mod library;
 pub mod model;
 pub mod schedule;
+pub mod records;
 pub mod stats;
 pub mod strength;

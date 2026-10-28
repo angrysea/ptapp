@@ -13,9 +13,9 @@
 ## A2: PR detection (LG-5)
 
 **Acceptance criteria:**
-- [ ] Saving a log with a done set that beats a rep-max (1-10 reps) or best e1RM records a PR
-- [ ] The client sees a celebration on save; client and coach see a PR list
-- [ ] The coach can delete a bogus PR
+- [x] Saving a log with a done set that beats a rep-max (1-10 reps) or best e1RM records a PR
+- [x] The client sees a celebration on save; client and coach see a PR list (celebration not covered by the journey)
+- [x] The coach can delete a bogus PR
 
 ## A3: progression suggestions (WB-6)
 

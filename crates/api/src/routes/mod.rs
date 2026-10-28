@@ -12,6 +12,7 @@ pub mod password;
 pub mod metrics;
 pub mod notify;
 pub mod programs;
+pub mod records;
 pub mod replies;
 pub mod training;
 pub mod videos;
