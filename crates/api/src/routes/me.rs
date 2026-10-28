@@ -5,7 +5,7 @@ use ptcore::model::{valid_time_zone, Profile, Role, Sex, UnitSystem};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use crate::auth::{Caller, Ctx};
+use crate::auth::{save_profile, Caller, Ctx};
 use crate::error::{bad_request, ApiResult};
 use crate::AppState;
 
@@ -56,7 +56,7 @@ pub async fn consent(State(st): State<AppState>, ctx: Ctx) -> ApiResult<Json<Pro
     let mut p = ctx.profile;
     if p.consented_at.is_none() {
         p.consented_at = Some(Utc::now());
-        st.store.put(&format!("USER#{}", p.user_id), "PROFILE", &p).await?;
+        save_profile(&st, &p).await?;
     }
     Ok(Json(p))
 }
@@ -84,6 +84,6 @@ pub async fn update_me(State(st): State<AppState>, ctx: Ctx, Json(body): Json<Up
         }
         p.time_zone = Some(tz);
     }
-    st.store.put(&format!("USER#{}", p.user_id), "PROFILE", &p).await?;
+    save_profile(&st, &p).await?;
     Ok(Json(p))
 }

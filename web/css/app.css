@@ -296,3 +296,11 @@ button.reply.new { background: var(--accent); color: var(--accent-ink); }
 .consent summary { cursor: pointer; color: var(--accent); padding: 10px 0; }
 .consent ul { margin: 4px 0 8px; padding-left: 20px; }
 .consent li { margin-bottom: 6px; }
+
+/* Loads as a weight or % of 1RM (views/programs.js), and the maxes list (views/maxes.js). */
+.item-grid .field:has(.load-input) { grid-column: span 2; }
+.load-input { display: flex; gap: 6px; }
+.load-input input { flex: 1; min-width: 0; }
+.load-input select { flex: 0 0 auto; width: auto; }
+.max-row { padding: 8px 0; border-bottom: 1px solid var(--line); }
+.max-row:last-child { border-bottom: 0; }

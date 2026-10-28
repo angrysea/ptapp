@@ -9,11 +9,13 @@ use axum::Json;
 use chrono::{Duration, NaiveDate, Utc};
 use ptcore::model::{Assignment, Program, ScheduledWorkout, WorkoutLog};
 use ptcore::schedule::{end_date, materialize};
+use ptcore::strength::resolve_workout;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::auth::{client_scope, Ctx};
 use crate::error::{bad_request, ApiError, ApiResult};
+use crate::routes::maxes::maxes_by_exercise;
 use crate::store::{key, keyed, s};
 use crate::util::{audit, new_id, parse_date};
 use crate::AppState;
@@ -78,10 +80,12 @@ pub async fn assign(
         created_at: Utc::now(),
     };
     let pk = scope.pk();
+    // Loads written as %1RM become weights from the client's maxes.
+    let maxes = maxes_by_exercise(&st, &pk).await?;
     let mut items = vec![keyed(&pk, &format!("ASSIGN#{}", assignment.id), &assignment)?];
     for (date, idx) in dates {
         let pw = &program.workouts[idx];
-        let sw = ScheduledWorkout {
+        let mut sw = ScheduledWorkout {
             id: new_id(),
             date,
             assignment_id: assignment.id.clone(),
@@ -90,6 +94,7 @@ pub async fn assign(
             day: pw.day,
             workout: pw.workout.clone(),
         };
+        resolve_workout(&mut sw.workout, &maxes, scope.client.units);
         items.push(keyed(&pk, &format!("SCHED#{date}#{}", sw.id), &sw)?);
     }
     st.store.batch_put(items).await?;

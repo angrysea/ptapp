@@ -98,6 +98,8 @@ pub fn router(state: AppState) -> Router {
         .route("/clients/{cid}/attachments", post(comments::attachment))
         .route("/clients/{cid}/messages/read", post(messages::mark_read))
         .route("/messages", get(messages::inbox))
+        .route("/clients/{cid}/maxes", get(maxes::list))
+        .route("/clients/{cid}/maxes/{eid}", put(maxes::put).delete(maxes::remove))
         .route("/clients/{cid}/metrics", get(metrics::list).post(metrics::create))
         .route("/clients/{cid}/metrics/{mid}", delete(metrics::remove))
         .route("/clients/{cid}/photos", get(metrics::list_photos).post(metrics::create_photo))

@@ -12,7 +12,7 @@ use ptcore::model::{CoachEntry, Profile, Role};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use crate::auth::Ctx;
+use crate::auth::{save_profile, Ctx};
 use crate::error::{bad_request, ApiError, ApiResult};
 use crate::routes::invites::ADMIN_PK;
 use crate::util::{check_size, ext_for, new_id, presign_get, presign_put, IMAGE_TYPES, MAX_PHOTO_BYTES};
@@ -97,7 +97,7 @@ pub async fn put_mine(State(st): State<AppState>, ctx: Ctx, Json(mut body): Json
     if ctx.profile.name != body.display_name {
         let mut p: Profile = ctx.profile.clone();
         p.name = body.display_name.clone();
-        st.store.put(&user_pk(&coach), "PROFILE", &p).await?;
+        save_profile(&st, &p).await?;
         let entry_sk = format!("COACH#{coach}");
         if let Some(mut entry) = st.store.get::<CoachEntry>(ADMIN_PK, &entry_sk).await? {
             entry.name = body.display_name.clone();

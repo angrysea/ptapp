@@ -7,3 +7,4 @@ pub mod library;
 pub mod model;
 pub mod schedule;
 pub mod stats;
+pub mod strength;

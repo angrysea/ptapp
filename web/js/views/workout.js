@@ -372,7 +372,8 @@ export async function renderWorkout(date, schedId) {
 
   function prescription(it) {
     const parts = [`${it.sets} × ${it.reps}`];
-    if (it.loadKg != null) parts.push(`@ ${u.toW(it.loadKg)} ${u.w}`);
+    if (it.loadKg != null) parts.push(`@ ${u.toW(it.loadKg)} ${u.w}${it.loadPct != null ? ` (${it.loadPct}%)` : ''}`);
+    else if (it.loadPct != null) parts.push(`@ ${it.loadPct}% of your 1RM`);
     if (it.rpe != null) parts.push(`RPE ${it.rpe}`);
     if (it.rir != null) parts.push(`${it.rir} RIR`);
     if (it.tempo) parts.push(`tempo ${it.tempo}`);

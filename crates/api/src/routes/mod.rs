@@ -5,6 +5,7 @@ pub mod coaches;
 pub mod comments;
 pub mod exercises;
 pub mod invites;
+pub mod maxes;
 pub mod me;
 pub mod messages;
 pub mod password;

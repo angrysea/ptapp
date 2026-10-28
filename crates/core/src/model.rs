@@ -235,6 +235,10 @@ pub struct Item {
     /// Free text so coaches can write "8-10", "5", "AMRAP", "30s".
     pub reps: String,
     pub load_kg: Option<f64>,
+    /// Load as a percentage of the client's 1RM (WB-5). Assigning fills
+    /// `load_kg` from their max (strength.rs); in a program it stays empty.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub load_pct: Option<f64>,
     pub tempo: Option<String>,
     pub rest_sec: Option<u32>,
     pub rpe: Option<f64>,
@@ -330,6 +334,9 @@ impl Program {
                     }
                     if it.load_kg.is_some_and(|l| l < 0.0) {
                         return Err(format!("{}: load cannot be negative", it.exercise_name));
+                    }
+                    if it.load_pct.is_some_and(|p| !(p > 0.0 && p <= crate::strength::MAX_PCT)) {
+                        return Err(format!("{}: % of 1RM must be above 0 and at most {}", it.exercise_name, crate::strength::MAX_PCT));
                     }
                 }
             }
@@ -741,6 +748,7 @@ mod tests {
             sets,
             reps: "5".into(),
             load_kg: Some(100.0),
+            load_pct: None,
             tempo: None,
             rest_sec: Some(180),
             rpe,
@@ -786,6 +794,10 @@ mod tests {
         assert!(program(1, 8, item(3, None)).validate().is_err());
         assert!(program(1, 1, item(0, None)).validate().is_err());
         assert!(program(1, 1, item(3, Some(11.0))).validate().is_err());
+        let pct = |p: f64| Item { load_pct: Some(p), ..item(3, None) };
+        assert!(program(1, 1, pct(75.0)).validate().is_ok());
+        assert!(program(1, 1, pct(0.0)).validate().is_err());
+        assert!(program(1, 1, pct(151.0)).validate().is_err());
     }
 
     #[test]

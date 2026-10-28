@@ -103,6 +103,18 @@ impl Ctx {
     }
 }
 
+/// Saves a profile the request read earlier, as its own owner edits it.
+/// Refused if the account was suspended or deleted in the meantime, so a
+/// self-service save can't undo an admin's suspension or bring back a
+/// deleted account.
+pub async fn save_profile(state: &AppState, p: &Profile) -> ApiResult<()> {
+    let saved = state
+        .store
+        .put_if(&format!("USER#{}", p.user_id), "PROFILE", p, "attribute_exists(pk) AND attribute_not_exists(suspendedAt)")
+        .await?;
+    if saved { Ok(()) } else { Err(ApiError::Forbidden("this account is suspended or closed")) }
+}
+
 /// Resolved access to one client's data.
 pub struct ClientScope {
     pub client: Profile,

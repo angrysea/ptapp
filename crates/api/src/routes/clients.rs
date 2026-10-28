@@ -10,7 +10,7 @@ use ptcore::stats::{adherence, strength_trends, weekly_volume};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use crate::auth::{client_scope, ClientScope, Ctx};
+use crate::auth::{client_scope, save_profile, ClientScope, Ctx};
 use crate::error::{bad_request, ApiError, ApiResult};
 use crate::util::{audit, new_id};
 use crate::AppState;
@@ -114,7 +114,7 @@ pub async fn put_intake(
     if intake.birth_date.is_some() {
         p.birth_date = intake.birth_date;
     }
-    st.store.put(&format!("USER#{}", p.user_id), "PROFILE", &p).await?;
+    save_profile(&st, &p).await?;
     Ok(Json(intake))
 }
 

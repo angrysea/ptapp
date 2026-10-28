@@ -922,4 +922,48 @@ async fn full_client_journey() {
         .await
         .unwrap();
     assert_eq!(left.count(), 0, "the coach's records are gone");
+
+    // --- loads as %1RM (WB-5): resolved from the client's maxes, in pounds
+    const LB: f64 = 0.453_592_37;
+    let pct_item = |id: &str, pct: f64| json!({ "exerciseId": id, "exerciseName": id, "sets": 3, "reps": "5", "loadPct": pct });
+    let (s, pct_prog) = t
+        .call("POST", "/programs", Some("coach1"), Some(json!({
+            "name": "Pct block", "weeks": 1,
+            "workouts": [{ "week": 1, "day": 1, "workout": { "name": "Heavy", "blocks": [{ "kind": "straight", "items": [pct_item("squat", 75.0), pct_item("bench", 70.0)] }] } }]
+        })))
+        .await;
+    assert_eq!(s, StatusCode::OK, "{pct_prog}");
+    let max = |name: &str, lb: f64| json!({ "exerciseName": name, "kg": lb * LB, "source": "tested" });
+    assert_eq!(t.call("PUT", "/clients/client1/maxes/squat", Some("client1"), Some(json!({ "exerciseName": "Squat", "kg": 0, "source": "tested" }))).await.0, StatusCode::BAD_REQUEST);
+    assert_eq!(t.call("PUT", "/clients/client1/maxes/squat", Some("client2"), Some(max("Squat", 275.0))).await.0, StatusCode::FORBIDDEN);
+    let (s, m) = t.call("PUT", "/clients/client1/maxes/squat", Some("client1"), Some(max("Squat", 275.0))).await;
+    assert_eq!(s, StatusCode::OK, "{m}");
+    assert_eq!(m["max"]["setBy"], "client");
+    let day = today + chrono::Duration::days(200);
+    let (s, a) = t
+        .call("POST", "/clients/client1/assignments", Some("coach1"), Some(json!({ "programId": pct_prog["id"], "startDate": day.to_string() })))
+        .await;
+    assert_eq!(s, StatusCode::OK, "{a}");
+    let heavy = |t2: &Value| t2.as_array().unwrap().iter().find(|w| w["workout"]["name"] == "Heavy").unwrap()["workout"]["blocks"][0]["items"].clone();
+    let sched_path = format!("/clients/client1/schedule?from={day}&to={day}");
+    let items = heavy(&t.call("GET", &sched_path, Some("client1"), None).await.1);
+    let lbs = |v: &Value| v.as_f64().map(|kg| (kg / LB * 100.0).round() / 100.0);
+    assert_eq!(lbs(&items[0]["loadKg"]), Some(205.0), "75% of 275 lb, to the nearest 5 lb");
+    assert_eq!(items[1]["loadKg"], Value::Null, "no bench max yet: the client picks");
+    assert_eq!(items[1]["loadPct"], 70.0);
+    // a new max re-weighs the upcoming workout
+    let (s, m) = t.call("PUT", "/clients/client1/maxes/bench", Some("coach1"), Some(max("Bench", 225.0))).await;
+    assert_eq!(s, StatusCode::OK, "{m}");
+    assert_eq!(m["updatedWorkouts"], 1);
+    let items = heavy(&t.call("GET", &sched_path, Some("client1"), None).await.1);
+    assert_eq!(lbs(&items[1]["loadKg"]), Some(160.0), "70% of 225 = 157.5 lb, rounds to 160");
+    let (_, list) = t.call("GET", "/clients/client1/maxes", Some("coach1"), None).await;
+    let names: Vec<&str> = list["maxes"].as_array().unwrap().iter().map(|m| m["exerciseName"].as_str().unwrap()).collect();
+    assert_eq!(names, ["Bench", "Squat"]);
+    assert!(list["estimates"].is_array());
+    let (s, r) = t.call("DELETE", "/clients/client1/maxes/bench", Some("coach1"), None).await;
+    assert_eq!(s, StatusCode::OK, "{r}");
+    assert_eq!(r["updatedWorkouts"], 1);
+    assert_eq!(heavy(&t.call("GET", &sched_path, Some("client1"), None).await.1)[1]["loadKg"], Value::Null);
+    assert_eq!(t.call("DELETE", "/clients/client1/maxes/bench", Some("coach1"), None).await.0, StatusCode::NOT_FOUND);
 }

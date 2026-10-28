@@ -203,7 +203,7 @@ export async function renderProgramEditor(id) {
         h('div', { class: 'item-grid' },
           field('Sets', numIn(it, 'sets', { min: 1 })),
           field('Reps', h('input', { value: it.reps, placeholder: '8-10', onchange: (e) => { it.reps = e.target.value || '1'; touch(); } })),
-          field(`Load (${u.w})`, h('input', { type: 'number', inputmode: 'decimal', value: it.loadKg != null ? u.toW(it.loadKg) : '', onchange: (e) => { it.loadKg = u.fromW(e.target.value); touch(); } })),
+          field('Load', loadInput(it, u, touch)),
           field('Tempo', h('input', { value: it.tempo || '', placeholder: '3-1-1-0', onchange: (e) => { it.tempo = e.target.value || null; touch(); } })),
           field('Rest (s)', numIn(it, 'restSec')),
           field('RPE', numIn(it, 'rpe', { step: '0.5', min: 1, max: 10 }), null, rpeTargetInfo()),
@@ -214,4 +214,23 @@ export async function renderProgramEditor(id) {
   }
 
   draw();
+}
+
+/** A load as a weight or as a % of the client's 1RM (WB-5), which assigning
+ * turns into a weight from their maxes (Progress → Maxes). */
+function loadInput(it, u, touch) {
+  const asPct = () => mode.value === 'pct';
+  const value = h('input', {
+    type: 'number', inputmode: 'decimal', step: 'any', min: 0, 'aria-label': 'Load',
+    value: it.loadPct != null ? it.loadPct : it.loadKg != null ? u.toW(it.loadKg) : '',
+    onchange: () => store(),
+  });
+  const mode = select([['w', u.w], ['pct', '% 1RM']], it.loadPct != null ? 'pct' : 'w', { 'aria-label': 'Load unit', onchange: () => store() });
+  function store() {
+    const v = value.value === '' ? null : Number(value.value);
+    it.loadPct = asPct() ? v : null;
+    it.loadKg = asPct() ? null : u.fromW(value.value);
+    touch();
+  }
+  return h('div', { class: 'load-input' }, value, mode);
 }

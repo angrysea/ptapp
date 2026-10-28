@@ -141,8 +141,9 @@ with sync_playwright() as p:
     days.nth(today_dow).click()  # week 1, today's weekday -> lines up with a start date of the Monday this week
     add_block(coach, "straight")
     coach.locator(".block-card select").nth(1).select_option(label="Back Squat")
-    coach.locator(".item-card").first.get_by_label("Load (lb)").fill("225")
-    coach.locator(".item-card").first.get_by_label("Load (lb)").press("Tab")
+    expect(coach.locator(".item-card").first.get_by_label("Load unit")).to_have_value("w")  # lb, or % 1RM
+    coach.locator(".item-card").first.get_by_label("Load", exact=True).fill("225")
+    coach.locator(".item-card").first.get_by_label("Load", exact=True).press("Tab")
     coach.locator(".item-card").first.get_by_label("Reps").fill("5")
     coach.locator(".item-card").first.get_by_label("Reps").press("Tab")
     add_block(coach, "emom")
@@ -331,6 +332,15 @@ with sync_playwright() as p:
     client.get_by_role("button", name="Calculate & save").click()
     expect(client.get_by_text("Body fat").nth(1)).to_be_visible()
     shot(client, "10-skinfold")
+
+    # ---------------- 1RMs: the logged squat offers an estimate; record a tested max
+    client.get_by_role("button", name="Maxes").click()
+    expect(client.get_by_role("heading", name="From logged sets")).to_be_visible()
+    client.get_by_label("Exercise").select_option(label="Back Squat")
+    client.get_by_label("1RM (lb)").fill("275")
+    client.get_by_role("button", name="Save max").click()
+    expect(client.locator(".max-row", has_text="Back Squat").get_by_text("275 lb")).to_be_visible()
+    shot(client, "10b-maxes")
 
     # ---------------- coach dashboard + feedback
     coach.get_by_role("button", name="Overview").click()

@@ -1,8 +1,9 @@
-// Body metrics (BM-1..BM-4, BM-8) and progress photos (BM-7). Used by the
-// client's Progress tab and the coach's client page.
+// Body metrics (BM-1..BM-4, BM-8), progress photos (BM-7) and 1RMs (WB-5,
+// views/maxes.js). Used by the client's Progress tab and the coach's client page.
 
 import { del, get, post } from '../api.js';
 import { session } from '../session.js';
+import { maxes } from './maxes.js';
 import {
   addDays, busy, confirmSheet, field, fmtDate, h, isoDate, lineChart, mount, num, round, select, shrinkImage, subtabs, toast, todayIso, units,
 } from '../ui.js';
@@ -50,8 +51,8 @@ function bodyFigure(active, focus) {
 export function renderMetrics(el, client, initial = 'weight') {
   const show = (tab) => {
     const body = h('div');
-    mount(el, subtabs([['weight', 'Weight'], ['tape', 'Tape'], ['skinfold', 'Body fat'], ['photos', 'Photos']], tab, show), body);
-    ({ weight, tape, skinfold, photos })[tab](body, client).catch((e) => mount(body, h('p', { class: 'muted' }, e.message)));
+    mount(el, subtabs([['weight', 'Weight'], ['tape', 'Tape'], ['skinfold', 'Body fat'], ['photos', 'Photos'], ['maxes', 'Maxes']], tab, show), body);
+    ({ weight, tape, skinfold, photos, maxes })[tab](body, client).catch((e) => mount(body, h('p', { class: 'muted' }, e.message)));
   };
   show(initial);
 }

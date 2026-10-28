@@ -70,12 +70,18 @@ impl Store {
 
     /// Put only if no item with this key exists. Returns false if one did.
     pub async fn put_new<T: Serialize>(&self, pk: &str, sk: &str, value: &T) -> ApiResult<bool> {
+        self.put_if(pk, sk, value, "attribute_not_exists(pk)").await
+    }
+
+    /// Put only if the existing item (or its absence) meets `condition`.
+    /// Returns false if it didn't.
+    pub async fn put_if<T: Serialize>(&self, pk: &str, sk: &str, value: &T, condition: &str) -> ApiResult<bool> {
         let res = self
             .ddb
             .put_item()
             .table_name(&self.table)
             .set_item(Some(keyed(pk, sk, value)?))
-            .condition_expression("attribute_not_exists(pk)")
+            .condition_expression(condition)
             .send()
             .await;
         match res {
