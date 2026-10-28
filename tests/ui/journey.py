@@ -272,6 +272,8 @@ with sync_playwright() as p:
     client.evaluate("localStorage.removeItem('pt.forceVideoFallback')")
     # in-app recording (VS-1): about 3 s from the fake camera, as set 1 of the squats
     client.locator(".videobar").first.get_by_role("button", name="🎥 Add video").click()
+    # filming guidance for the squat (VS-5) before the camera opens
+    expect(client.locator(".film-tip")).to_contain_text("From 45°, between side and front, about 10 ft away")
     client.locator(".sheet select").first.select_option("0")
     client.get_by_role("button", name="● Record with camera").click()
     rec = client.get_by_role("button", name="● Record", exact=True)

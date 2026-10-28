@@ -333,3 +333,7 @@ button.reply.new { background: var(--accent); color: var(--accent-ink); }
 /* What a message is about (MS-3, views/comments.js). */
 .msg .about { display: inline-block; margin: 2px 0 4px; padding: 4px 10px; border-radius: 10px; background: var(--accent-soft); color: var(--accent); font-size: 0.8rem; text-decoration: none; border: 0; min-height: 0; }
 .card.focus { outline: 2px solid var(--accent); }
+
+/* Filming guidance before a set video (VS-5, videos.js). */
+.film-tip { background: var(--accent-soft); border-radius: 10px; padding: 10px 12px; margin-bottom: 10px; font-size: 0.9rem; }
+.film-tip ul { margin: 6px 0 0; padding-left: 18px; }

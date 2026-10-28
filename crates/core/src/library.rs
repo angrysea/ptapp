@@ -1,7 +1,7 @@
 //! Built-in exercise library (WB-1). Shipped inside the binary so it costs no
 //! storage or reads; coaches add custom exercises on top in DynamoDB.
 
-use crate::model::Exercise;
+use crate::model::{CameraAngle, Exercise, Filming};
 
 struct Seed {
     id: &'static str,
@@ -61,8 +61,28 @@ pub fn builtin_exercises() -> Vec<Exercise> {
             demo_key: None,
             pending_demo_key: None,
             custom: false,
+            filming: filming(s.id),
         })
         .collect()
+}
+
+/// Default filming guidance for the built-in lifts worth reviewing on video.
+fn filming(id: &str) -> Option<Filming> {
+    let (angle, distance_m, notes) = match id {
+        "back-squat" | "front-squat" | "goblet-squat" => (CameraAngle::Diagonal, 3.0, "Phone at hip height so depth and knee travel both show."),
+        "deadlift" | "romanian-deadlift" => (CameraAngle::Side, 3.0, "Phone at hip height, level with the bar, so bar path and back angle show."),
+        "hip-thrust" => (CameraAngle::Side, 2.5, "Phone at bench height, level with your hips."),
+        "bench-press" | "incline-db-press" => (CameraAngle::Diagonal, 2.0, "Phone by your feet, a little to one side, so the bar path shows."),
+        "overhead-press" => (CameraAngle::Side, 3.0, "Phone at chest height so the bar path and lockout show."),
+        "barbell-row" | "one-arm-db-row" => (CameraAngle::Side, 2.5, "Phone at hip height so your back angle shows."),
+        "pull-up" | "lat-pulldown" | "seated-cable-row" => (CameraAngle::Side, 2.5, "Whole movement in frame, top to bottom."),
+        "push-up" | "dip" => (CameraAngle::Side, 2.0, "Phone low, at shoulder height, so body line and depth show."),
+        "walking-lunge" | "bulgarian-split-squat" | "step-up" => (CameraAngle::Front, 3.0, "Phone at knee height so knee tracking shows."),
+        "kettlebell-swing" => (CameraAngle::Side, 3.0, "Phone at hip height so the hinge shows."),
+        "lateral-raise" => (CameraAngle::Front, 2.5, "Phone at shoulder height."),
+        _ => return None,
+    };
+    Some(Filming { angle, distance_m: Some(distance_m), notes: notes.to_string() })
 }
 
 pub fn is_builtin(id: &str) -> bool {
@@ -77,5 +97,16 @@ mod tests {
     fn ids_are_unique() {
         let ids: HashSet<_> = super::SEEDS.iter().map(|s| s.id).collect();
         assert_eq!(ids.len(), super::SEEDS.len());
+    }
+
+    #[test]
+    fn main_lifts_have_filming_guidance() {
+        let all = super::builtin_exercises();
+        let get = |id: &str| all.iter().find(|e| e.id == id).unwrap().filming.clone();
+        for id in ["back-squat", "deadlift", "bench-press", "overhead-press"] {
+            let f = get(id).unwrap_or_else(|| panic!("{id} has no filming guidance"));
+            assert!(f.validate().is_ok());
+        }
+        assert!(get("plank").is_none());
     }
 }

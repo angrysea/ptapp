@@ -12,7 +12,7 @@ import { RATINGS, rpeLogInfo, sessionRpeInfo } from '../effort.js';
 import { $app, addDays, busy, confirmSheet, field, fmtDate, h, mount, num, select, sheet, toast, todayIso, uid, units } from '../ui.js';
 import { CannotEncode, canEncode, encodeClip } from '../encode.js';
 import { onUploads, pendingUploads, queueVideo, removeUpload, retryUpload } from '../uploads.js';
-import { askBeforeCellular, onCellular, playReply, playVideo } from '../videos.js';
+import { askBeforeCellular, filmingTip, onCellular, playReply, playVideo } from '../videos.js';
 import { canRecord, recordClip } from './recorder.js';
 import { trimmer } from './trim.js';
 import { celebrate } from './records.js';
@@ -299,6 +299,7 @@ export async function renderWorkout(date, schedId) {
     }, '● Record with camera');
     const sh = sheet(
       h('h2', {}, `Video: ${it.exerciseName}`),
+      filmingTip(session.exercises?.[it.exerciseId], me),
       field('Set', which),
       record,
       field(record ? 'Or choose a clip' : 'Clip', file),

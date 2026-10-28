@@ -3,7 +3,8 @@
 
 import { del, get, post, put } from '../api.js';
 import { session } from '../session.js';
-import { $app, busy, confirmSheet, field, h, mount, sheet, toast } from '../ui.js';
+import { $app, busy, confirmSheet, field, h, mount, num, select, sheet, toast, units } from '../ui.js';
+import { ANGLES } from '../videos.js';
 
 export async function loadExercises(force = false) {
   if (!session.exercises || force) {
@@ -43,12 +44,24 @@ function editSheet(ex) {
   const cues = h('textarea', { value: (ex?.cues || []).join('\n'), placeholder: 'One cue per line', disabled: readOnly });
   const demoUrl = h('input', { type: 'url', value: ex?.demoUrl || '', placeholder: 'https://… (optional link)', disabled: readOnly });
   const video = h('input', { type: 'file', accept: 'video/mp4,video/quicktime,video/webm' });
-  const body = () => ({ name: name.value, muscleGroups: splitCsv(muscles.value), equipment: splitCsv(equipment.value), cues: cues.value.split('\n'), demoUrl: demoUrl.value || null });
+  // Filming guidance (VS-5), shown to clients before they film a set.
+  const imperial = units(session.profile).imperial;
+  const f = ex?.filming;
+  const angle = select([['', 'No guidance'], ...ANGLES], f?.angle || '', { disabled: readOnly });
+  const distance = h('input', { type: 'number', inputmode: 'decimal', step: 'any', min: 0, disabled: readOnly,
+    value: f?.distanceM != null ? (imperial ? Math.round(f.distanceM * 3.281) : f.distanceM) : '' });
+  const filmNotes = h('input', { value: f?.notes || '', maxlength: 300, placeholder: 'e.g. Phone at hip height', disabled: readOnly });
+  const meters = () => (num(distance.value) == null ? null : Math.round((imperial ? num(distance.value) / 3.281 : num(distance.value)) * 10) / 10);
+  const filming = () => (angle.value ? { angle: angle.value, distanceM: meters(), notes: filmNotes.value } : null);
+  const body = () => ({ name: name.value, muscleGroups: splitCsv(muscles.value), equipment: splitCsv(equipment.value), cues: cues.value.split('\n'), demoUrl: demoUrl.value || null, filming: filming() });
   const sh = sheet(
     h('h2', {}, ex ? ex.name : 'New exercise'),
     readOnly && h('p', { class: 'muted small' }, 'Built-in exercises are read-only. Create a custom exercise to change cues or add your own demo.'),
     ex?.demoVideoUrl && h('video', { src: ex.demoVideoUrl, controls: true, playsinline: true, style: 'width:100%;border-radius:10px' }),
     field('Name', name), field('Muscle groups', muscles), field('Equipment', equipment), field('Coaching cues', cues), field('Demo link', demoUrl),
+    h('h3', {}, 'Filming a set'),
+    h('div', { class: 'grid2' }, field('Camera angle', angle), field(`Distance (${imperial ? 'ft' : 'm'})`, distance)),
+    field('Filming notes', filmNotes),
     !readOnly && ex && field('Upload your own demo video', video, 'Short clip, ideally under 30 s.'),
     !readOnly && h('div', { class: 'row' },
       ex && h('button', {

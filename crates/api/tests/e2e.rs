@@ -1073,4 +1073,16 @@ async fn full_client_journey() {
     assert_eq!(c["logId"], v0["logId"]);
     assert_eq!(c["setIndex"], v0["setIndex"]);
     assert_eq!(t.call("POST", "/clients/client1/comments", Some("coach1"), Some(json!({ "text": "x", "videoId": "nope" }))).await.0, StatusCode::BAD_REQUEST);
+
+    // --- filming guidance (VS-5): built-ins have defaults; coaches set it on their own exercises
+    let (_, lib) = t.call("GET", "/exercises", Some("client1"), None).await;
+    let squat = lib.as_array().unwrap().iter().find(|e| e["id"] == "back-squat").unwrap();
+    assert_eq!(squat["filming"]["angle"], "diagonal");
+    let film = |d: f64| json!({ "name": "Sled Push", "filming": { "angle": "side", "distanceM": d, "notes": " Whole sled in frame " } });
+    assert_eq!(t.call("POST", "/exercises", Some("coach1"), Some(film(20.0))).await.0, StatusCode::BAD_REQUEST);
+    let (s, sled) = t.call("POST", "/exercises", Some("coach1"), Some(film(4.0))).await;
+    assert_eq!(s, StatusCode::OK, "{sled}");
+    assert_eq!(sled["filming"]["notes"], "Whole sled in frame");
+    let (_, sled) = t.call("PUT", &format!("/exercises/{}", sled["id"].as_str().unwrap()), Some("coach1"), Some(json!({ "name": "Sled Push" }))).await;
+    assert!(sled.get("filming").is_none(), "leaving it out clears it");
 }

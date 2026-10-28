@@ -3,7 +3,7 @@
 use axum::extract::{Path, State};
 use axum::Json;
 use ptcore::library::{builtin_exercises, is_builtin};
-use ptcore::model::Exercise;
+use ptcore::model::{Exercise, Filming};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -50,6 +50,16 @@ pub struct ExerciseIn {
     #[serde(default)]
     cues: Vec<String>,
     demo_url: Option<String>,
+    /// Filming guidance (VS-5); None clears it.
+    #[serde(default)]
+    filming: Option<Filming>,
+}
+
+fn clean_filming(f: Option<Filming>) -> ApiResult<Option<Filming>> {
+    let Some(mut f) = f else { return Ok(None) };
+    f.notes = f.notes.trim().to_string();
+    f.validate().map_err(bad_request)?;
+    Ok(Some(f))
 }
 
 fn clean(list: Vec<String>) -> Vec<String> {
@@ -71,6 +81,7 @@ pub async fn create(State(st): State<AppState>, ctx: Ctx, Json(body): Json<Exerc
         demo_key: None,
         pending_demo_key: None,
         custom: true,
+        filming: clean_filming(body.filming)?,
     };
     st.store.put(&format!("COACH#{coach}"), &format!("EXERCISE#{}", ex.id), &ex).await?;
     Ok(Json(ex))
@@ -101,6 +112,7 @@ pub async fn update(
     ex.equipment = clean(body.equipment);
     ex.cues = clean(body.cues);
     ex.demo_url = body.demo_url.filter(|u| u.starts_with("https://"));
+    ex.filming = clean_filming(body.filming)?;
     st.store.put(&format!("COACH#{coach}"), &format!("EXERCISE#{id}"), &ex).await?;
     Ok(Json(ex))
 }

@@ -120,3 +120,21 @@ export function playVideo(v, ...actions) {
   sh.onClose = () => player.pause();
   return sh;
 }
+
+// ------------------------------------------------------------ filming guidance (VS-5)
+
+export const ANGLES = [['side', 'From the side'], ['diagonal', 'From 45°, between side and front'], ['front', 'From the front'], ['behind', 'From behind']];
+
+/** How to film a set of `exercise`, for the video sheet; generic tips when it has none. */
+export function filmingTip(exercise, profile) {
+  const f = exercise?.filming;
+  const imperial = profile?.units === 'imperial';
+  const dist = f?.distanceM != null && (imperial ? `about ${Math.round(f.distanceM * 3.281)} ft away` : `about ${f.distanceM} m away`);
+  const angle = f && ANGLES.find(([k]) => k === f.angle)?.[1];
+  return h('div', { class: 'film-tip' },
+    h('strong', {}, '📐 How to film'),
+    h('ul', {},
+      f && h('li', {}, [angle, dist].filter(Boolean).join(', ')),
+      f?.notes && h('li', {}, f.notes),
+      h('li', {}, 'Whole body and the weight in frame for the whole set; prop the phone up so it stays still.')));
+}

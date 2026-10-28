@@ -208,6 +208,43 @@ pub struct Exercise {
     pub pending_demo_key: Option<String>,
     #[serde(default)]
     pub custom: bool,
+    /// How to film a set for review (VS-5), shown before the camera opens.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filming: Option<Filming>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum CameraAngle {
+    Side,
+    Front,
+    /// 45 degrees between side and front.
+    Diagonal,
+    Behind,
+}
+
+/// Filming guidance for an exercise (VS-5).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Filming {
+    pub angle: CameraAngle,
+    /// How far from the lifter, in metres.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub distance_m: Option<f64>,
+    #[serde(default)]
+    pub notes: String,
+}
+
+impl Filming {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.distance_m.is_some_and(|d| !(0.5..=10.0).contains(&d)) {
+            return Err("filming distance must be 0.5-10 m".into());
+        }
+        if self.notes.chars().count() > 300 {
+            return Err("filming notes must be at most 300 characters".into());
+        }
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------- programs
