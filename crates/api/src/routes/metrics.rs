@@ -5,7 +5,6 @@ use std::collections::BTreeMap;
 use axum::extract::{Path, Query, State};
 use axum::Json;
 use chrono::{Duration, NaiveDate, Utc};
-use futures::future::try_join_all;
 use ptcore::bodycomp::{compute, DensityEquation, SkinfoldInput, SkinfoldMethod};
 use ptcore::model::{Metric, MetricKind, Photo, PhotoPose, Role, SkinfoldRecord, TAPE_SITES};
 use serde::{Deserialize, Serialize};
@@ -13,7 +12,7 @@ use serde_json::{json, Value};
 
 use crate::auth::{client_scope, Ctx};
 use crate::error::{bad_request, ApiError, ApiResult};
-use crate::util::{audit, check_size, dated_id, ext_for, presign_get, presign_put, s3_object_exists, IMAGE_TYPES, MAX_PHOTO_BYTES};
+use crate::util::{audit, check_size, dated_id, ext_for, presign_get, presign_put, s3_object_exists, untag, IMAGE_TYPES, MAX_PHOTO_BYTES, PENDING_TAG};
 use crate::AppState;
 
 #[derive(Deserialize)]
@@ -156,14 +155,14 @@ pub async fn list_photos(State(st): State<AppState>, ctx: Ctx, Path(cid): Path<S
     let scope = client_scope(&st, &ctx, &cid).await?;
     audit(&st, &ctx, &scope, "view-photos").await;
     let photos: Vec<Photo> = st.store.query_prefix(&scope.pk(), "PHOTO#").await?;
-    let present = try_join_all(photos.iter().map(|p| s3_object_exists(&st, &p.key))).await?;
-    // A PUT can only land while its presigned URL is valid. A missing object
-    // younger than that may still be uploading, so it is just left out; older
-    // ones were abandoned (closed tab, lost upload) and their record is dropped.
+    // Only confirmed photos are shown, so no per-photo S3 check is needed. A
+    // pending one may still be uploading; once its presigned URL has expired
+    // it was abandoned (closed tab, lost upload): the record is dropped and
+    // the bucket's lifecycle rule removes any object, still tagged pending.
     let abandoned_before = Utc::now() - Duration::from_std(st.presign_ttl).unwrap_or(Duration::hours(1)) - Duration::minutes(5);
     let mut out = Vec::with_capacity(photos.len());
-    for (p, exists) in photos.into_iter().zip(present) {
-        if !exists {
+    for p in photos {
+        if p.pending {
             if p.created_at < abandoned_before {
                 st.store.delete(&scope.pk(), &format!("PHOTO#{}", p.id)).await?;
             }
@@ -184,8 +183,9 @@ pub struct PhotoIn {
     size: i64,
 }
 
-/// Creates the photo record and returns a short-lived presigned PUT URL.
-/// The bucket is private; photos are only ever served via presigned GETs.
+/// Step 1: creates a pending photo record and returns a short-lived
+/// presigned PUT URL. The bucket is private; photos are only ever served via
+/// presigned GETs.
 pub async fn create_photo(
     State(st): State<AppState>,
     ctx: Ctx,
@@ -204,11 +204,34 @@ pub async fn create_photo(
         key,
         content_type: body.content_type,
         taken_by: Some(scope.actor_role()),
+        pending: true,
         created_at: Utc::now(),
     };
-    let upload = presign_put(&st, &photo.key, &photo.content_type, body.size, None).await?;
+    let upload = presign_put(&st, &photo.key, &photo.content_type, body.size, Some(PENDING_TAG)).await?;
     st.store.put(&scope.pk(), &format!("PHOTO#{}", photo.id), &photo).await?;
     Ok(Json(json!({ "photo": photo, "uploadUrl": upload.url, "uploadHeaders": upload.headers })))
+}
+
+/// Step 2: once the browser's PUT has succeeded, the photo is shown.
+pub async fn confirm_photo(
+    State(st): State<AppState>,
+    ctx: Ctx,
+    Path((cid, pid)): Path<(String, String)>,
+) -> ApiResult<Json<Photo>> {
+    let scope = client_scope(&st, &ctx, &cid).await?;
+    let sk = format!("PHOTO#{pid}");
+    let mut photo: Photo = st.store.get(&scope.pk(), &sk).await?.ok_or(ApiError::NotFound("photo"))?;
+    if !photo.pending {
+        return Ok(Json(photo));
+    }
+    if !s3_object_exists(&st, &photo.key).await? {
+        return Err(bad_request("the photo upload has not arrived; try uploading again"));
+    }
+    // Untag first: a confirmed photo must not be expired by the lifecycle rule.
+    untag(&st, &photo.key).await?;
+    photo.pending = false;
+    st.store.put(&scope.pk(), &sk, &photo).await?;
+    Ok(Json(photo))
 }
 
 pub async fn remove_photo(

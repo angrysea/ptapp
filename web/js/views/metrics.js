@@ -277,9 +277,10 @@ async function photos(el, client) {
         onclick: (e) => busy(e.currentTarget, async () => {
           if (!file.files[0]) throw new Error('Choose a photo');
           const blob = await shrinkImage(file.files[0]);
-          const { uploadUrl, uploadHeaders } = await post(`/clients/${client.userId}/photos`, { date: date.value, pose: pose.value, contentType: 'image/jpeg', size: blob.size });
+          const { photo, uploadUrl, uploadHeaders } = await post(`/clients/${client.userId}/photos`, { date: date.value, pose: pose.value, contentType: 'image/jpeg', size: blob.size });
           const res = await fetch(uploadUrl, { method: 'PUT', headers: uploadHeaders, body: blob });
           if (!res.ok) throw new Error(`Upload failed (${res.status})`);
+          await post(`/clients/${client.userId}/photos/${photo.id}/confirm`, {});
           toast('Photo uploaded');
           photos(el, client);
         }),

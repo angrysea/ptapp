@@ -56,6 +56,14 @@ pub struct Profile {
     /// Workouts are dated in local time, so "today" must be too.
     #[serde(default)]
     pub time_zone: Option<String>,
+    /// When they agreed to how their data is used (privacy NFR): at sign-up,
+    /// or on first sign-in for accounts made before the agreement existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub consented_at: Option<DateTime<Utc>>,
+    /// Set while an admin has suspended this coach; the API then refuses
+    /// their requests (auth.rs).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suspended_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -116,6 +124,9 @@ pub struct CoachEntry {
     pub name: String,
     pub email: String,
     pub joined_at: DateTime<Utc>,
+    /// Mirrors `Profile::suspended_at`, for the admin's coach list.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suspended_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -576,6 +587,10 @@ pub struct Photo {
     /// Who uploaded it; None on photos from before this was recorded.
     #[serde(default)]
     pub taken_by: Option<Role>,
+    /// True until the browser's upload is confirmed (`POST .../confirm`).
+    /// Photos from before confirming existed default to confirmed.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pending: bool,
     pub created_at: DateTime<Utc>,
 }
 
@@ -794,6 +809,8 @@ mod tests {
             birth_date: None,
             business_name: None,
             time_zone: None,
+            consented_at: None,
+            suspended_at: None,
             created_at: Utc::now(),
         };
         // 5 pm Oct 27 in Los Angeles is already Oct 28 in UTC.

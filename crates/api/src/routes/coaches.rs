@@ -19,7 +19,7 @@ use crate::util::{check_size, ext_for, new_id, presign_get, presign_put, IMAGE_T
 use crate::AppState;
 
 const SK: &str = "COACHPROFILE";
-const DIRECTORY: &str = "DIRECTORY";
+pub const DIRECTORY: &str = "DIRECTORY";
 
 fn user_pk(coach: &str) -> String {
     format!("USER#{coach}")
@@ -38,8 +38,15 @@ pub async fn complete(st: &AppState, coach: &str) -> ApiResult<bool> {
 /// Writes the profile and brings the directory entry in line with it.
 async fn save(st: &AppState, coach: &str, profile: &CoachProfile) -> ApiResult<()> {
     st.store.put(&user_pk(coach), SK, profile).await?;
+    sync_directory(st, coach, profile).await
+}
+
+/// Lists or unlists the coach to match their profile and account: a
+/// suspended coach is never listed (routes/account.rs).
+pub async fn sync_directory(st: &AppState, coach: &str, profile: &CoachProfile) -> ApiResult<()> {
     let entry = format!("COACH#{coach}");
-    if profile.shows_in_directory() {
+    let suspended = st.store.get::<Profile>(&user_pk(coach), "PROFILE").await?.is_some_and(|p| p.suspended_at.is_some());
+    if profile.shows_in_directory() && !suspended {
         st.store.put(DIRECTORY, &entry, &profile.public(coach)).await
     } else {
         st.store.delete(DIRECTORY, &entry).await

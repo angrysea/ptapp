@@ -6,6 +6,7 @@
 import { get, post } from '../api.js';
 import { logout } from '../auth.js';
 import { $app, busy, errorToast, field, h, mount } from '../ui.js';
+import { consentField } from './consent.js';
 
 const PENDING = 'pt.pendingInvite';
 
@@ -65,6 +66,8 @@ async function renderJoin(code, me) {
   const name = h('input', { value: invite.clientName || '', autocomplete: 'name' });
   // The API only lets the invited address accept; say so up front.
   const wrongEmail = (me.email || '').toLowerCase() !== invite.email.toLowerCase();
+  const consent = consentField(asCoach);
+  const problem = h('p', { class: 'small', 'aria-live': 'polite' });
   mount($app(),
     h('h1', {}, asCoach ? `Coach on ${invite.coachName}` : `Join ${invite.coachName}`),
     h('div', { class: 'card' },
@@ -75,10 +78,13 @@ async function renderJoin(code, me) {
         `You’re signed in as ${me.email}. Sign out and sign in with ${invite.email} to accept.`),
       wrongEmail && h('button', { class: 'block', onclick: logout }, 'Sign out'),
       !wrongEmail && field('Your name', name),
+      !wrongEmail && consent.el,
+      !wrongEmail && problem,
       !wrongEmail && h('button', {
         class: 'primary block',
         onclick: (e) => busy(e.currentTarget, async () => {
-          await post(`/invites/${encodeURIComponent(code)}/accept`, { name: name.value });
+          if (!consent.agreed()) { problem.textContent = 'Tick “I agree” to continue.'; return; }
+          await post(`/invites/${encodeURIComponent(code)}/accept`, { name: name.value, consent: true });
           localStorage.removeItem(PENDING);
           reloadHome(asCoach ? '#/' : '#/intake?onboarding=1');
         }),

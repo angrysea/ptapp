@@ -73,6 +73,12 @@ with sync_playwright() as p:
     coach = coach_ctx.new_page(); watch(coach, "coach")
     sign_in(coach, "coach" + RUN, BASE + "#/join/" + coach_code)
     expect(coach.get_by_role("heading", name="Coach on PT Coach")).to_be_visible()
+    # accepting needs the data agreement ticked
+    coach.get_by_role("button", name="Accept invite").click()
+    expect(coach.get_by_text("Tick “I agree” to continue.")).to_be_visible()
+    coach.get_by_text("How your data is used").click()
+    expect(coach.get_by_text("If you list yourself in the coach directory")).to_be_visible()
+    coach.get_by_label("I agree to how PT Coach uses my data").check()
     coach.get_by_role("button", name="Accept invite").click()
 
     # ---------------- the coach fills in their profile before anything else
@@ -156,6 +162,7 @@ with sync_playwright() as p:
     client = client_ctx.new_page(); watch(client, "client")
     sign_in(client, "client" + RUN, BASE + "#/join/" + code)
     expect(client.get_by_role("heading", name=f"Join Coach {RUN}")).to_be_visible()
+    client.get_by_label("I agree to how PT Coach uses my data").check()
     client.get_by_role("button", name="Accept invite").click()
     expect(client.get_by_role("heading", name=re.compile("Step 1 of 2"))).to_be_visible()
     expect(client.locator("#title")).to_have_text(f"Coach {RUN}")  # the header shows the client's coach
@@ -463,6 +470,21 @@ with sync_playwright() as p:
     client.get_by_label("Notify me about new messages and video replies").check()
     # no VAPID key on the local server, so it says so rather than failing
     expect(client.get_by_text("Notifications aren’t set up on this server yet.")).to_be_visible()
+
+    # ---------------- the admin suspends the coach, then lifts it
+    admin.reload()
+    admin.locator(".card.link", has_text=f"coach{RUN}@dev.local").click()
+    admin.locator(".sheet").get_by_role("button", name="Suspend coach").click()
+    admin.get_by_role("button", name="Suspend", exact=True).click()
+    expect(admin.locator(".card.link", has_text=f"coach{RUN}@dev.local").get_by_text("Suspended")).to_be_visible()
+    coach.reload()
+    expect(coach.get_by_role("heading", name="Account suspended")).to_be_visible()
+    shot(coach, "15-coach-suspended")
+    admin.locator(".card.link", has_text=f"coach{RUN}@dev.local").click()
+    admin.locator(".sheet").get_by_role("button", name="Lift suspension").click()
+    expect(admin.get_by_text("Suspension lifted")).to_be_visible()
+    coach.reload()
+    expect(coach.get_by_role("link", name="Messages")).to_be_visible()
 
     # ---------------- the header's sign-out button
     admin.get_by_role("button", name="Sign out").click()

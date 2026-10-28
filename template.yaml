@@ -269,10 +269,11 @@ Resources:
               Resource:
                 - !Sub "arn:aws:ses:${AWS::Region}:${AWS::AccountId}:identity/*"
                 - !Sub "arn:aws:ses:${AWS::Region}:${AWS::AccountId}:configuration-set/*"
-        # Password changes (routes/password.rs): check the current password, set the new one.
+        # Password changes (routes/password.rs), account deletion and coach
+        # suspension (routes/account.rs).
         - Statement:
             - Effect: Allow
-              Action: [cognito-idp:AdminInitiateAuth, cognito-idp:AdminSetUserPassword, cognito-idp:AdminDeleteUser]
+              Action: [cognito-idp:AdminInitiateAuth, cognito-idp:AdminSetUserPassword, cognito-idp:AdminDeleteUser, cognito-idp:AdminDisableUser, cognito-idp:AdminEnableUser]
               Resource: !GetAtt UserPool.Arn
         # Chat: publish to users' inbox channels (realtime.rs), and read the
         # Web Push key (push.rs; the AWS-managed SSM key decrypts it).
@@ -358,6 +359,53 @@ Resources:
           const s = ctx.info.channel.segments;
           if (s.length !== 2 || s[1] !== ctx.identity.sub) util.unauthorized();
         }
+
+  # ------------------------------------------------------------------ backups
+  # Daily snapshots of the table, kept 35 days, on top of point-in-time
+  # recovery: unlike PITR, they outlive the table if it is ever deleted.
+  BackupVault:
+    Type: AWS::Backup::BackupVault
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BackupVaultName: !Sub ptapp-${Stage}
+
+  BackupPlan:
+    Type: AWS::Backup::BackupPlan
+    Properties:
+      BackupPlan:
+        BackupPlanName: !Sub ptapp-${Stage}-daily
+        BackupPlanRule:
+          - RuleName: daily
+            TargetBackupVault: !Ref BackupVault
+            ScheduleExpression: cron(0 8 * * ? *) # 08:00 UTC, the small hours in the US
+            StartWindowMinutes: 60
+            CompletionWindowMinutes: 180
+            Lifecycle: { DeleteAfterDays: 35 }
+
+  BackupRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: backup.amazonaws.com }
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals: { aws:SourceAccount: !Ref AWS::AccountId }
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSBackupServiceRolePolicyForBackup
+        - arn:aws:iam::aws:policy/service-role/AWSBackupServiceRolePolicyForRestores
+
+  BackupSelection:
+    Type: AWS::Backup::BackupSelection
+    Properties:
+      BackupPlanId: !Ref BackupPlan
+      BackupSelection:
+        SelectionName: table
+        IamRoleArn: !GetAtt BackupRole.Arn
+        Resources: [!GetAtt Table.Arn]
 
   # ------------------------------------------------------------------ alarms
   # Email when the API misbehaves: errors in the Lambda, 5xx answers, or

@@ -3,8 +3,8 @@
 // its link opens the sign-up page with that address filled in, and it stops
 // working once used.
 
-import { del, get, post, put } from '../api.js';
-import { $app, busy, field, fmtDate, h, mount, sheet, toast } from '../ui.js';
+import { api, del, get, post, put } from '../api.js';
+import { $app, busy, confirmSheet, field, fmtDate, h, mount, sheet, toast } from '../ui.js';
 
 const appLink = (path) => `${location.origin}${location.pathname}#${path}`;
 
@@ -15,7 +15,8 @@ export async function renderAdmin() {
 
     coaches.length === 0 && h('div', { class: 'card muted' }, 'No coaches yet. Invite one by email.'),
     coaches.map((c) => h('div', { class: 'card link', role: 'button', tabindex: 0, onclick: () => coachSheet(c.coachId), onkeydown: (e) => e.key === 'Enter' && coachSheet(c.coachId) },
-      h('strong', {}, c.name), h('div', { class: 'muted small' }, `${c.email} · joined ${fmtDate(c.joinedAt.slice(0, 10))}`))),
+      h('div', { class: 'spread' }, h('strong', {}, c.name), c.suspendedAt && h('span', { class: 'chip warn' }, 'Suspended')),
+      h('div', { class: 'muted small' }, `${c.email} · joined ${fmtDate(c.joinedAt.slice(0, 10))}`))),
 
     invites.length > 0 && [h('h2', {}, 'Pending invitations'), invites.map((i) => h('div', { class: 'card spread' },
       h('div', {}, h('strong', {}, i.clientName || i.email), h('div', { class: 'muted small' }, `${i.email} · expires ${fmtDate(new Date(i.ttl * 1000).toISOString().slice(0, 10))}`)),
@@ -62,7 +63,48 @@ async function coachSheet(id) {
           sh.close();
         }),
       }, p.hiddenByAdmin ? 'Show in the directory' : 'Hide from the directory')],
+    h('h3', {}, 'Account'),
+    account.suspendedAt && h('p', { class: 'banner' }, `Suspended ${fmtDate(account.suspendedAt.slice(0, 10))}. They can’t sign in; their clients can still log workouts.`),
+    h('button', {
+      class: `block ${account.suspendedAt ? '' : 'danger'}`,
+      onclick: (e) => busy(e.currentTarget, async () => {
+        const suspend = !account.suspendedAt;
+        if (suspend && !(await confirmSheet(`Suspend ${account.name}? They’re signed out and can’t sign in or appear in the directory until you lift it. Their clients keep their accounts.`, 'Suspend'))) return;
+        await put(`/admin/coaches/${encodeURIComponent(id)}/suspended`, { suspended: suspend });
+        toast(suspend ? 'Coach suspended' : 'Suspension lifted');
+        sh.close();
+        renderAdmin();
+      }),
+    }, account.suspendedAt ? 'Lift suspension' : 'Suspend coach'),
+    h('button', { class: 'block danger', onclick: () => { sh.close(); deleteCoachSheet(id, account); } }, 'Delete coach account'),
     h('button', { class: 'ghost block', onclick: () => sh.close() }, 'Close'),
+  );
+}
+
+/** Deleting a coach is permanent, so the admin types their email first. */
+function deleteCoachSheet(id, account) {
+  const confirm = h('input', { type: 'email', autocomplete: 'off' });
+  const problem = h('p', { class: 'small', 'aria-live': 'polite' });
+  const sh = sheet(
+    h('h2', {}, `Delete ${account.name}`),
+    h('p', {}, 'This permanently deletes the coach’s account, exercises, programs, profile and directory entry. A coach who still has clients can’t be deleted; suspend them instead.'),
+    field(`Type ${account.email} to confirm`, confirm),
+    problem,
+    h('button', {
+      class: 'danger block',
+      onclick: (e) => busy(e.currentTarget, async () => {
+        try {
+          await api('DELETE', `/admin/coaches/${encodeURIComponent(id)}`, { confirm: confirm.value });
+        } catch (err) {
+          problem.textContent = err.status === 400 ? 'That isn’t this coach’s email address.' : err.body?.current?.message || err.message;
+          return;
+        }
+        sh.close();
+        toast('Coach account deleted');
+        renderAdmin();
+      }),
+    }, 'Delete permanently'),
+    h('button', { class: 'ghost block', onclick: () => sh.close() }, 'Cancel'),
   );
 }
 

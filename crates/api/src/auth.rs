@@ -70,6 +70,9 @@ impl FromRequestParts<AppState> for Ctx {
             .get(&format!("USER#{}", caller.sub), "PROFILE")
             .await?
             .ok_or(ApiError::Forbidden("onboarding required"))?;
+        if profile.suspended_at.is_some() {
+            return Err(ApiError::Forbidden("this account is suspended; contact PT Coach support"));
+        }
         Ok(Ctx { caller, profile })
     }
 }

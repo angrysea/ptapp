@@ -1,6 +1,6 @@
 use axum::extract::State;
 use axum::Json;
-use chrono::NaiveDate;
+use chrono::{NaiveDate, Utc};
 use ptcore::model::{valid_time_zone, Profile, Role, Sex, UnitSystem};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -48,6 +48,17 @@ pub struct UpdateMe {
     birth_date: Option<NaiveDate>,
     business_name: Option<String>,
     time_zone: Option<String>,
+}
+
+/// `POST /me/consent`: an account made before the data agreement existed
+/// agrees to it (the app asks once, on sign-in).
+pub async fn consent(State(st): State<AppState>, ctx: Ctx) -> ApiResult<Json<Profile>> {
+    let mut p = ctx.profile;
+    if p.consented_at.is_none() {
+        p.consented_at = Some(Utc::now());
+        st.store.put(&format!("USER#{}", p.user_id), "PROFILE", &p).await?;
+    }
+    Ok(Json(p))
 }
 
 pub async fn update_me(State(st): State<AppState>, ctx: Ctx, Json(body): Json<UpdateMe>) -> ApiResult<Json<Profile>> {

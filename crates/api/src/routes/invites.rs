@@ -153,6 +153,9 @@ pub async fn peek(State(st): State<AppState>, _caller: Caller, Path(code): Path<
 #[serde(rename_all = "camelCase")]
 pub struct Accept {
     name: Option<String>,
+    /// The person ticked "I agree" to how their data is used (privacy NFR).
+    #[serde(default)]
+    consent: bool,
 }
 
 fn build<T, E: std::fmt::Display>(r: Result<T, E>) -> ApiResult<T> {
@@ -165,6 +168,9 @@ pub async fn accept(
     Path(code): Path<String>,
     Json(body): Json<Accept>,
 ) -> ApiResult<Json<Profile>> {
+    if !body.consent {
+        return Err(bad_request("agree to how your data is used to create your account"));
+    }
     let inv = open_invite(&st, &code).await?;
     // The code alone is not enough: a forwarded or leaked link must not let
     // someone else join as this client or coach.
@@ -197,6 +203,8 @@ pub async fn accept(
         birth_date: None,
         business_name: None,
         time_zone: None,
+        consented_at: Some(now),
+        suspended_at: None,
         created_at: now,
     };
     // The new member's entry in the sender's list: the coach's roster or the
@@ -207,7 +215,7 @@ pub async fn accept(
             keyed(&listing_pk(&inv), &format!("CLIENT#{}", caller.sub), &roster)?
         }
         InviteKind::Coach => {
-            let entry = CoachEntry { coach_id: caller.sub.clone(), name, email: profile.email.clone(), joined_at: now };
+            let entry = CoachEntry { coach_id: caller.sub.clone(), name, email: profile.email.clone(), joined_at: now, suspended_at: None };
             keyed(&listing_pk(&inv), &format!("COACH#{}", caller.sub), &entry)?
         }
     };

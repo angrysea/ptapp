@@ -30,7 +30,7 @@ Status legend: ✅ done in MVP · 🟡 partial · ⬜ not started
 | Body metrics | BM-1 ✅ · BM-2 ✅ · BM-3 ✅ · BM-4 ✅ · BM-7 ✅ · BM-8 ✅ | BM-5 ✅ · BM-6 ⬜ |
 | Messaging | MS-1 ✅ (live via AppSync Events, polling fallback; coach inbox; text only) · MS-2 ✅ (Web Push; iPhone needs the Home Screen app) | MS-3 🟡 (comments anchor to log/set) · MS-4 ⬜ · MS-5 ⬜ · MS-6 ⬜ |
 | Business | BZ-1 ⬜ | BZ-2 ⬜ · BZ-3 ⬜ · BZ-4 ⬜ · BZ-5 ⬜ · BZ-6 ⬜ |
-| NFRs | privacy ✅ (private photos, tenant checks, per-user offline cache) · audit log ✅ · offline ✅ · upload size limits ✅ · CI ✅ (tests on every push; deploys run locally) · backups ✅ (PITR; restore tested 2026-10-28, see DEPLOY.md) · MFA 🟡 (Cognito TOTP optional; in-app enrollment needs the user.admin scope, removed for safety) · alarms ✅ (email) · export/delete ✅ (clients, self-service; coaches via admin) · video retention ✅ (lifecycle on reviewed videos and replies) | |
+| NFRs | privacy ✅ (private photos, tenant checks, per-user offline cache, data agreement at sign-up) · audit log ✅ · offline ✅ · upload size limits ✅ · CI ✅ (tests on every push; deploys run locally) · backups ✅ (PITR + daily AWS Backup, 35 days; restore tested 2026-10-28, see DEPLOY.md) · MFA ⏸ (deferred by decision, 2026-10-28) · alarms ✅ (email) · export/delete ✅ (clients, self-service; admins suspend or delete coaches) · video retention ✅ (lifecycle on reviewed videos and replies) | |
 
 ---
 
@@ -87,15 +87,15 @@ Use the server-side render approach from the BRD: the browser records an **edit 
 
 ### 5. MVP hardening (NFRs)
 
-* **ON-1 email:** SES with a verified domain; `POST /invites` sends the templated email, and the mailto fallback stays.
+* ✅ **ON-1 email:** done. SES (production access) emails coach and client invitations, with Resend; the share-a-link fallback stays.
 * **Coach MFA:** add a Cognito **pre-token-generation** Lambda that adds `role`. The API then rejects coach routes unless the token's `amr` claim includes `mfa`, and the PWA links to the hosted UI's TOTP setup. Alternatively, use separate coach and client user pools, with `MfaConfiguration: ON` for the coach pool.
-* **Privacy export & delete (privacy NFR):** `POST /me/export` → an async job (SQS) that queries `CLIENT#{id}`, zips JSON + CSV + media into S3 and emails a presigned link; `DELETE /me` → deletes partition items in batches, the S3 prefix `media/{coach}/{client}/` and the Cognito user, and writes a tombstone audit record. Add an explicit consent checkbox at signup (privacy NFR), stored on the profile with a timestamp.
+* ✅ **Privacy export, delete and consent (privacy NFR):** done (routes/account.rs). Clients download everything as JSON with 15-minute file links (`GET /me/export`) and delete their own account (`DELETE /me/account`). Accepting an invitation requires agreeing to how data is used (`Profile.consentedAt`); accounts from before the agreement are asked once on sign-in (`POST /me/consent`). Admins suspend coaches (`PUT /admin/coaches/{id}/suspended`: API refused, Cognito sign-in disabled, out of the directory, push subscriptions dropped) and delete coaches with no clients left (`DELETE /admin/coaches/{id}`). Still open: a way to move or remove a coach's clients, so a coach with clients can be deleted.
 * ✅ **Upload size limits:** done. Presigned PUTs are signed for an exact, capped size (15 MB photos, 250 MB demo videos), so S3 refuses anything else; no post-upload check is needed. Video parts (section 1) should do the same per part.
-* **Observability:** CloudWatch alarms on Lambda errors/throttles, HTTP API 5xx, and DLQ depth → SNS email. Use structured `tracing` JSON logs (already in place). Worth doing before the first real users, ahead of the video work.
-* **Backups:** an AWS Backup plan (daily, 35 days) and a scripted quarterly restore test into a scratch table.
+* ✅ **Observability:** done. CloudWatch alarms on Lambda errors/throttles and HTTP API 5xx → SNS email (`ALARM_EMAIL`); structured `tracing` logs.
+* ✅ **Backups:** done. PITR plus an AWS Backup plan (daily at 08:00 UTC, kept 35 days, in a retained vault); restore tested (DEPLOY.md). Repeat the restore test quarterly.
 * ✅ **CI/CD:** done. `.github/workflows/ci.yml` runs clippy (`-D warnings`), unit tests, `cfn-lint`, a web syntax check, the e2e test with moto as a service container and the Playwright journey on every push and pull request. Deploys run locally with `scripts/deploy.sh`: the AWS Organization blocks the OIDC provider a GitHub deploy would need. Revisit if its admin allows one (the removed deploy job and role template are in git history).
-* ✅ **Coach signups:** done. Invitation only: an admin (bootstrapped from `ADMIN_EMAILS`) emails a coach an invitation tied to their address (SES, from `INVITE_FROM`); the link opens the app's sign-up page with the email filled in and stops working once used. The open coach request was removed. Still open: SES production access and the domain's DKIM records (DEPLOY.md), emailing client invitations the same way, and suspending a coach.
-* **Photo list:** `GET /photos` still checks S3 once per photo on every load. Move photos to the upload + confirm pattern the exercise demos use, which also lets the pending-tag lifecycle rule clean up abandoned photo uploads.
+* ✅ **Coach signups:** done. Invitation only: an admin (bootstrapped from `ADMIN_EMAILS`) emails a coach an invitation tied to their address (SES, from `INVITE_FROM`); the link opens the app's sign-up page with the email filled in and stops working once used. The open coach request was removed. Client invitations are emailed the same way, and admins can suspend or delete a coach.
+* ✅ **Photo list:** done. Photos upload tagged pending and are confirmed (`POST .../photos/{id}/confirm`), so listing makes no S3 calls and the lifecycle rule removes abandoned uploads.
 
 **Phase 1 exit gate (BRD):** clients log at least 80% of assigned workouts for 4 weeks, which the dashboard's adherence % measures directly; coach video review takes under 5 minutes.
 

@@ -109,9 +109,12 @@ async fn full_client_journey() {
     assert_eq!(t.call("POST", &format!("/admin/invites/{coach_code}/resend"), Some("coach1"), None).await.0, StatusCode::FORBIDDEN);
     let (_, peek) = t.call("GET", &format!("/invites/{coach_code}"), Some("coach1"), None).await;
     assert_eq!(peek["kind"], "coach");
-    assert_eq!(t.call("POST", &format!("/invites/{coach_code}/accept"), Some("coach9"), Some(json!({}))).await.0, StatusCode::FORBIDDEN);
-    let (s, p) = t.call("POST", &format!("/invites/{coach_code}/accept"), Some("coach1"), Some(json!({}))).await;
+    assert_eq!(t.call("POST", &format!("/invites/{coach_code}/accept"), Some("coach9"), Some(json!({ "consent": true }))).await.0, StatusCode::FORBIDDEN);
+    // agreeing to how their data is used is part of accepting
+    assert_eq!(t.call("POST", &format!("/invites/{coach_code}/accept"), Some("coach1"), Some(json!({}))).await.0, StatusCode::BAD_REQUEST);
+    let (s, p) = t.call("POST", &format!("/invites/{coach_code}/accept"), Some("coach1"), Some(json!({ "consent": true }))).await;
     assert_eq!(s, StatusCode::OK, "{p}");
+    assert!(p["consentedAt"].is_string(), "{p}");
     assert_eq!(p["role"], "coach");
     assert_eq!(p["coachId"], "coach1");
     assert_eq!(p["name"], "Coach One");
@@ -122,7 +125,7 @@ async fn full_client_journey() {
     assert_eq!(t.call("POST", &format!("/admin/invites/{coach_code}/resend"), Some("admin1"), None).await.0, StatusCode::NOT_FOUND);
     // a second coach the same way
     let (_, ci2) = t.call("POST", "/admin/invites", Some("admin1"), Some(json!({ "email": "coach2@dev.local", "name": "Coach Two" }))).await;
-    let (s, c2) = t.call("POST", &format!("/invites/{}/accept", ci2["code"].as_str().unwrap()), Some("coach2"), Some(json!({}))).await;
+    let (s, c2) = t.call("POST", &format!("/invites/{}/accept", ci2["code"].as_str().unwrap()), Some("coach2"), Some(json!({ "consent": true }))).await;
     assert_eq!(s, StatusCode::OK, "{c2}");
     assert_eq!(c2["role"], "coach");
     let (_, coaches) = t.call("GET", "/admin/coaches", Some("admin1"), None).await;
@@ -232,8 +235,8 @@ async fn full_client_journey() {
     assert_eq!(s, StatusCode::OK);
     assert_eq!(peek["coachName"], "Coach One");
     // only the invited address can accept (dev users are {id}@dev.local)
-    assert_eq!(t.call("POST", &format!("/invites/{code}/accept"), Some("client2"), Some(json!({}))).await.0, StatusCode::FORBIDDEN);
-    let (s, cp) = t.call("POST", &format!("/invites/{code}/accept"), Some("client1"), Some(json!({}))).await;
+    assert_eq!(t.call("POST", &format!("/invites/{code}/accept"), Some("client2"), Some(json!({ "consent": true }))).await.0, StatusCode::FORBIDDEN);
+    let (s, cp) = t.call("POST", &format!("/invites/{code}/accept"), Some("client1"), Some(json!({ "consent": true }))).await;
     assert_eq!(s, StatusCode::OK, "{cp}");
     assert_eq!(cp["role"], "client");
     assert_eq!(cp["coachId"], "coach1");
@@ -241,7 +244,7 @@ async fn full_client_journey() {
     let (_, me) = t.call("GET", "/me", Some("client1"), None).await;
     assert_eq!(me["coach"]["name"], "Coach One");
     // single use
-    assert_eq!(t.call("POST", &format!("/invites/{code}/accept"), Some("client2"), Some(json!({}))).await.0, StatusCode::NOT_FOUND);
+    assert_eq!(t.call("POST", &format!("/invites/{code}/accept"), Some("client2"), Some(json!({ "consent": true }))).await.0, StatusCode::NOT_FOUND);
     let (_, pending) = t.call("GET", "/invites", Some("coach1"), None).await;
     assert_eq!(pending.as_array().unwrap().len(), 0);
 
@@ -441,7 +444,11 @@ async fn full_client_journey() {
         .await;
     assert_eq!(s, StatusCode::OK, "{ph}");
     assert!(ph["photo"]["key"].as_str().unwrap().starts_with("media/coach1/client1/photos/"));
-    // stand in for the browser's presigned PUT; listing drops records with no object
+    let confirm_path = format!("/clients/client1/photos/{}/confirm", ph["photo"]["id"].as_str().unwrap());
+    // nothing uploaded yet: not confirmable, and not listed
+    assert_eq!(t.call("POST", &confirm_path, Some("client1"), Some(json!({}))).await.0, StatusCode::BAD_REQUEST);
+    assert_eq!(t.call("GET", "/clients/client1/photos", Some("client1"), None).await.1, json!([]));
+    // stand in for the browser's presigned PUT, then confirm it
     s3.put_object()
         .bucket(std::env::var("MEDIA_BUCKET").unwrap())
         .key(ph["photo"]["key"].as_str().unwrap())
@@ -449,6 +456,9 @@ async fn full_client_journey() {
         .send()
         .await
         .unwrap();
+    let (s, confirmed) = t.call("POST", &confirm_path, Some("client1"), Some(json!({}))).await;
+    assert_eq!(s, StatusCode::OK, "{confirmed}");
+    assert!(confirmed.get("pending").is_none());
     let (_, photos) = t.call("GET", "/clients/client1/photos", Some("coach1"), None).await;
     assert!(photos[0]["url"].as_str().unwrap().contains("X-Amz-Signature"));
     assert_eq!(photos[0]["takenBy"], "client");
@@ -835,7 +845,7 @@ async fn full_client_journey() {
     // --- a client exports their data, then deletes their account (privacy NFR)
     let (_, inv3) = t.call("POST", "/invites", Some("coach1"), Some(json!({ "email": "client3@dev.local", "clientName": "Three" }))).await;
     let code3 = inv3["code"].as_str().unwrap();
-    assert_eq!(t.call("POST", &format!("/invites/{code3}/accept"), Some("client3"), Some(json!({}))).await.0, StatusCode::OK);
+    assert_eq!(t.call("POST", &format!("/invites/{code3}/accept"), Some("client3"), Some(json!({ "consent": true }))).await.0, StatusCode::OK);
     t.call("POST", "/clients/client3/comments", Some("client3"), Some(json!({ "text": "Hello coach" }))).await;
     let (_, ph) = t
         .call("POST", "/clients/client3/photos", Some("client3"), Some(json!({ "date": "2026-10-01", "pose": "front", "contentType": "image/jpeg", "size": 4 })))
@@ -871,4 +881,45 @@ async fn full_client_journey() {
     assert!(!roster.as_array().unwrap().iter().any(|r| r["client"]["clientId"] == "client3"), "off the roster");
     let (_, inbox) = t.call("GET", "/messages", Some("coach1"), None).await;
     assert!(!inbox["threads"].as_array().unwrap().iter().any(|r| r["clientId"] == "client3"), "out of the inbox");
+
+    // --- consent for accounts made before the agreement: idempotent
+    let (s, c) = t.call("POST", "/me/consent", Some("coach1"), Some(json!({}))).await;
+    assert_eq!(s, StatusCode::OK, "{c}");
+    assert_eq!(c["consentedAt"], p["consentedAt"], "the first agreement's time is kept");
+
+    // --- admin: suspend a coach, then lift it
+    let suspend = |on: bool| json!({ "suspended": on });
+    assert_eq!(t.call("PUT", "/admin/coaches/coach2/suspended", Some("coach1"), Some(suspend(true))).await.0, StatusCode::FORBIDDEN);
+    assert_eq!(t.call("PUT", "/admin/coaches/nobody/suspended", Some("admin1"), Some(suspend(true))).await.0, StatusCode::NOT_FOUND);
+    let (s, r) = t.call("PUT", "/admin/coaches/coach2/suspended", Some("admin1"), Some(suspend(true))).await;
+    assert_eq!(s, StatusCode::OK, "{r}");
+    assert_eq!(t.call("GET", "/clients", Some("coach2"), None).await.0, StatusCode::FORBIDDEN, "a suspended coach can't use the API");
+    assert!(t.call("GET", "/me", Some("coach2"), None).await.1["profile"]["suspendedAt"].is_string(), "but the app can tell them why");
+    let (_, coaches) = t.call("GET", "/admin/coaches", Some("admin1"), None).await;
+    assert!(coaches.as_array().unwrap().iter().any(|c| c["coachId"] == "coach2" && c["suspendedAt"].is_string()));
+    t.call("PUT", "/admin/coaches/coach2/suspended", Some("admin1"), Some(suspend(false))).await;
+    assert_eq!(t.call("GET", "/clients", Some("coach2"), None).await.0, StatusCode::OK);
+    assert!(t.call("GET", "/me", Some("coach2"), None).await.1["profile"].get("suspendedAt").is_none());
+
+    // --- admin: delete a coach; one with clients is refused
+    let confirm = |email: &str| json!({ "confirm": email });
+    let (s, busy) = t.call("DELETE", "/admin/coaches/coach1", Some("admin1"), Some(confirm("coach1@dev.local"))).await;
+    assert_eq!(s, StatusCode::CONFLICT, "{busy}");
+    assert!(busy["current"]["clients"].as_u64().unwrap() > 0);
+    assert_eq!(t.call("DELETE", "/admin/coaches/coach2", Some("coach1"), Some(confirm("coach2@dev.local"))).await.0, StatusCode::FORBIDDEN);
+    assert_eq!(t.call("DELETE", "/admin/coaches/coach2", Some("admin1"), Some(confirm("coach1@dev.local"))).await.0, StatusCode::BAD_REQUEST);
+    let (s, d) = t.call("DELETE", "/admin/coaches/coach2", Some("admin1"), Some(confirm("Coach2@dev.local"))).await;
+    assert_eq!(s, StatusCode::OK, "{d}");
+    assert_eq!(t.call("GET", "/me", Some("coach2"), None).await.1["profile"], Value::Null);
+    let (_, coaches) = t.call("GET", "/admin/coaches", Some("admin1"), None).await;
+    assert!(!coaches.as_array().unwrap().iter().any(|c| c["coachId"] == "coach2"), "off the admin's list");
+    let left = ddb
+        .query()
+        .table_name(&table)
+        .key_condition_expression("pk = :pk")
+        .expression_attribute_values(":pk", aws_sdk_dynamodb::types::AttributeValue::S("COACH#coach2".into()))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(left.count(), 0, "the coach's records are gone");
 }

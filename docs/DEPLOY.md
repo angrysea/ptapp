@@ -53,7 +53,7 @@ Deploys run from a developer machine, not from GitHub. (The AWS Organization thi
 
   The Cognito sign-in page keeps its `*.amazoncognito.com` address; giving it its own (e.g. `auth.gymtxcoach.com`) needs another us-east-1 certificate.
 * **Production stage.** Use `STAGE=prod`, a different domain prefix and a separate AWS account if you can. The table and media bucket have `DeletionPolicy: Retain`.
-* **Backups.** PITR gives 35 days of restore points (BRD reliability NFR). Restoring makes a *new* table, which the stack then has to point at (`TABLE_NAME`); the media bucket isn't covered (S3 versioning would be).
+* **Backups.** PITR gives 35 days of restore points (BRD reliability NFR), and an AWS Backup plan also takes a daily snapshot at 08:00 UTC into the `ptapp-{stage}` vault, kept 35 days; the vault is retained if the stack is deleted, so the snapshots outlive the table. Restore one from the AWS Backup console (Protected resources → the table → Restore). Restoring makes a *new* table, which the stack then has to point at (`TABLE_NAME`); the media bucket isn't covered (S3 versioning would be).
   * **Restore test (2026-10-28, dev):**
     * **Restore:** `aws dynamodb restore-table-to-point-in-time --source-table-name ptapp-dev --target-table-name ptapp-dev-restore-test --use-latest-restorable-time --billing-mode-override PAY_PER_REQUEST` took **183 s** to become ACTIVE.
     * **Contents:** the restore had 150 items, against 162 in the live table when counted. The latest restorable point is a few minutes old, so the 12 were writes made since. A known program came back intact.

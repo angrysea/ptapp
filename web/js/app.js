@@ -10,6 +10,7 @@ import { $app, errorToast, h, mount, toast } from './ui.js';
 import { renderAdmin } from './views/admin.js';
 import { renderClient, renderRoster } from './views/coach.js';
 import { renderCoachSetup } from './views/coachprofile.js';
+import { renderConsent, renderSuspended } from './views/consent.js';
 import { renderCoachPage, renderDirectory } from './views/directory.js';
 import { refreshMessageBadge, renderInbox } from './views/messages.js';
 import { renderReview } from './views/review.js';
@@ -101,6 +102,9 @@ async function boot() {
   const invite = location.hash.match(/^#\/join\/([A-Za-z0-9]+)/);
   if (invite && await renderInviteSignedIn(invite[1].toUpperCase(), me)) return;
   if (!me.profile) return renderOnboarding(me);
+  if (me.profile.suspendedAt) return renderSuspended();
+  // Accounts made before the data agreement existed agree to it once.
+  if (me.profile.role !== 'admin' && !me.profile.consentedAt) return renderConsent(me, () => location.reload());
   session.profile = me.profile;
   // The header carries the coach's brand, for the coach and their clients alike.
   const brand = session.isCoach ? me.profile : me.coach;
