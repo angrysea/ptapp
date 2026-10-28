@@ -25,7 +25,7 @@ Phase 2 of `docs/ROADMAP.md`: make a coach fast enough to handle 30+ clients. It
 - [ ] e2e + journey green; deployed; the 12-week block re-entered with %1RM loads
 
 ### Slice B: coach speed
-- [ ] B1 FB-4 saved reply snippets (comment box, video reply, `/` shortcut)
+- [x] B1 FB-4 saved reply snippets (comment box, video reply, `/` shortcut)
 - [ ] B2 MS-3 deep links: messages that reference a workout, set or video
 - [ ] B3 VS-5 filming guidance per exercise, shown before the camera opens
 - [ ] B4 LG-7 alert inbox: pain flags and missed workouts

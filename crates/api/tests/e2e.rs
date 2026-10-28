@@ -1038,4 +1038,21 @@ async fn full_client_journey() {
     assert_eq!(find(&ws, "P2")["workout"]["blocks"][0]["items"][0]["loadKg"], 62.5, "the next workout now has the new load");
     assert_eq!(t.call("POST", &format!("/suggestions/{sid}/accept"), Some("coach1"), Some(json!({}))).await.0, StatusCode::BAD_REQUEST, "already handled");
     assert_eq!(t.call("GET", "/suggestions", Some("coach1"), None).await.1, json!([]));
+
+    // --- saved reply snippets (FB-4)
+    assert_eq!(t.call("GET", "/snippets", Some("client1"), None).await.0, StatusCode::FORBIDDEN);
+    assert_eq!(t.call("POST", "/snippets", Some("coach1"), Some(json!({ "title": " ", "text": "x" }))).await.0, StatusCode::BAD_REQUEST);
+    let (s, sn) = t.call("POST", "/snippets", Some("coach1"), Some(json!({ "title": "Depth", "text": "  Great depth, {name}!  " }))).await;
+    assert_eq!(s, StatusCode::OK, "{sn}");
+    assert_eq!(sn["text"], "Great depth, {name}!");
+    t.call("POST", "/snippets", Some("coach1"), Some(json!({ "title": "brace", "text": "Big breath and brace before each rep." }))).await;
+    let sn_path = format!("/snippets/{}", sn["id"].as_str().unwrap());
+    let (s, up) = t.call("PUT", &sn_path, Some("coach1"), Some(json!({ "title": "Depth", "text": "Hit depth on every rep, {name}." }))).await;
+    assert_eq!(s, StatusCode::OK, "{up}");
+    let (_, all) = t.call("GET", "/snippets", Some("coach1"), None).await;
+    let titles: Vec<&str> = all.as_array().unwrap().iter().map(|s| s["title"].as_str().unwrap()).collect();
+    assert_eq!(titles, ["brace", "Depth"], "by name, ignoring case");
+    assert_eq!(t.call("GET", "/snippets", Some("coach2"), None).await.0, StatusCode::FORBIDDEN, "coach2 was deleted above");
+    assert_eq!(t.call("DELETE", &sn_path, Some("coach1"), None).await.0, StatusCode::OK);
+    assert_eq!(t.call("DELETE", &sn_path, Some("coach1"), None).await.0, StatusCode::NOT_FOUND);
 }

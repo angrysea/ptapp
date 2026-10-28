@@ -12,6 +12,7 @@ import { go } from '../router.js';
 import { $app, busy, fmtDateTime, h, mount, toast } from '../ui.js';
 import { queueReply } from '../uploads.js';
 import { askBeforeCellular } from '../videos.js';
+import { snippetTools } from './snippets.js';
 
 const MAX_REPLY_S = 300;
 const FRAME = 1 / 30; // the clip's frame rate isn't exposed; 30 fps is the phones' default
@@ -218,13 +219,15 @@ export async function renderReview(cid, vid) {
   }
 
   const note = h('textarea', { placeholder: 'A note to go with it (optional)', 'aria-label': 'Note', maxlength: 4000 });
+  const noteSnippets = snippetTools(note, cid);
   function showTake() {
     const url = URL.createObjectURL(take.blob);
     mount(result,
       h('h3', {}, `Your reply · ${fmt(take.seconds)}`),
       h('video', { src: url, controls: true, playsinline: true, class: 'player' }),
-      note,
+      noteSnippets.field,
       h('div', { class: 'row', style: 'margin-top:8px' },
+        noteSnippets.button,
         h('button', { class: 'ghost', onclick: () => { take = null; URL.revokeObjectURL(url); mount(result); recBtn.textContent = '● Record reply'; } }, 'Discard'),
         h('button', { class: 'primary grow', onclick: (e) => busy(e.currentTarget, sendTake) }, 'Send reply')));
   }
@@ -240,6 +243,7 @@ export async function renderReview(cid, vid) {
   }
 
   const written = h('textarea', { placeholder: 'Write a reply instead', 'aria-label': 'Written reply', maxlength: 4000 });
+  const writtenSnippets = snippetTools(written, cid);
   async function sendWritten() {
     if (!written.value.trim()) return toast('Write something first');
     await post(`/clients/${cid}/videos/${vid}/replies`, { note: written.value, reviewMs: Date.now() - opened });
@@ -303,8 +307,10 @@ export async function renderReview(cid, vid) {
       result),
     h('div', { class: 'card' },
       h('h3', {}, 'Written reply'),
-      written,
-      h('button', { class: 'block', style: 'margin-top:8px', onclick: (e) => busy(e.currentTarget, sendWritten) }, 'Send written reply')),
+      writtenSnippets.field,
+      h('div', { class: 'row', style: 'margin-top:8px' },
+        writtenSnippets.button,
+        h('button', { class: 'grow', onclick: (e) => busy(e.currentTarget, sendWritten) }, 'Send written reply'))),
   );
   requestAnimationFrame(frame);
 }

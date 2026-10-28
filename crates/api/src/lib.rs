@@ -98,6 +98,8 @@ pub fn router(state: AppState) -> Router {
         .route("/clients/{cid}/attachments", post(comments::attachment))
         .route("/clients/{cid}/messages/read", post(messages::mark_read))
         .route("/messages", get(messages::inbox))
+        .route("/snippets", get(snippets::list).post(snippets::create))
+        .route("/snippets/{id}", put(snippets::update).delete(snippets::remove))
         .route("/suggestions", get(suggestions::list))
         .route("/suggestions/{id}/accept", post(suggestions::accept))
         .route("/suggestions/{id}/dismiss", post(suggestions::dismiss))

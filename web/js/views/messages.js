@@ -7,6 +7,7 @@ import { get, post } from '../api.js';
 import { onLive } from '../realtime.js';
 import { session } from '../session.js';
 import { $app, busy, fmtDateTime, h, mount, toast } from '../ui.js';
+import { snippetTools } from './snippets.js';
 
 const ONLY_NEW = 'pt.messages.onlyNew';
 
@@ -68,6 +69,7 @@ export async function renderInbox() {
     const replying = open.has(t.clientId);
     const reply = h('textarea', { placeholder: `Reply to ${t.clientName}…`, 'aria-label': `Reply to ${t.clientName}`, 'data-cid': t.clientId, value: drafts[t.clientId] || '' });
     reply.addEventListener('input', () => { drafts[t.clientId] = reply.value; });
+    const snippets = snippetTools(reply, t.clientId);
     const send = h('button', {
       class: 'primary',
       onclick: (e) => busy(e.currentTarget, async () => {
@@ -93,7 +95,8 @@ export async function renderInbox() {
           m.text && m.attachment && h('div', { class: 'small muted' }, m.attachment.kind === 'voice' ? '🎤 with a voice note' : '📷 with a photo')))
         : last || h('p', { class: 'small muted' }, 'No messages yet.'),
       replying
-        ? h('div', {}, reply, h('div', { class: 'row', style: 'margin-top:8px' },
+        ? h('div', {}, snippets.field, h('div', { class: 'row', style: 'margin-top:8px' },
+          snippets.button,
           h('button', { class: 'ghost', onclick: () => { open.delete(t.clientId); draw(); } }, 'Cancel'),
           send,
           t.unread > 0 && h('button', {

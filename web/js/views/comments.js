@@ -8,6 +8,7 @@ import { session } from '../session.js';
 import { busy, fmtDateTime, h, mount, sheet, shrinkImage, toast } from '../ui.js';
 import { playReply } from '../videos.js';
 import { markRead } from './messages.js';
+import { snippetTools } from './snippets.js';
 import { dismissPrompt, enable as pushOn, prefetchKey, shouldPrompt } from '../push.js';
 
 /** Offers notifications once (until dismissed) where replies are awaited. */
@@ -155,15 +156,17 @@ export async function renderThread(el, clientId, logsById = {}) {
     voiceBtn.textContent = '■ Stop 0:00';
   }
   const canVoice = typeof MediaRecorder === 'function' && !!navigator.mediaDevices?.getUserMedia;
+  const snippets = session.isCoach ? snippetTools(text, clientId) : { field: text, button: null };
 
   mount(el,
     await pushPrompt(session.isCoach ? 'your client' : 'your coach'),
     listEl,
-    h('div', { class: 'card' }, text,
+    h('div', { class: 'card' }, snippets.field,
       pending,
       h('div', { class: 'row', style: 'margin-top:8px' },
         photoBtn, photoPick,
         canVoice && voiceBtn,
+        snippets.button,
         h('button', {
           class: 'primary grow',
           onclick: (e) => busy(e.currentTarget, async () => {
@@ -181,9 +184,29 @@ export async function renderThread(el, clientId, logsById = {}) {
 }
 
 /** Prompt for a comment anchored to a workout log or one set in it. */
-export async function commentOn(clientId, logId, setIndex, itemId) {
-  const t = prompt(setIndex != null ? `Comment on set ${setIndex + 1}` : 'Comment on this workout');
-  if (!t?.trim()) return false;
-  await post(`/clients/${clientId}/comments`, { text: t, logId, setIndex: setIndex ?? null, itemId: itemId ?? null });
-  return true;
+/** A coach's comment on a workout or one of its sets. Resolves true once sent. */
+export function commentOn(clientId, logId, setIndex, itemId) {
+  return new Promise((resolve) => {
+    const text = h('textarea', { placeholder: 'Your comment', 'aria-label': 'Comment', style: 'min-height:90px', maxlength: 4000 });
+    const snippets = snippetTools(text, clientId);
+    let sent = false;
+    const sh = sheet(
+      h('h2', {}, setIndex != null ? `Comment on set ${setIndex + 1}` : 'Comment on this workout'),
+      snippets.field,
+      h('div', { class: 'row', style: 'margin-top:8px' },
+        snippets.button,
+        h('button', { class: 'ghost grow', onclick: () => sh.close() }, 'Cancel'),
+        h('button', {
+          class: 'primary grow',
+          onclick: (e) => busy(e.currentTarget, async () => {
+            if (!text.value.trim()) return;
+            await post(`/clients/${clientId}/comments`, { text: text.value, logId, setIndex: setIndex ?? null, itemId: itemId ?? null });
+            sent = true;
+            sh.close();
+          }),
+        }, 'Send')),
+    );
+    sh.onClose = () => resolve(sent);
+    text.focus();
+  });
 }

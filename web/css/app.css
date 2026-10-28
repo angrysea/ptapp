@@ -319,3 +319,13 @@ button.reply.new { background: var(--accent); color: var(--accent-ink); }
 .suggestion { padding: 10px 0; border-bottom: 1px solid var(--line); }
 .suggestion:last-child { border-bottom: 0; }
 .suggestion input { width: 6em; }
+
+/* Saved reply snippets (views/snippets.js). */
+.snippet-wrap { position: relative; }
+.snippet-wrap textarea { width: 100%; }
+.snippet-pop { position: absolute; left: 0; right: 0; top: 100%; z-index: 20; background: var(--card, var(--bg)); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 6px 20px rgb(0 0 0 / 0.15); overflow: hidden; }
+.snippet-opt { padding: 10px 12px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-height: var(--tap); box-sizing: border-box; }
+.snippet-opt.on, .snippet-opt:hover { background: var(--accent-soft); }
+.snippet-list { max-height: 50vh; overflow-y: auto; margin: 8px 0; }
+.snippet-row { display: flex; gap: 6px; align-items: flex-start; border-bottom: 1px solid var(--line); }
+.snippet-use { flex: 1; text-align: left; background: none; border: 0; padding: 10px 0; white-space: normal; }

@@ -14,6 +14,7 @@ pub mod notify;
 pub mod programs;
 pub mod records;
 pub mod replies;
+pub mod snippets;
 pub mod suggestions;
 pub mod training;
 pub mod videos;
