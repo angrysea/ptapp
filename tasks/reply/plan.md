@@ -20,6 +20,30 @@ The video submission plan (`tasks/plan.md`, `tasks/todo.md`) still has real-devi
 - **Browsers:** some can be required or blocked. Firefox (WebM-only recording) is blocked for recording replies, with a message naming Chrome, Edge or Safari.
 - **Captions:** no answer; deferred as proposed (decision 7).
 
+## Spike results (2026-10-28, Task 1)
+
+The human ran `web/spikes/reply.html` as a coach on a Windows PC in Chrome 156 with a real client set video from dev:
+
+| Check | Result |
+|---|---|
+| Canvas tainted by the S3 clip | No: `crossorigin="anonymous"` plus the bucket's CORS works |
+| Recorded format | `video/mp4;codecs=avc1.42001f,mp4a.40.2` (H.264 Baseline + AAC), which iPhones play |
+| 720×1280 clip, 7.7 s recording | 1.36 MB at 2.5 Mbps; previews and plays |
+| Canvas draws | 120/s (the monitor's refresh rate), so the 30 fps capture is steady |
+
+**Decision 1 confirmed:** record in the browser. Replies record at about 1.6 Mbps (a 5-minute reply is about 60 MB). Still to check by hand: a reply played on the human's iPhone, and recording on Safari (Mac or iPad).
+
+## Built (2026-10-28)
+
+Tasks 2-8 in one pass:
+- **Review screen:** `web/js/views/review.js`.
+- **Replies API:** `crates/api/src/routes/replies.rs`, sharing the multipart helpers in `routes/videos.rs`.
+- **Upload manager:** `uploads.js` gains `kind: 'reply'`.
+- **Where replies show:** the client plays them from the set (`workout.js`) and from Messages (`comments.js`).
+- **Sending** marks the video reviewed, tags the reply for retention, and posts a thread message that carries the reply. Deleting a set video deletes its replies.
+- **Review time** (queue opened to sent) is stored on each reply as `reviewMs`.
+- **Tests:** e2e covers the API; the journey records a reply with a fake microphone, sends it, and the client plays it.
+
 ## Architecture Decisions
 
 1. **Record what the coach sees, in the browser, instead of rendering an edit list on the server.** The roadmap plans an edit list (play, pause, seek and rate events against the voice clock) rendered by an ffmpeg Lambda. That needs the container-image Lambda, ECR, SQS and Docker build that the submission work avoided, the infrastructure most likely to hit this AWS organization's policies.

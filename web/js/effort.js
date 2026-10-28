@@ -40,3 +40,6 @@ export const rpeLogInfo = () => infoButton('RPE',
 export const sessionRpeInfo = () => infoButton('Session RPE',
   h('p', {}, 'How hard the whole workout felt, from 1 (very easy) to 10 (as hard as you could possibly go).'),
   h('p', {}, 'Rate it about 30 minutes after you finish if you can, once your breathing has settled. Your coach uses it to see how hard training is overall and to spot when you need an easier week.'));
+
+/** The overall workout rating the client gives (WorkoutLog.rating). */
+export const RATINGS = [[1, 'Bad', '😞'], [2, 'Poor', '🙁'], [3, 'OK', '😐'], [4, 'Good', '🙂'], [5, 'Great', '😄']];

@@ -1,8 +1,11 @@
-// Set-video uploads that survive lost connections, reloads and closed apps
-// (VS-3). A clip is saved on the device first (IndexedDB, with the parts
+// Video uploads that survive lost connections, reloads and closed apps
+// (VS-3): clients' set videos, and coaches' replies to them (VR-2, `kind:
+// 'reply'`). A video is saved on the device first (IndexedDB, with the parts
 // already sent), then uploaded part by part whenever there's a connection;
 // each part's receipt (ETag) is saved as it lands, so a resumed upload starts
-// at the next part. The server side is crates/api/src/routes/videos.rs.
+// at the next part. The server side is crates/api/src/routes/videos.rs and
+// replies.rs. In a record, `videoId` is the id of what's being uploaded (the
+// set video, or the reply); a reply's `replyTo` is the set video it answers.
 
 import { ApiError, post } from './api.js';
 import { uploads } from './idb.js';
@@ -61,6 +64,26 @@ export async function queueVideo({ clientId, logId, set, file, durationSec, trim
   return r.key;
 }
 
+/** Saves a coach's recorded reply to a client's set video for upload and starts sending it. */
+export async function queueReply({ clientId, replyTo, file, durationSec, note, reviewMs, label }) {
+  const owner = session.userId;
+  const r = {
+    key: `${owner}|${crypto.randomUUID()}`, owner, kind: 'reply', clientId, replyTo, label: label || 'Reply',
+    blob: file, contentType: videoType(file), size: file.size, durationSec: durationSec ?? null,
+    note: note || '', reviewMs: reviewMs ?? null, poster: null, posterTarget: null,
+    videoId: null, partSize: null, parts: [], etags: {},
+    state: 'waiting', error: null, attempts: 0, createdAt: new Date().toISOString(),
+  };
+  await save(r);
+  navigator.storage?.persist?.().catch(() => {});
+  notify();
+  kick();
+  return r.key;
+}
+
+/** The API path of the thing being uploaded. */
+const base = (r) => (r.kind === 'reply' ? `/clients/${r.clientId}/replies/${r.videoId}` : `/clients/${r.clientId}/videos/${r.videoId}`);
+
 export async function retryUpload(key) {
   const r = await uploads.get(key);
   if (!r) return;
@@ -83,14 +106,19 @@ function restart(r) {
 }
 
 async function create(r) {
-  const created = await post(`/clients/${r.clientId}/videos`, {
-    logId: r.logId, itemId: r.set.itemId, setIndex: r.set.setIndex, exerciseId: r.set.exerciseId,
-    exerciseName: r.set.exerciseName, contentType: r.contentType, size: r.size, durationSec: r.durationSec,
-    trimStart: r.trim ? r.trim.start : null, trimEnd: r.trim ? r.trim.end : null,
-    posterSize: r.poster ? r.poster.size : null,
-  });
-  r.videoId = created.video.id;
-  r.partSize = created.video.partSize;
+  const created = r.kind === 'reply'
+    ? await post(`/clients/${r.clientId}/videos/${r.replyTo}/replies`, {
+      contentType: r.contentType, size: r.size, durationSec: r.durationSec, note: r.note, reviewMs: r.reviewMs,
+    })
+    : await post(`/clients/${r.clientId}/videos`, {
+      logId: r.logId, itemId: r.set.itemId, setIndex: r.set.setIndex, exerciseId: r.set.exerciseId,
+      exerciseName: r.set.exerciseName, contentType: r.contentType, size: r.size, durationSec: r.durationSec,
+      trimStart: r.trim ? r.trim.start : null, trimEnd: r.trim ? r.trim.end : null,
+      posterSize: r.poster ? r.poster.size : null,
+    });
+  const made = created.video || created.reply;
+  r.videoId = made.id;
+  r.partSize = made.partSize;
   r.parts = created.parts.map((p) => ({ n: p.n, size: p.size }));
   r.etags = {};
   r.posterTarget = created.poster ? { ...created.poster, at: Date.now() } : null;
@@ -99,7 +127,7 @@ async function create(r) {
 }
 
 async function freshUrls(r, numbers) {
-  const res = await post(`/clients/${r.clientId}/videos/${r.videoId}/parts`, { parts: numbers });
+  const res = await post(`${base(r)}/parts`, { parts: numbers });
   return Object.fromEntries(res.parts.map((p) => [p.n, p]));
 }
 
@@ -137,9 +165,9 @@ async function send(r) {
     await fetch(r.posterTarget.url, { method: 'PUT', headers: r.posterTarget.headers, body: r.poster }).catch(() => {});
   }
   try {
-    await post(`/clients/${r.clientId}/videos/${r.videoId}/complete`, { parts: r.parts.map((p) => ({ n: p.n, etag: r.etags[p.n] })) });
+    await post(`${base(r)}/complete`, { parts: r.parts.map((p) => ({ n: p.n, etag: r.etags[p.n] })) });
   } catch (e) {
-    // 400: S3 is missing parts (e.g. the upload was cleaned up); 404: the video record is gone.
+    // 400: S3 is missing parts (e.g. the upload was cleaned up); 404: the record is gone.
     if (e instanceof ApiError && (e.status === 400 || e.status === 404)) {
       restart(r);
       await save(r);

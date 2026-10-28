@@ -51,6 +51,7 @@ When a coach reads intake, waiver, metrics or photos, an `AUDIT#` item is writte
 | `DIRECTORY` | `COACH#{coach}` | public copy of a complete, listed profile (no private fields); the only item the unauthenticated `/public/coaches` routes read |
 | `COACH#{coach}` | `EXERCISE#{id}` | custom exercise (built-ins are compiled into the binary) |
 | `COACH#{coach}` | `PROGRAM#{id}` | whole program document |
+| `COACH#{coach}` | `THREAD#{client}` | message thread summary: last message and each side's unread count; the coach's inbox (`GET /messages`) and both sides' badges read it; a new message also goes to the recipient's AppSync Events inbox channel so open apps refresh |
 | `COACH#{coach}` | `REVIEW#{createdAt}#{video}` | unreviewed set video in the coach's review queue (oldest first); deleted when marked reviewed |
 | `CLIENT#{client}` | `INTAKE` | intake answers |
 | `CLIENT#{client}` | `WAIVER#{rfc3339}` | immutable signature record |

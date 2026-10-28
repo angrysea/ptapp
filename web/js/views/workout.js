@@ -3,16 +3,16 @@
 // in-progress sets are saved as a local draft, and the finished log goes
 // through the outbox with a client-generated id.
 
-import { del, enqueue, get, onSync } from '../api.js';
+import { del, enqueue, get, onSync, post } from '../api.js';
 import { kv } from '../idb.js';
 import { go } from '../router.js';
 import { session } from '../session.js';
 import { blockTimer, restTimer } from '../timer.js';
-import { rpeLogInfo, sessionRpeInfo } from '../effort.js';
+import { RATINGS, rpeLogInfo, sessionRpeInfo } from '../effort.js';
 import { $app, addDays, busy, confirmSheet, field, fmtDate, h, mount, num, select, sheet, toast, todayIso, uid, units } from '../ui.js';
 import { CannotEncode, canEncode, encodeClip } from '../encode.js';
 import { onUploads, pendingUploads, queueVideo, removeUpload, retryUpload } from '../uploads.js';
-import { playVideo } from '../videos.js';
+import { playReply, playVideo } from '../videos.js';
 import { canRecord, recordClip } from './recorder.js';
 import { trimmer } from './trim.js';
 
@@ -175,8 +175,14 @@ export async function renderWorkout(date, schedId) {
 
   // Videos already uploaded for this workout's sets (needs a connection).
   let videos = [];
+  let replies = []; // the coach's replies to them (VR-2)
   const loadVideos = async () => {
-    try { videos = await get(`/clients/${me.userId}/videos?logId=${encodeURIComponent(log.id)}`); } catch { /* offline: none shown */ }
+    try {
+      [videos, replies] = await Promise.all([
+        get(`/clients/${me.userId}/videos?logId=${encodeURIComponent(log.id)}`),
+        get(`/clients/${me.userId}/replies`).catch(() => []),
+      ]);
+    } catch { /* offline: none shown */ }
   };
   await loadVideos();
 
@@ -240,10 +246,22 @@ export async function renderWorkout(date, schedId) {
     const bar = h('div', { class: 'videobar' });
     const draw = () => mount(bar,
       videos.filter((v) => v.itemId === it.id).sort((a, b) => a.setIndex - b.setIndex)
-        .map((v) => h('button', {
+        .map((v) => [h('button', {
           class: 'small',
           onclick: () => { let sh; sh = playVideo(v, deleteVideo(v, () => sh)); },
-        }, `▶ Set ${v.setIndex + 1}`)),
+        }, `▶ Set ${v.setIndex + 1}`),
+        replies.filter((r) => r.videoId === v.id).map((r) => h('button', {
+          class: `small reply ${r.seenAt ? '' : 'new'}`,
+          onclick: () => playReply(r, {
+            title: `Coach’s reply · set ${v.setIndex + 1}`,
+            onPlay: async () => {
+              if (r.seenAt) return;
+              r.seenAt = new Date().toISOString();
+              draw();
+              post(`/clients/${me.userId}/replies/${r.id}/seen`).catch(() => {});
+            },
+          }),
+        }, r.seenAt ? '🎙 Coach reply' : '🎙 Coach reply · new'))]),
       pending.filter((u) => u.set.itemId === it.id).map(uploadChip),
       h('button', { class: 'small ghost', onclick: () => addVideo(it) }, '🎥 Add video'));
     bars.push(Object.assign(draw, { el: bar }));
@@ -380,7 +398,8 @@ export async function renderWorkout(date, schedId) {
           it.notes && h('div', { class: 'small' }, it.notes),
           h('div', { class: 'sethead' }, h('span', {}, 'Set'), h('span', {}, 'Reps'), h('span', {}, u.w), h('span', {}, 'RPE', rpeLogInfo()), h('span', {})),
           setsFor(it.id).map((set) => setRow(set, it, b)),
-          videoBar(it));
+          videoBar(it),
+          exerciseNote(it));
       }));
   }
 
@@ -390,10 +409,36 @@ export async function renderWorkout(date, schedId) {
     h('p', { class: 'muted' }, `${fmtDate(s.date)} · ${s.programName}`, ' ', statusChip(bySched[schedId], s.date)),
     s.workout.notes && h('div', { class: 'card small' }, s.workout.notes),
     s.workout.blocks.map(blockCard),
+    ratingCard(),
     h('div', { class: 'row' },
       h('button', { class: 'grow', onclick: () => finish('skipped') }, 'Skip workout'),
       h('button', { class: 'primary grow', onclick: () => finish(null) }, 'Finish workout')),
   );
+
+  /** The client's note on one exercise, for their coach; kept with the draft. */
+  function exerciseNote(it) {
+    const t = h('textarea', {
+      class: 'exnote', rows: 2, maxlength: 1000, value: log.exerciseNotes?.[it.id] || '',
+      placeholder: 'Note for your coach: how it felt, anything bothering you…', 'aria-label': `Note on ${it.exerciseName}`,
+    });
+    t.addEventListener('input', () => {
+      const notes = (log.exerciseNotes ||= {});
+      if (t.value.trim()) notes[it.id] = t.value; else delete notes[it.id];
+      saveDraft();
+    });
+    return t;
+  }
+
+  /** How the workout went overall, 1 (bad) to 5 (great); tap again to clear. */
+  function ratingCard() {
+    const row = h('div', { class: 'rating', role: 'radiogroup', 'aria-label': 'How was this workout?' });
+    const draw = () => mount(row, RATINGS.map(([n, label, face]) => h('button', {
+      type: 'button', role: 'radio', 'aria-checked': String(log.rating === n), class: log.rating === n ? 'on' : '',
+      onclick: () => { log.rating = log.rating === n ? null : n; saveDraft(); draw(); },
+    }, h('span', { class: 'face', 'aria-hidden': 'true' }, face), h('span', {}, `${n} ${label}`))));
+    draw();
+    return h('div', { class: 'card' }, h('h3', {}, 'How was this workout?'), row);
+  }
 
   function finish(preset) {
     const allDone = log.sets.every((x) => x.done);

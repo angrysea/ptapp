@@ -3,7 +3,7 @@
 //!
 //! Key layout (see docs/ARCHITECTURE.md):
 //!   USER#{sub}      PROFILE
-//!   COACH#{coach}   CLIENT#{client} | INVITE#{code} | EXERCISE#{id} | PROGRAM#{id} | REVIEW#{ts}#{video}
+//!   COACH#{coach}   CLIENT#{client} | INVITE#{code} | EXERCISE#{id} | PROGRAM#{id} | REVIEW#{ts}#{video} | THREAD#{client}
 //!   INVITE#{code}   INVITE
 //!   ADMIN           INVITE#{code} | COACH#{coach}
 //!   CLIENT#{client} INTAKE | WAIVER#{ts} | ASSIGN#{id} | SCHED#{date}#{id} | LOG#{date}#{id}
@@ -93,6 +93,22 @@ impl Store {
     /// All items under `pk` whose sort key starts with `prefix`.
     pub async fn query_prefix<T: DeserializeOwned>(&self, pk: &str, prefix: &str) -> ApiResult<Vec<T>> {
         self.query_raw(pk, "begins_with(sk, :p)", vec![(":p", s(prefix))], true).await
+    }
+
+    /// The newest `limit` items whose sk starts with `prefix`, newest first.
+    pub async fn latest<T: DeserializeOwned>(&self, pk: &str, prefix: &str, limit: i32) -> ApiResult<Vec<T>> {
+        let page = self
+            .ddb
+            .query()
+            .table_name(&self.table)
+            .key_condition_expression("pk = :pk AND begins_with(sk, :p)")
+            .expression_attribute_values(":pk", s(pk))
+            .expression_attribute_values(":p", s(prefix))
+            .scan_index_forward(false)
+            .limit(limit)
+            .send()
+            .await?;
+        Ok(page.items.unwrap_or_default().into_iter().map(from_item).collect::<Result<_, _>>()?)
     }
 
     /// Items with `from <= sk <= to`, oldest first (or newest first if `ascending` is false).

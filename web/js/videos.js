@@ -47,6 +47,24 @@ export function putPart(url, headers, blob, onBytes) {
   });
 }
 
+/** Plays a coach's reply (`url` for a recording, `note`) in a sheet. `onPlay`
+ * runs the first time it starts playing (the client marks it seen). */
+export function playReply(r, { title = 'Coach’s reply', onPlay } = {}) {
+  const player = r.url && h('video', { src: r.url, controls: true, playsinline: true, preload: 'metadata', class: 'player' });
+  let played = false;
+  const first = () => { if (!played) { played = true; onPlay?.(); } };
+  player?.addEventListener('play', first);
+  const sh = sheet(
+    h('h2', {}, title),
+    player,
+    r.note && h('p', { style: 'white-space:pre-wrap' }, r.note),
+    h('button', { class: 'block', onclick: () => sh.close() }, 'Close'),
+  );
+  if (!player) first(); // a written reply is seen once opened
+  sh.onClose = () => player?.pause();
+  return sh;
+}
+
 /** Plays a listed video (with `url`, and `posterUrl` when there is one) in a
  * sheet, keeping to its trim points when it has them. `actions` are extra
  * buttons shown above Close. Returns the sheet. */

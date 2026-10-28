@@ -47,10 +47,12 @@ pub async fn create(
         item_id: body.item_id,
         set_index: body.set_index,
         text: text.to_string(),
+        reply_id: None,
         created_at: Utc::now(),
     };
     st.store
         .put(&scope.pk(), &format!("COMMENT#{}#{}", c.created_at.to_rfc3339(), c.id), &c)
         .await?;
+    super::messages::on_message(&st, &scope, &c).await;
     Ok(Json(c))
 }

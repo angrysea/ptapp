@@ -183,7 +183,8 @@ Resources:
       GenerateSecret: false
       AllowedOAuthFlowsUserPoolClient: true
       AllowedOAuthFlows: [code]
-      AllowedOAuthScopes: [openid, email, profile]
+      # aws.cognito.signin.user.admin: users change their own password (auth.js changePassword).
+      AllowedOAuthScopes: [openid, email, profile, aws.cognito.signin.user.admin]
       SupportedIdentityProviders: [COGNITO]
       CallbackURLs: [!Sub "https://${Distribution.DomainName}/", !Sub "${LocalDevOrigin}/", !If [HasAppDomain, !Sub "https://${AppDomain}/", !Ref AWS::NoValue]]
       LogoutURLs: [!Sub "https://${Distribution.DomainName}/", !Sub "${LocalDevOrigin}/", !If [HasAppDomain, !Sub "https://${AppDomain}/", !Ref AWS::NoValue]]

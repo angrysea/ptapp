@@ -411,8 +411,39 @@ pub struct WorkoutLog {
     #[serde(default)]
     pub comment: String,
     pub check: Option<PostCheck>,
+    /// The client's own note on each exercise (item id -> text): how it felt,
+    /// anything bothering them. The coach sees it with the log.
+    #[serde(default)]
+    pub exercise_notes: BTreeMap<String, String>,
+    /// How the workout went overall: 1 bad, 2 poor, 3 OK, 4 good, 5 great.
+    #[serde(default)]
+    pub rating: Option<u8>,
     /// Client clock at the time of the edit; last write wins.
     pub updated_at: DateTime<Utc>,
+}
+
+/// Longest exercise note, in characters.
+pub const MAX_EXERCISE_NOTE: usize = 1000;
+
+impl WorkoutLog {
+    /// Trims exercise notes and drops empty ones; refuses a rating outside
+    /// 1-5, an over-long note, or more notes than the workout could have.
+    pub fn clean_feedback(&mut self) -> Result<(), String> {
+        if self.rating.is_some_and(|r| !(1..=5).contains(&r)) {
+            return Err("rating must be 1-5".into());
+        }
+        for note in self.exercise_notes.values_mut() {
+            *note = note.trim().to_string();
+            if note.chars().count() > MAX_EXERCISE_NOTE {
+                return Err(format!("exercise notes must be {MAX_EXERCISE_NOTE} characters or fewer"));
+            }
+        }
+        self.exercise_notes.retain(|_, n| !n.is_empty());
+        if self.exercise_notes.len() > 100 {
+            return Err("too many exercise notes".into());
+        }
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------- feedback
@@ -429,7 +460,29 @@ pub struct Comment {
     pub item_id: Option<String>,
     pub set_index: Option<u32>,
     pub text: String,
+    /// A coach's video reply this message carries (VR-2), played from the thread.
+    #[serde(default)]
+    pub reply_id: Option<String>,
     pub created_at: DateTime<Utc>,
+}
+
+/// A coach-client conversation's summary, `COACH#{coach}` / `THREAD#{client}`:
+/// the coach's inbox lists these, and each side's unread count lives here.
+/// Updated on every message; the messages themselves are `COMMENT#` items.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct MessageThread {
+    pub client_id: String,
+    pub client_name: String,
+    pub last_at: Option<DateTime<Utc>>,
+    pub last_text: String,
+    pub last_author_role: Option<Role>,
+    /// Messages from the client the coach hasn't opened yet.
+    pub unread_coach: u32,
+    /// Messages from the coach the client hasn't opened yet.
+    pub unread_client: u32,
+    pub coach_read_at: Option<DateTime<Utc>>,
+    pub client_read_at: Option<DateTime<Utc>>,
 }
 
 // ---------------------------------------------------------------- body metrics
@@ -540,6 +593,43 @@ pub struct Video {
     pub reviewed_at: Option<DateTime<Utc>>,
 }
 
+/// A coach's reply to a set video (VR-1..VR-3), `CLIENT#{client}` /
+/// `REPLY#{id}`: a recording of the coach going through the clip with their
+/// voice over it, or just a written note. Uploaded in parts like a set video.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Reply {
+    pub id: String,
+    pub video_id: String,
+    pub coach_id: String,
+    pub status: VideoStatus,
+    /// Empty for a written reply with no recording.
+    #[serde(default)]
+    pub key: String,
+    #[serde(default)]
+    pub content_type: String,
+    #[serde(default)]
+    pub size_bytes: i64,
+    #[serde(default)]
+    pub upload_id: Option<String>,
+    #[serde(default)]
+    pub part_size: i64,
+    #[serde(default)]
+    pub duration_sec: Option<f64>,
+    #[serde(default)]
+    pub note: String,
+    /// Milliseconds from opening the review screen to sending (the BRD's
+    /// five-minute review gate), as measured on the coach's device.
+    #[serde(default)]
+    pub review_ms: Option<u64>,
+    pub created_at: DateTime<Utc>,
+    #[serde(default)]
+    pub sent_at: Option<DateTime<Utc>>,
+    /// When the client first played it.
+    #[serde(default)]
+    pub seen_at: Option<DateTime<Utc>>,
+}
+
 /// A ready video waiting for the coach's review (VS-4), stored as
 /// `COACH#{coach}` / `REVIEW#{createdAt}#{videoId}` so a prefix query returns
 /// the queue oldest first across all of the coach's clients. Carries what the
@@ -573,6 +663,27 @@ pub const TAPE_SITES: &[&str] = &[
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn workout_feedback_is_cleaned_and_bounded() {
+        let mut log: WorkoutLog = serde_json::from_value(serde_json::json!({
+            "id": "l", "scheduledId": null, "date": "2026-10-28", "workoutName": "W", "status": "completed",
+            "check": null, "updatedAt": "2026-10-28T12:00:00Z",
+            "exerciseNotes": { "a": "  knee ok ", "b": " " }, "rating": 5
+        }))
+        .unwrap();
+        log.clean_feedback().unwrap();
+        assert_eq!(log.exercise_notes.into_iter().collect::<Vec<_>>(), vec![("a".to_string(), "knee ok".to_string())]);
+
+        let mut bad = WorkoutLog { rating: Some(0), exercise_notes: BTreeMap::new(), ..serde_json::from_value(serde_json::json!({
+            "id": "l", "scheduledId": null, "date": "2026-10-28", "workoutName": "W", "status": "completed",
+            "check": null, "updatedAt": "2026-10-28T12:00:00Z"
+        })).unwrap() };
+        assert!(bad.clean_feedback().is_err());
+        bad.rating = Some(3);
+        bad.exercise_notes.insert("a".into(), "x".repeat(MAX_EXERCISE_NOTE + 1));
+        assert!(bad.clean_feedback().is_err());
+    }
 
     fn item(sets: u32, rpe: Option<f64>) -> Item {
         Item {

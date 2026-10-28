@@ -3,6 +3,7 @@
 // (FB-1), metrics, intake/waiver and messages.
 
 import { del, get, post } from '../api.js';
+import { RATINGS } from '../effort.js';
 import { go } from '../router.js';
 import { session } from '../session.js';
 import {
@@ -15,6 +16,12 @@ import { commentOn, renderThread } from './comments.js';
 import { intakeSummary, waiverSummary } from './intake.js';
 import { renderMetrics, stat } from './metrics.js';
 import { statusChip } from './workout.js';
+
+/** The client's 1-5 rating of a workout; bad ones stand out. */
+function ratingChip(n) {
+  const [, label, face] = RATINGS[n - 1] || [];
+  return label && h('span', { class: `chip ${n <= 2 ? 'bad' : n >= 4 ? 'good' : 'gray'}` }, `${face} Rated ${n}/5 · ${label}`);
+}
 
 export async function renderRoster() {
   const [rows, invites] = await Promise.all([get('/clients', { cache: true }), get('/invites').catch(() => [])]);
@@ -196,17 +203,19 @@ async function logs(el, client) {
       return h('div', { class: 'card' },
         h('div', { class: 'spread' }, h('strong', {}, l.workoutName), statusChip(l, l.date)),
         h('div', { class: 'muted small' }, `${fmtDate(l.date)} · updated ${fmtDateTime(l.updatedAt)}`),
+        l.rating && ratingChip(l.rating),
         l.comment && h('p', { style: 'white-space:pre-wrap' }, `“${l.comment}”`),
         c && h('div', { class: 'small row' },
           c.rpe != null && h('span', {}, `sRPE ${c.rpe}`), c.energy != null && h('span', {}, `energy ${c.energy}/5`),
           c.sleep != null && h('span', {}, `sleep ${c.sleep}/5`), c.soreness != null && h('span', {}, `soreness ${c.soreness}/5`),
           c.pain && h('span', { class: 'chip bad' }, `Pain: ${c.painLocation || 'unspecified'}`)),
         Object.entries(byEx).map(([itemId, ex]) => h('div', { class: 'exercise' }, h('strong', { class: 'small' }, ex.name),
+          l.exerciseNotes?.[itemId] && h('div', { class: 'exnote-view small' }, `📝 “${l.exerciseNotes[itemId]}”`),
           videosFor(l.id, itemId).length > 0 && h('div', { class: 'videobar' },
             videosFor(l.id, itemId).map((v) => h('button', {
               class: 'small', title: v.reviewedAt ? 'Reviewed' : 'Not reviewed yet',
               onclick: () => {
-                const sh = playVideo(v, !v.reviewedAt && h('button', {
+                const sh = playVideo(v, h('button', { class: 'block', onclick: () => { sh.close(); go(`/review/${client.userId}/${v.id}`); } }, '🎙 Reply with video'), !v.reviewedAt && h('button', {
                   class: 'primary block',
                   onclick: (e) => busy(e.currentTarget, async () => {
                     await post(`/clients/${client.userId}/videos/${v.id}/reviewed`);

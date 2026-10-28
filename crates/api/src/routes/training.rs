@@ -232,6 +232,7 @@ pub async fn put_log(
     if lid.len() > 64 || !lid.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
         return Err(bad_request("log id must be 1-64 characters of [A-Za-z0-9-]"));
     }
+    log.clean_feedback().map_err(bad_request)?;
     let now = Utc::now();
     if log.updated_at > now + Duration::minutes(5) {
         log.updated_at = now; // a phone clock far in the future must not win forever

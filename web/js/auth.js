@@ -32,7 +32,8 @@ export async function login({ loginHint } = {}) {
   sessionStorage.setItem(PKCE, JSON.stringify({ verifier, state }));
   const q = new URLSearchParams({
     response_type: 'code', client_id: cfg.clientId, redirect_uri: redirectUri(),
-    scope: 'openid email profile', state, code_challenge: challenge, code_challenge_method: 'S256',
+    // aws.cognito.signin.user.admin lets the access token change the password.
+    scope: 'openid email profile aws.cognito.signin.user.admin', state, code_challenge: challenge, code_challenge_method: 'S256',
     ...(loginHint && { login_hint: loginHint }),
   });
   location.assign(`${cfg.cognitoDomain}/oauth2/authorize?${q}`);
@@ -93,11 +94,11 @@ export function logout() {
 
 const region = () => cfg.region || (cfg.cognitoDomain.match(/\.auth\.([a-z0-9-]+)\.amazoncognito\.com/) || [])[1];
 
-async function userPool(action, body) {
+async function userPool(action, body, { withClient = true } = {}) {
   const res = await fetch(`https://cognito-idp.${region()}.amazonaws.com/`, {
     method: 'POST',
     headers: { 'content-type': 'application/x-amz-json-1.1', 'x-amz-target': `AWSCognitoIdentityProviderService.${action}` },
-    body: JSON.stringify({ ClientId: cfg.clientId, ...body }),
+    body: JSON.stringify(withClient ? { ClientId: cfg.clientId, ...body } : body),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
@@ -110,3 +111,28 @@ export const signUp = (email, password) =>
   userPool('SignUp', { Username: email, Password: password, UserAttributes: [{ Name: 'email', Value: email }] });
 export const confirmSignUp = (email, code) => userPool('ConfirmSignUp', { Username: email, ConfirmationCode: code });
 export const resendSignUpCode = (email) => userPool('ResendConfirmationCode', { Username: email });
+
+// Mirrors the user pool's password policy in template.yaml.
+export const MIN_LENGTH = 10;
+export const policyProblem = (pw) =>
+  pw.length < MIN_LENGTH ? `Use at least ${MIN_LENGTH} characters.`
+    : !/[a-z]/.test(pw) ? 'Include a lowercase letter.'
+      : !/[0-9]/.test(pw) ? 'Include a number.'
+        : null;
+
+/** Changes the signed-in user's password. The access token must carry the
+ * aws.cognito.signin.user.admin scope; sessions from before it was requested
+ * don't, and get `code: 'ReauthNeeded'` (sign in again). */
+export async function changePassword(current, next) {
+  await idToken(); // refreshes the tokens if they're about to expire
+  const accessToken = stored()?.access_token;
+  if (!accessToken) throw Object.assign(new Error('Please sign in again.'), { code: 'ReauthNeeded' });
+  try {
+    await userPool('ChangePassword', { PreviousPassword: current, ProposedPassword: next, AccessToken: accessToken }, { withClient: false });
+  } catch (e) {
+    if (/scope/i.test(e.message)) throw Object.assign(new Error('For your security, sign out and sign in again, then change your password.'), { code: 'ReauthNeeded' });
+    if (e.code === 'NotAuthorizedException') throw Object.assign(new Error('Your current password isn’t right.'), { code: e.code });
+    if (e.code === 'LimitExceededException') throw Object.assign(new Error('Too many attempts. Wait a few minutes and try again.'), { code: e.code });
+    throw e;
+  }
+}

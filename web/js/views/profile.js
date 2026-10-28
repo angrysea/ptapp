@@ -1,9 +1,9 @@
 import { myOutbox, put } from '../api.js';
 import { pendingUploads, removeUpload } from '../uploads.js';
-import { logout } from '../auth.js';
+import { changePassword, devMode, logout, MIN_LENGTH, policyProblem } from '../auth.js';
 import { kv, outbox } from '../idb.js';
 import { session } from '../session.js';
-import { $app, busy, field, h, mount, select, toast } from '../ui.js';
+import { $app, busy, field, h, mount, passwordField, select, sheet, toast } from '../ui.js';
 
 /** Signs out from this device: warns about unsynced changes, then clears
  * this user's cached data, queued changes and pending videos. Used by the
@@ -16,6 +16,41 @@ export async function signOut() {
   await kv.clear(); for (const i of mine) await outbox.del(i.key);
   for (const v of videos) await removeUpload(v.key); // clips stay off a shared device
   logout();
+}
+
+/** Current password, then the new one twice; Cognito checks the current one. */
+function passwordSheet() {
+  const current = passwordField('Current password', { autocomplete: 'current-password' });
+  const next = passwordField('New password', { autocomplete: 'new-password' });
+  const again = passwordField('Confirm new password', { autocomplete: 'new-password' });
+  const problem = h('p', { class: 'banner', hidden: true });
+  const show = (msg) => { problem.textContent = msg; problem.hidden = !msg; };
+  const sh = sheet(
+    h('h2', {}, 'Change password'),
+    current.el, next.el, again.el,
+    h('p', { class: 'small muted' }, `At least ${MIN_LENGTH} characters, with a lowercase letter and a number.`),
+    problem,
+    h('button', {
+      class: 'primary block',
+      onclick: (e) => busy(e.currentTarget, async () => {
+        show('');
+        const bad = !current.input.value ? 'Enter your current password.'
+          : policyProblem(next.input.value)
+            || (next.input.value !== again.input.value ? 'The new passwords don’t match.' : null)
+            || (next.input.value === current.input.value ? 'Choose a password different from your current one.' : null);
+        if (bad) return show(bad);
+        try {
+          await changePassword(current.input.value, next.input.value);
+        } catch (err) {
+          return show(err.message);
+        }
+        sh.close();
+        toast('Password changed');
+      }),
+    }, 'Change password'),
+    h('button', { class: 'ghost block', onclick: () => sh.close() }, 'Cancel'),
+  );
+  current.input.focus();
 }
 
 export async function renderProfile() {
@@ -50,6 +85,9 @@ export async function renderProfile() {
       h('a', { class: 'btn block', href: '#/intake' }, 'Intake questionnaire'),
       h('div', { style: 'height:8px' }),
       h('a', { class: 'btn block', href: '#/waiver' }, 'Health screening & waiver')),
+    !devMode() && h('div', { class: 'card' },
+      h('h3', {}, 'Password'),
+      h('button', { class: 'block', onclick: passwordSheet }, 'Change password')),
     h('div', { class: 'card' },
       h('p', { class: 'small muted' }, pending
         ? [mine.length && `${mine.length} change(s)`, videos.length && `${videos.length} video(s)`].filter(Boolean).join(' and ') + ' waiting to sync.'

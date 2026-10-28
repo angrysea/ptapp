@@ -166,6 +166,8 @@ mod tests {
             date: d(day),
             workout_name: "W".into(),
             status,
+            exercise_notes: Default::default(),
+            rating: None,
             sets: sets
                 .into_iter()
                 .enumerate()

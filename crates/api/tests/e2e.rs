@@ -341,14 +341,24 @@ async fn full_client_journey() {
         "status": "completed", "updatedAt": ts, "comment": "felt good",
         "sets": ([0, 1, 2].iter().map(|i| json!({ "itemId": item_id, "exerciseId": "back-squat", "exerciseName": "Back Squat",
             "setIndex": i, "reps": reps, "loadKg": 100.0, "rpe": 8, "done": true })).collect::<Vec<_>>()),
-        "check": { "rpe": 8, "energy": 4, "sleep": 3, "soreness": 2, "pain": true, "painLocation": "left knee" }
+        "check": { "rpe": 8, "energy": 4, "sleep": 3, "soreness": 2, "pain": true, "painLocation": "left knee" },
+        "exerciseNotes": { item_id: "  Left hip a bit tight on the way down  ", "other": "   " },
+        "rating": 4
     });
     let now = chrono::Utc::now();
     let newer = (now - chrono::Duration::minutes(1)).to_rfc3339();
     let older = (now - chrono::Duration::minutes(10)).to_rfc3339();
     assert_eq!(t.call("PUT", "/clients/client1/logs/log-abc", Some("coach1"), Some(log(&newer, 5))).await.0, StatusCode::FORBIDDEN);
+    // the workout rating is 1-5
+    let mut rated = log(&newer, 5);
+    rated["rating"] = json!(6);
+    assert_eq!(t.call("PUT", "/clients/client1/logs/log-abc", Some("client1"), Some(rated)).await.0, StatusCode::BAD_REQUEST);
     let (s, l) = t.call("PUT", "/clients/client1/logs/log-abc", Some("client1"), Some(log(&newer, 5))).await;
     assert_eq!(s, StatusCode::OK, "{l}");
+    // notes are trimmed and empty ones dropped; the coach sees them and the rating
+    let (_, logs) = t.call("GET", "/clients/client1/logs", Some("coach1"), None).await;
+    assert_eq!(logs[0]["exerciseNotes"], json!({ item_id: "Left hip a bit tight on the way down" }));
+    assert_eq!(logs[0]["rating"], 4);
     let (s, conflict) = t.call("PUT", "/clients/client1/logs/log-abc", Some("client1"), Some(log(&older, 3))).await;
     assert_eq!(s, StatusCode::CONFLICT);
     assert_eq!(conflict["current"]["sets"][0]["reps"], 5);
@@ -581,6 +591,67 @@ async fn full_client_journey() {
     let tags = s3.get_object_tagging().bucket(&bucket).key(rkey).send().await.unwrap();
     assert!(tags.tag_set().iter().any(|t| t.key() == "reviewed" && t.value() == "true"), "{:?}", tags.tag_set());
 
+    // --- the coach replies to a set video (VR-1..VR-3)
+    let new_reply = format!("/clients/client1/videos/{}/replies", ids[2]);
+    assert_eq!(t.call("POST", &new_reply, Some("client1"), Some(json!({ "note": "x" }))).await.0, StatusCode::FORBIDDEN);
+    assert_eq!(t.call("POST", &new_reply, Some("coach2"), Some(json!({ "note": "x" }))).await.0, StatusCode::FORBIDDEN);
+    assert_eq!(t.call("POST", &new_reply, Some("coach1"), Some(json!({}))).await.0, StatusCode::BAD_REQUEST, "nothing to send");
+    let too_long = json!({ "contentType": "video/mp4", "size": 3, "durationSec": 400.0 });
+    assert_eq!(t.call("POST", &new_reply, Some("coach1"), Some(too_long)).await.0, StatusCode::BAD_REQUEST, "over 5 minutes");
+    let (s, cr) = t
+        .call("POST", &new_reply, Some("coach1"), Some(json!({
+            "contentType": "video/mp4", "size": 3, "durationSec": 42.0, "note": "Watch your knees at 0:12", "reviewMs": 180000
+        })))
+        .await;
+    assert_eq!(s, StatusCode::OK, "{cr}");
+    let rid = cr["reply"]["id"].as_str().unwrap().to_string();
+    let rkey = cr["reply"]["key"].as_str().unwrap().to_string();
+    assert!(rkey.starts_with("media/coach1/client1/replies/") && rkey.ends_with(".mp4"), "{rkey}");
+    assert_eq!(cr["parts"].as_array().unwrap().len(), 1);
+    let (_, listed) = t.call("GET", "/clients/client1/replies", Some("client1"), None).await;
+    assert_eq!(listed.as_array().unwrap().len(), 0, "not shown until sent");
+    let ruid = s3.list_multipart_uploads().bucket(&bucket).prefix(&rkey).send().await.unwrap().uploads()[0].upload_id().unwrap().to_string();
+    let rout = s3.upload_part().bucket(&bucket).key(&rkey).upload_id(&ruid).part_number(1).body(b"mp4".to_vec().into()).send().await.unwrap();
+    let rdone = json!({ "parts": [{ "n": 1, "etag": rout.e_tag().unwrap() }] });
+    let complete = format!("/clients/client1/replies/{rid}/complete");
+    assert_eq!(t.call("POST", &complete, Some("client1"), Some(rdone.clone())).await.0, StatusCode::FORBIDDEN);
+    let (s, sent) = t.call("POST", &complete, Some("coach1"), Some(rdone.clone())).await;
+    assert_eq!(s, StatusCode::OK, "{sent}");
+    assert_eq!(sent["status"], "ready");
+    assert_eq!(t.call("POST", &complete, Some("coach1"), Some(rdone)).await.0, StatusCode::OK, "repeating is harmless");
+    // sending marked the video reviewed: out of the queue, both objects on the retention clock
+    let (_, queue_now) = t.call("GET", "/videos/queue", Some("coach1"), None).await;
+    let order: Vec<&str> = queue_now.as_array().unwrap().iter().map(|e| e["videoId"].as_str().unwrap()).collect();
+    assert_eq!(order, [ids[0].as_str()]);
+    let tags = s3.get_object_tagging().bucket(&bucket).key(&rkey).send().await.unwrap();
+    assert!(tags.tag_set().iter().any(|t| t.key() == "reviewed" && t.value() == "true"), "{:?}", tags.tag_set());
+    // the client gets it: listed with a URL, and a message in the thread that carries it
+    let (s, listed) = t.call("GET", "/clients/client1/replies", Some("client1"), None).await;
+    assert_eq!(s, StatusCode::OK, "{listed}");
+    assert_eq!(listed[0]["id"], rid.as_str());
+    assert_eq!(listed[0]["reviewMs"], 180000);
+    assert!(listed[0]["url"].as_str().unwrap().contains("X-Amz-Signature"));
+    let (_, thread) = t.call("GET", "/clients/client1/comments", Some("client1"), None).await;
+    let carried: Vec<&Value> = thread.as_array().unwrap().iter().filter(|c| c["replyId"] == rid.as_str()).collect();
+    assert_eq!(carried.len(), 1, "one message, even after a repeated complete");
+    assert_eq!(carried[0]["text"], "Watch your knees at 0:12");
+    assert_eq!(t.call("GET", "/clients/client1/replies", Some("coach2"), None).await.0, StatusCode::FORBIDDEN);
+    // only the client marks it seen
+    let seen = format!("/clients/client1/replies/{rid}/seen");
+    assert_eq!(t.call("POST", &seen, Some("coach1"), None).await.0, StatusCode::FORBIDDEN);
+    let (_, r) = t.call("POST", &seen, Some("client1"), None).await;
+    assert!(r["seenAt"].is_string());
+    // a written reply needs no upload
+    let (s, written) = t
+        .call("POST", &format!("/clients/client1/videos/{}/replies", ids[1]), Some("coach1"), Some(json!({ "note": "Solid set" })))
+        .await;
+    assert_eq!(s, StatusCode::OK, "{written}");
+    assert_eq!(written["reply"]["status"], "ready");
+    let (_, listed) = t.call("GET", "/clients/client1/replies", Some("client1"), None).await;
+    assert_eq!(listed.as_array().unwrap().len(), 2);
+    assert!(listed.as_array().unwrap().iter().any(|r| r["note"] == "Solid set" && r["url"].is_null()));
+    t.call("POST", "/clients/client1/messages/read", Some("client1"), None).await;
+
     // --- the client deletes their own videos (VS-3)
     let del = |id: &str| format!("/clients/client1/videos/{id}");
     assert_eq!(t.call("DELETE", &del(&ids[2]), Some("coach1"), None).await.0, StatusCode::FORBIDDEN);
@@ -595,6 +666,10 @@ async fn full_client_journey() {
     let order: Vec<&str> = queue.as_array().unwrap().iter().map(|e| e["videoId"].as_str().unwrap()).collect();
     assert_eq!(order, [ids[0].as_str()], "a deleted video leaves the coach's queue");
     assert!(s3.head_object().bucket(&bucket).key(&gone_key).send().await.is_err(), "object deleted");
+    // its replies go with it
+    let (_, listed) = t.call("GET", "/clients/client1/replies", Some("client1"), None).await;
+    assert!(!listed.as_array().unwrap().iter().any(|r| r["id"] == rid.as_str()), "{listed}");
+    assert!(s3.head_object().bucket(&bucket).key(&rkey).send().await.is_err(), "reply object deleted");
     // deleting a video that never finished uploading aborts its multipart upload
     let pending_key = pending["video"]["key"].as_str().unwrap().to_string();
     let open_uploads = |k: String| {
@@ -613,6 +688,32 @@ async fn full_client_journey() {
     assert_eq!(s, StatusCode::OK);
     let (_, cs) = t.call("GET", "/clients/client1/comments", Some("client1"), None).await;
     assert_eq!(cs[0]["authorRole"], "coach");
+
+    // --- message threads and unread counts (MS-1)
+    let unread = |who: &'static str| {
+        let t = &t;
+        async move { t.call("GET", "/messages", Some(who), None).await.1["unreadTotal"].as_u64() }
+    };
+    assert_eq!(unread("client1").await, Some(1)); // the coach's comment above
+    t.call("POST", "/clients/client1/messages/read", Some("client1"), None).await;
+    assert_eq!(unread("client1").await, Some(0));
+    for text in ["Knee felt better today", "Can we swap Friday for Saturday?"] {
+        t.call("POST", "/clients/client1/comments", Some("client1"), Some(json!({ "text": text }))).await;
+    }
+    let (s, inbox) = t.call("GET", "/messages", Some("coach1"), None).await;
+    assert_eq!(s, StatusCode::OK, "{inbox}");
+    assert_eq!(inbox["unreadTotal"], 2);
+    let row = &inbox["threads"][0];
+    assert_eq!((row["clientId"].as_str(), row["unread"].as_u64()), (Some("client1"), Some(2)));
+    let new: Vec<&str> = row["newMessages"].as_array().unwrap().iter().map(|m| m["text"].as_str().unwrap()).collect();
+    assert_eq!(new, ["Knee felt better today", "Can we swap Friday for Saturday?"]);
+    assert_eq!(row["lastText"], "Can we swap Friday for Saturday?");
+    // only the client's coach reads or clears it
+    assert_eq!(t.call("POST", "/clients/client1/messages/read", Some("coach2"), None).await.0, StatusCode::FORBIDDEN);
+    assert_eq!(t.call("GET", "/messages", Some("admin1"), None).await.0, StatusCode::FORBIDDEN);
+    t.call("POST", "/clients/client1/messages/read", Some("coach1"), None).await;
+    assert_eq!(unread("coach1").await, Some(0));
+    assert_eq!(t.call("GET", "/messages", Some("coach1"), None).await.1["threads"][0]["newMessages"], json!([]));
 
     // --- tenant isolation
     for path in ["/clients/client1/metrics", "/clients/client1/photos", "/clients/client1/logs", "/clients/client1"] {

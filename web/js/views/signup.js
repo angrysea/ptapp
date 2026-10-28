@@ -6,16 +6,9 @@
 // working. Coaches only ever arrive this way (no open coach signup).
 
 import cfg from '../config.js';
-import { confirmSignUp, devMode, login, logout, resendSignUpCode, signUp } from '../auth.js';
+import { confirmSignUp, devMode, login, logout, MIN_LENGTH, policyProblem, resendSignUpCode, signUp } from '../auth.js';
 import { $app, busy, field, h, mount, passwordField } from '../ui.js';
 
-// Mirrors the user pool's password policy in template.yaml.
-const MIN_LENGTH = 10;
-const policyProblem = (pw) =>
-  pw.length < MIN_LENGTH ? `Use at least ${MIN_LENGTH} characters.`
-    : !/[a-z]/.test(pw) ? 'Include a lowercase letter.'
-      : !/[0-9]/.test(pw) ? 'Include a number.'
-        : null;
 
 /** The open invitation behind `code`, read without signing in; null if it's invalid, used or expired. */
 async function publicInvite(code) {

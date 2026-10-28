@@ -103,23 +103,96 @@ async fn load(st: &AppState, scope: &ClientScope, vid: &str) -> ApiResult<Video>
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct PartUrl {
+pub struct PartUrl {
     n: i32,
     size: i64,
     url: String,
     headers: std::collections::BTreeMap<String, String>,
 }
 
-async fn part_urls(st: &AppState, v: &Video, numbers: &[i32]) -> ApiResult<Vec<PartUrl>> {
-    let upload_id = v.upload_id.as_deref().ok_or_else(|| bad_request("this video is already uploaded"))?;
-    let sizes = part_sizes(v.size_bytes, v.part_size);
+/// URLs for parts `numbers` of a `size`-byte multipart upload, each signed
+/// for its exact size. Shared with coach replies (routes/replies.rs).
+pub async fn sign_parts(st: &AppState, key: &str, upload_id: Option<&str>, size: i64, part_size: i64, numbers: &[i32]) -> ApiResult<Vec<PartUrl>> {
+    let upload_id = upload_id.ok_or_else(|| bad_request("this upload is already finished"))?;
+    let sizes = part_sizes(size, part_size);
+    // Each URL costs a signature: never sign more than the upload has parts.
+    if numbers.len() > sizes.len() {
+        return Err(bad_request("more parts requested than the upload has"));
+    }
     let mut out = Vec::with_capacity(numbers.len());
     for &n in numbers {
         let size = *sizes.get((n as usize).wrapping_sub(1)).ok_or_else(|| bad_request(format!("no part {n}")))?;
-        let Upload { url, headers } = presign_part(st, &v.key, upload_id, n, size).await?;
+        let Upload { url, headers } = presign_part(st, key, upload_id, n, size).await?;
         out.push(PartUrl { n, size, url, headers });
     }
     Ok(out)
+}
+
+async fn part_urls(st: &AppState, v: &Video, numbers: &[i32]) -> ApiResult<Vec<PartUrl>> {
+    sign_parts(st, &v.key, v.upload_id.as_deref(), v.size_bytes, v.part_size, numbers).await
+}
+
+/// Starts a multipart upload tagged pending (the lifecycle rules clean up
+/// ones never finished) and returns its id.
+pub async fn start_multipart(st: &AppState, key: &str, content_type: &str) -> ApiResult<String> {
+    let mp = st
+        .s3
+        .create_multipart_upload()
+        .bucket(&st.bucket)
+        .key(key)
+        .content_type(content_type)
+        .tagging(PENDING_TAG)
+        .send()
+        .await
+        .map_err(|e| ApiError::Internal(format!("s3 create multipart: {e}")))?;
+    Ok(mp.upload_id().ok_or_else(|| ApiError::Internal("s3 returned no upload id".into()))?.to_string())
+}
+
+/// Assembles uploaded parts into the object, checks its size and removes the
+/// pending tag. Safe to repeat after a lost response.
+pub async fn assemble(st: &AppState, key: &str, upload_id: &str, size: i64, part_size: i64, parts: &[DonePart]) -> ApiResult<()> {
+    let expected = part_sizes(size, part_size).len();
+    let mut done: Vec<&DonePart> = parts.iter().collect();
+    done.sort_by_key(|p| p.n);
+    if done.len() != expected || done.iter().enumerate().any(|(i, p)| p.n as usize != i + 1) {
+        return Err(bad_request(format!("send all {expected} parts, numbered 1 to {expected}")));
+    }
+    let parts = done.iter().map(|p| CompletedPart::builder().part_number(p.n).e_tag(&p.etag).build()).collect();
+    let res = st
+        .s3
+        .complete_multipart_upload()
+        .bucket(&st.bucket)
+        .key(key)
+        .upload_id(upload_id)
+        .multipart_upload(CompletedMultipartUpload::builder().set_parts(Some(parts)).build())
+        .send()
+        .await;
+    if let Err(e) = res {
+        // A retry after a lost response finds the upload already assembled.
+        if !s3_object_exists(st, key).await? {
+            return Err(bad_request(format!("the upload is incomplete; upload the missing parts and try again ({e})")));
+        }
+    }
+    // Part sizes were signed into the URLs, so this only fails if parts were
+    // mixed up; such an object is useless, so it goes.
+    let got = s3_object_size(st, key).await?.unwrap_or(0);
+    if got != size {
+        let _ = st.s3.delete_object().bucket(&st.bucket).key(key).send().await;
+        return Err(bad_request(format!("uploaded {got} bytes but expected {size}; please upload it again")));
+    }
+    untag(st, key).await
+}
+
+/// Starts the retention clock on objects: the lifecycle rule deletes objects
+/// tagged `reviewed=true`. A failed tag only means the object is kept.
+pub async fn tag_reviewed(st: &AppState, keys: &[&str]) {
+    let Ok(tag) = Tag::builder().key("reviewed").value("true").build() else { return };
+    let Ok(tagging) = Tagging::builder().tag_set(tag).build() else { return };
+    for key in keys {
+        if let Err(e) = st.s3.put_object_tagging().bucket(&st.bucket).key(*key).tagging(tagging.clone()).send().await {
+            tracing::warn!("tagging {key} reviewed failed: {e}");
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -166,17 +239,7 @@ pub async fn create(
 
     let id = dated_id(scope.today());
     let key = format!("media/{}/{}/videos/{id}.{ext}", scope.client.coach_id, scope.client.user_id);
-    let mp = st
-        .s3
-        .create_multipart_upload()
-        .bucket(&st.bucket)
-        .key(&key)
-        .content_type(&body.content_type)
-        .tagging(PENDING_TAG)
-        .send()
-        .await
-        .map_err(|e| ApiError::Internal(format!("s3 create multipart: {e}")))?;
-    let upload_id = mp.upload_id().ok_or_else(|| ApiError::Internal("s3 returned no upload id".into()))?.to_string();
+    let upload_id = start_multipart(&st, &key, &body.content_type).await?;
 
     let video = Video {
         id,
@@ -213,7 +276,7 @@ pub async fn create(
 
 #[derive(Deserialize)]
 pub struct PartsQuery {
-    parts: Vec<i32>,
+    pub parts: Vec<i32>,
 }
 
 /// Fresh URLs for parts whose URLs expired, e.g. after a stretch offline.
@@ -225,25 +288,21 @@ pub async fn parts(
 ) -> ApiResult<Json<Value>> {
     let scope = client_owned(&st, &ctx, &cid).await?;
     let v = load(&st, &scope, &vid).await?;
-    // Each URL costs a signature: never sign more than the upload has parts.
     let mut numbers = body.parts;
     numbers.sort_unstable();
     numbers.dedup();
-    if numbers.len() > part_sizes(v.size_bytes, v.part_size).len() {
-        return Err(bad_request("more parts requested than the upload has"));
-    }
     Ok(Json(json!({ "parts": part_urls(&st, &v, &numbers).await? })))
 }
 
 #[derive(Deserialize)]
 pub struct DonePart {
-    n: i32,
-    etag: String,
+    pub n: i32,
+    pub etag: String,
 }
 
 #[derive(Deserialize)]
 pub struct Complete {
-    parts: Vec<DonePart>,
+    pub parts: Vec<DonePart>,
 }
 
 /// Assembles the uploaded parts and marks the video ready. Safe to repeat:
@@ -260,36 +319,7 @@ pub async fn complete(
         return Ok(Json(v));
     }
     let upload_id = v.upload_id.clone().ok_or_else(|| ApiError::Internal("uploading video without an upload id".into()))?;
-    let expected = part_sizes(v.size_bytes, v.part_size).len();
-    let mut done: Vec<&DonePart> = body.parts.iter().collect();
-    done.sort_by_key(|p| p.n);
-    if done.len() != expected || done.iter().enumerate().any(|(i, p)| p.n as usize != i + 1) {
-        return Err(bad_request(format!("send all {expected} parts, numbered 1 to {expected}")));
-    }
-    let parts = done.iter().map(|p| CompletedPart::builder().part_number(p.n).e_tag(&p.etag).build()).collect();
-    let res = st
-        .s3
-        .complete_multipart_upload()
-        .bucket(&st.bucket)
-        .key(&v.key)
-        .upload_id(&upload_id)
-        .multipart_upload(CompletedMultipartUpload::builder().set_parts(Some(parts)).build())
-        .send()
-        .await;
-    if let Err(e) = res {
-        // A retry after a lost response finds the upload already assembled.
-        if !s3_object_exists(&st, &v.key).await? {
-            return Err(bad_request(format!("the upload is incomplete; upload the missing parts and try again ({e})")));
-        }
-    }
-    // Part sizes were signed into the URLs, so this only fails if parts were
-    // mixed up; such an object is useless, so it goes.
-    let size = s3_object_size(&st, &v.key).await?.unwrap_or(0);
-    if size != v.size_bytes {
-        let _ = st.s3.delete_object().bucket(&st.bucket).key(&v.key).send().await;
-        return Err(bad_request(format!("uploaded {size} bytes but expected {}; please upload the video again", v.size_bytes)));
-    }
-    untag(&st, &v.key).await?;
+    assemble(&st, &v.key, &upload_id, v.size_bytes, v.part_size, &body.parts).await?;
     let poster = poster_key_for(&v.key);
     if s3_object_exists(&st, &poster).await? {
         untag(&st, &poster).await?;
@@ -362,7 +392,13 @@ pub async fn reviewed(
 ) -> ApiResult<Json<Video>> {
     ctx.require_coach()?;
     let scope = client_scope(&st, &ctx, &cid).await?;
-    let mut v = load(&st, &scope, &vid).await?;
+    Ok(Json(mark_reviewed(&st, &scope, &vid).await?))
+}
+
+/// Marks a set video reviewed: out of the coach's queue, retention started.
+/// Also done by sending a reply (routes/replies.rs). Repeating it is harmless.
+pub async fn mark_reviewed(st: &AppState, scope: &ClientScope, vid: &str) -> ApiResult<Video> {
+    let mut v = load(st, scope, vid).await?;
     if v.status != VideoStatus::Ready {
         return Err(bad_request("this video hasn't finished uploading"));
     }
@@ -371,17 +407,14 @@ pub async fn reviewed(
         st.store.put(&scope.pk(), &video_sk(&v.id), &v).await?;
     }
     st.store.delete(&format!("COACH#{}", scope.client.coach_id), &review_sk(&v)).await?;
-    // Start the retention clock. A failed tag only means the object is kept.
-    let tagging = Tagging::builder()
-        .tag_set(Tag::builder().key("reviewed").value("true").build().map_err(|e| ApiError::Internal(e.to_string()))?)
-        .build()
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
-    for key in std::iter::once(&v.key).chain(&v.poster_key) {
-        if let Err(e) = st.s3.put_object_tagging().bucket(&st.bucket).key(key).tagging(tagging.clone()).send().await {
-            tracing::warn!("tagging {key} reviewed failed: {e}");
-        }
-    }
-    Ok(Json(v))
+    let keys: Vec<&str> = std::iter::once(v.key.as_str()).chain(v.poster_key.as_deref()).collect();
+    tag_reviewed(st, &keys).await;
+    Ok(v)
+}
+
+/// A set video, for checks by other routes (replies).
+pub async fn find(st: &AppState, scope: &ClientScope, vid: &str) -> ApiResult<Video> {
+    load(st, scope, vid).await
 }
 
 /// VS-3: the client deletes their own video: an unfinished upload is
@@ -409,6 +442,7 @@ pub async fn remove(
             .map_err(|e| ApiError::Internal(format!("s3 delete: {e}")))?;
     }
     st.store.delete(&format!("COACH#{}", scope.client.coach_id), &review_sk(&v)).await?;
+    super::replies::remove_for_video(&st, &scope, &v.id).await?;
     st.store.delete(&scope.pk(), &video_sk(&v.id)).await?;
     Ok(Json(json!({ "ok": true })))
 }

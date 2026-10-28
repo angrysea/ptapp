@@ -256,3 +256,29 @@ button.info::after { content: ''; position: absolute; inset: -12px; }
 table.scale { width: 100%; border-collapse: collapse; margin: 8px 0; }
 table.scale th, table.scale td { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--line); }
 table.scale td:first-child { font-weight: 700; white-space: nowrap; }
+
+/* The client's note on an exercise and their 1-5 workout rating (workout.js), and how the coach sees them (coach.js). */
+textarea.exnote { min-height: 0; margin-top: 8px; font-size: 0.9rem; }
+.exnote-view { margin-top: 4px; white-space: pre-wrap; }
+.rating { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
+.rating button { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 8px 2px; min-height: var(--tap); font-size: 0.75rem; line-height: 1.2; }
+.rating button .face { font-size: 1.5rem; line-height: 1; }
+.rating button.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+
+/* The coach's messages page (views/messages.js). */
+.thread-card.unread { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.thread-card .msg { margin: 8px 0; }
+.thread-card textarea { margin-top: 8px; min-height: 70px; }
+
+/* The coach's review screen (views/review.js) and replies on the client's side. */
+.review-src { display: none; }
+.review-canvas { display: block; width: 100%; max-height: 62vh; object-fit: contain; background: #000; border-radius: 10px; }
+.review-controls { margin: 10px 0 12px; }
+.review-controls input[type=range] { width: 100%; margin: 8px 0 4px; }
+.review-controls .speeds { gap: 4px; }
+.review-controls .speeds button.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.review-time { margin-left: auto; font-variant-numeric: tabular-nums; }
+.seg { padding: 4px 0; border-bottom: 1px solid var(--line); }
+button.reply { border-color: var(--accent); color: var(--accent); }
+button.reply.new { background: var(--accent); color: var(--accent-ink); }
+@media (hover: none) { .review-controls .keys { display: none; } }

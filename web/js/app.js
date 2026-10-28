@@ -11,6 +11,9 @@ import { renderAdmin } from './views/admin.js';
 import { renderClient, renderRoster } from './views/coach.js';
 import { renderCoachSetup } from './views/coachprofile.js';
 import { renderCoachPage, renderDirectory } from './views/directory.js';
+import { refreshMessageBadge, renderInbox } from './views/messages.js';
+import { renderReview } from './views/review.js';
+import { onLive, startLive } from './realtime.js';
 import { loadExercises, renderExercises } from './views/exercises.js';
 import { renderIntake, renderWaiver } from './views/intake.js';
 import { renderMetrics } from './views/metrics.js';
@@ -33,7 +36,8 @@ function tabs(items) {
   return (current) => {
     for (const a of nav.querySelectorAll('a')) {
       const p = a.dataset.path;
-      a.classList.toggle('active', p === '/' ? current === '/' || /^\/(workout|c)\//.test(current) : current === p || current.startsWith(`${p}/`));
+      a.classList.toggle('active', p === '/' ? current === '/' || /^\/(workout|c)\//.test(current)
+        : current === p || current.startsWith(`${p}/`) || (p === '/videos' && current.startsWith('/review/')));
     }
   };
 }
@@ -116,7 +120,7 @@ async function boot() {
     highlight = tabs([['/', '🧑‍🏫', 'Coaches'], ['/coaches', '🔎', 'Directory'], ['/me', '⚙️', 'Profile']]);
     route('/', renderAdmin);
   } else if (session.isCoach) {
-    highlight = tabs([['/', '👥', 'Clients'], ['/videos', '🎥', 'Videos'], ['/programs', '🗓️', 'Programs'], ['/exercises', '🏋️', 'Exercises'], ['/me', '⚙️', 'Profile']]);
+    highlight = tabs([['/', '👥', 'Clients'], ['/messages', '💬', 'Messages'], ['/videos', '🎥', 'Videos'], ['/programs', '🗓️', 'Programs'], ['/exercises', '🏋️', 'Exercises'], ['/me', '⚙️', 'Profile']]);
     refreshVideoBadge();
     route('/', renderRoster);
     route('/c/:id', (id) => renderClient(id));
@@ -125,6 +129,8 @@ async function boot() {
     route('/programs/:id', renderProgramEditor);
     route('/exercises', renderExercises);
     route('/videos', renderVideoQueue);
+    route('/messages', renderInbox);
+    route('/review/:cid/:vid', renderReview);
   } else {
     highlight = tabs([['/', '🏋️', 'Today'], ['/progress', '📈', 'Progress'], ['/coach', '💬', 'Coach'], ['/me', '⚙️', 'Profile']]);
     route('/', renderToday);
@@ -133,6 +139,12 @@ async function boot() {
     route('/coach', () => { const el = h('div'); mount($app(), h('h1', {}, 'Messages'), el); return renderThread(el, session.userId); });
     route('/intake', renderIntake);
     route('/waiver', renderWaiver);
+  }
+  // Unread messages: badges now and whenever a message arrives (realtime.js).
+  if (!session.isAdmin) {
+    startLive(session.userId);
+    refreshMessageBadge();
+    onLive(() => refreshMessageBadge());
   }
   route('/me', renderProfile);
   route('/coaches', renderDirectory);
