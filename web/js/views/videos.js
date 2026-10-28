@@ -86,7 +86,7 @@ export async function renderVideoQueue() {
           h('div', { class: 'row', style: 'margin-top:8px' },
             h('button', { class: 'small primary', onclick: () => go(`/review/${v.clientId}/${v.videoId}`) }, '🎙 Reply'),
             h('button', { class: 'small', onclick: watch }, '▶ Watch'),
-            h('button', { class: 'small', onclick: async () => { if (await commentOn(v.clientId, v.logId, v.setIndex, v.itemId)) toast('Comment sent'); } }, '💬 Comment'),
+            h('button', { class: 'small', onclick: async () => { if (await commentOn(v.clientId, v.logId, v.setIndex, v.itemId, v.id)) toast('Comment sent'); } }, '💬 Comment'),
             h('button', { class: 'small ghost', onclick: () => go(`/c/${v.clientId}/logs`) }, 'Open workout'),
             h('button', { class: 'small', onclick: (e) => busy(e.currentTarget, () => markReviewed(v)) }, '✓ Reviewed'))));
     }),

@@ -5,8 +5,8 @@
 import { get, post } from '../api.js';
 import { onLive } from '../realtime.js';
 import { session } from '../session.js';
-import { busy, fmtDateTime, h, mount, sheet, shrinkImage, toast } from '../ui.js';
-import { playReply } from '../videos.js';
+import { busy, fmtDate, fmtDateTime, h, mount, sheet, shrinkImage, toast } from '../ui.js';
+import { playReply, playVideo } from '../videos.js';
 import { markRead } from './messages.js';
 import { snippetTools } from './snippets.js';
 import { dismissPrompt, enable as pushOn, prefetchKey, shouldPrompt } from '../push.js';
@@ -60,10 +60,28 @@ export async function renderThread(el, clientId, logsById = {}) {
   const text = h('textarea', { placeholder: 'Write a message…', style: 'min-height:70px', 'aria-label': 'Message' });
   const anchor = (c) => {
     if (!c.logId) return null;
-    const log = logsById[c.logId];
-    const what = log ? `${log.workoutName}` : 'a workout';
-    const set = c.setIndex != null ? `, set ${c.setIndex + 1}` : '';
-    return h('div', { class: 'meta' }, `on ${what}${set}`);
+    const set = c.setIndex != null ? ` set ${c.setIndex + 1}` : '';
+    const a = c.about;
+    if (!a) {
+      const log = logsById[c.logId];
+      return h('div', { class: 'meta' }, `on ${log ? log.workoutName : 'a workout'}${set && `,${set}`}`);
+    }
+    // MS-3: a card that opens what the message is about.
+    const label = `${c.videoId ? '🎥' : '🏋️'} ${a.workoutName} · ${fmtDate(a.date)}${a.exerciseName ? ` · ${a.exerciseName}${set}` : set}`;
+    const href = session.isCoach
+      ? (c.videoId ? `#/review/${clientId}/${c.videoId}` : `#/c/${clientId}/logs/${c.logId}`)
+      : (!c.videoId && a.scheduledId ? `#/workout/${a.date}/${a.scheduledId}` : null);
+    if (href) return h('a', { class: 'about', href }, label);
+    if (c.videoId) {
+      return h('button', {
+        class: 'about', type: 'button',
+        onclick: async () => {
+          const v = (await get(`/clients/${clientId}/videos`)).find((x) => x.id === c.videoId);
+          if (v?.url) playVideo(v); else toast('That video is no longer available');
+        },
+      }, label);
+    }
+    return h('div', { class: 'meta' }, label);
   };
   let shown = null; // id of the newest message drawn, to redraw and mark read only on change
   async function draw() {
@@ -184,14 +202,15 @@ export async function renderThread(el, clientId, logsById = {}) {
 }
 
 /** Prompt for a comment anchored to a workout log or one set in it. */
-/** A coach's comment on a workout or one of its sets. Resolves true once sent. */
-export function commentOn(clientId, logId, setIndex, itemId) {
+/** A message about a workout, one of its sets, or a set video (MS-3), from
+ * the coach or the client. Resolves true once sent. */
+export function commentOn(clientId, logId, setIndex, itemId, videoId) {
   return new Promise((resolve) => {
-    const text = h('textarea', { placeholder: 'Your comment', 'aria-label': 'Comment', style: 'min-height:90px', maxlength: 4000 });
-    const snippets = snippetTools(text, clientId);
+    const text = h('textarea', { placeholder: session.isCoach ? 'Your comment' : 'Your question or note for your coach', 'aria-label': 'Comment', style: 'min-height:90px', maxlength: 4000 });
+    const snippets = session.isCoach ? snippetTools(text, clientId) : { field: text, button: null };
     let sent = false;
     const sh = sheet(
-      h('h2', {}, setIndex != null ? `Comment on set ${setIndex + 1}` : 'Comment on this workout'),
+      h('h2', {}, videoId ? `Comment on the set ${setIndex + 1} video` : setIndex != null ? `Comment on set ${setIndex + 1}` : session.isCoach ? 'Comment on this workout' : 'Ask your coach about this workout'),
       snippets.field,
       h('div', { class: 'row', style: 'margin-top:8px' },
         snippets.button,
@@ -200,7 +219,7 @@ export function commentOn(clientId, logId, setIndex, itemId) {
           class: 'primary grow',
           onclick: (e) => busy(e.currentTarget, async () => {
             if (!text.value.trim()) return;
-            await post(`/clients/${clientId}/comments`, { text: text.value, logId, setIndex: setIndex ?? null, itemId: itemId ?? null });
+            await post(`/clients/${clientId}/comments`, videoId ? { text: text.value, videoId } : { text: text.value, logId, setIndex: setIndex ?? null, itemId: itemId ?? null });
             sent = true;
             sh.close();
           }),

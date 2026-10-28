@@ -1055,4 +1055,22 @@ async fn full_client_journey() {
     assert_eq!(t.call("GET", "/snippets", Some("coach2"), None).await.0, StatusCode::FORBIDDEN, "coach2 was deleted above");
     assert_eq!(t.call("DELETE", &sn_path, Some("coach1"), None).await.0, StatusCode::OK);
     assert_eq!(t.call("DELETE", &sn_path, Some("coach1"), None).await.0, StatusCode::NOT_FOUND);
+
+    // --- messages about a workout, set or video (MS-3)
+    let (s, c) = t.call("POST", "/clients/client1/comments", Some("client1"), Some(json!({ "text": "Was this too heavy?", "logId": "pr2" }))).await;
+    assert_eq!(s, StatusCode::OK, "{c}");
+    assert_eq!(c["about"]["workoutName"], "PR day");
+    assert_eq!(c["about"]["date"], today.to_string());
+    let (_, c) = t.call("POST", "/clients/client1/comments", Some("coach1"), Some(json!({ "text": "Nice set", "logId": "pr2", "itemId": "x", "setIndex": 0 }))).await;
+    assert_eq!(c["about"]["exerciseName"], "PR Lift");
+    let (_, c) = t.call("POST", "/clients/client1/comments", Some("coach1"), Some(json!({ "text": "?", "logId": "not-synced-yet" }))).await;
+    assert!(c.get("about").is_none(), "a log the server doesn't have yet is still a valid anchor");
+    let (_, vids) = t.call("GET", "/clients/client1/videos", Some("coach1"), None).await;
+    let v0 = &vids.as_array().unwrap()[0];
+    let (s, c) = t.call("POST", "/clients/client1/comments", Some("coach1"), Some(json!({ "text": "Watch the knees", "videoId": v0["id"] }))).await;
+    assert_eq!(s, StatusCode::OK, "{c}");
+    assert_eq!(c["videoId"], v0["id"]);
+    assert_eq!(c["logId"], v0["logId"]);
+    assert_eq!(c["setIndex"], v0["setIndex"]);
+    assert_eq!(t.call("POST", "/clients/client1/comments", Some("coach1"), Some(json!({ "text": "x", "videoId": "nope" }))).await.0, StatusCode::BAD_REQUEST);
 }

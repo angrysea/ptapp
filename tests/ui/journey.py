@@ -433,6 +433,13 @@ with sync_playwright() as p:
     client.get_by_role("link", name="Coach").click()
     expect(client.get_by_text(re.compile("Keep the chest up"))).to_be_visible()
     shot(client, "14-client-messages")
+    # the coach's set comment links to that workout (MS-3)
+    about = client.locator("a.about", has_text="Back Squat set 3").first
+    expect(about).to_be_visible()
+    about.click()
+    expect(client).to_have_url(re.compile(r"#/workout/"))
+    expect(client.get_by_role("button", name="💬 Ask your coach about this workout")).to_be_visible()
+    client.get_by_role("link", name="Coach").click()
 
     # ---------------- the coach replies to a set video, voice over the clip (VR-1..VR-3)
     coach.locator('#tabs a[data-path="/videos"]').click()

@@ -105,7 +105,7 @@ function inviteSheet() {
 
 // ------------------------------------------------------------ client page
 
-export async function renderClient(cid, tab = 'overview') {
+export async function renderClient(cid, tab = 'overview', focus = null) {
   let detail;
   try { detail = await get(`/clients/${cid}`, { cache: true }); } catch (e) { errorToast(e); return go('/'); }
   const client = detail.profile;
@@ -115,10 +115,11 @@ export async function renderClient(cid, tab = 'overview') {
     h('button', { class: 'ghost small', onclick: () => go('/') }, '‹ Clients'),
     h('h1', {}, client.name),
     h('p', { class: 'muted small' }, client.email),
-    subtabs(tabs, tab, (t) => go(`/c/${cid}/${t}`)),
+    subtabs(tabs, tabs.some(([k]) => k === tab) ? tab : 'overview', (t) => go(`/c/${cid}/${t}`)),
     body);
   const views = { overview, calendar, logs, metrics: (el) => renderMetrics(el, client), intake: (el) => mount(el, h('h3', {}, 'Intake'), intakeSummary(detail.intake, client), h('h3', {}, 'Health screening & waiver'), waiverSummary(detail.waiver)), messages: (el) => renderThread(el, cid) };
-  try { await views[tab](body, client); } catch (e) { mount(body, h('p', { class: 'muted' }, e.message)); }
+  try { await views[tab](body, client, focus); } catch (e) { mount(body, h('p', { class: 'muted' }, e.message)); }
+  body.querySelector('.card.focus')?.scrollIntoView({ block: 'center' });
 }
 
 async function overview(el, client) {
@@ -194,7 +195,7 @@ async function calendar(el, client) {
   );
 }
 
-async function logs(el, client) {
+async function logs(el, client, focus = null) {
   const u = units(session.profile);
   const [list, comments, videos] = await Promise.all([
     get(`/clients/${client.userId}/logs?from=${addDays(todayIso(), -60)}&to=${todayIso()}`),
@@ -204,14 +205,14 @@ async function logs(el, client) {
   const byLog = {};
   for (const c of comments) if (c.logId) (byLog[c.logId] ||= []).push(c);
   const videosFor = (logId, itemId) => videos.filter((v) => v.logId === logId && v.itemId === itemId).sort((a, b) => a.setIndex - b.setIndex);
-  const refresh = () => logs(el, client);
+  const refresh = () => logs(el, client, focus);
   mount(el,
     list.length === 0 && h('p', { class: 'muted' }, 'No workouts logged in the last 60 days.'),
     [...list].reverse().map((l) => {
       const byEx = {};
       for (const s of l.sets) (byEx[`${s.itemId}`] ||= { name: s.exerciseName, sets: [] }).sets.push(s);
       const c = l.check;
-      return h('div', { class: 'card' },
+      return h('div', { class: `card ${l.id === focus ? 'focus' : ''}`, 'data-log': l.id },
         h('div', { class: 'spread' }, h('strong', {}, l.workoutName), statusChip(l, l.date)),
         h('div', { class: 'muted small' }, `${fmtDate(l.date)} · updated ${fmtDateTime(l.updatedAt)}`),
         l.rating && ratingChip(l.rating),

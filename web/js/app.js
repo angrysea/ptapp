@@ -138,6 +138,7 @@ async function boot() {
     route('/', renderRoster);
     route('/c/:id', (id) => renderClient(id));
     route('/c/:id/:tab', (id, tab) => renderClient(id, tab));
+    route('/c/:id/:tab/:focus', (id, tab, focus) => renderClient(id, tab, focus));
     route('/programs', renderPrograms);
     route('/programs/:id', renderProgramEditor);
     route('/exercises', renderExercises);

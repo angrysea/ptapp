@@ -206,6 +206,13 @@ fn log_sk(date: NaiveDate, id: &str) -> String {
     format!("LOG#{date}#{id}")
 }
 
+/// A client's log by id, found through its pointer (logs from before
+/// pointers existed aren't found).
+pub async fn find_log(st: &AppState, pk: &str, log_id: &str) -> ApiResult<Option<WorkoutLog>> {
+    let Some(r) = st.store.get::<LogRef>(pk, &format!("LOGREF#{log_id}")).await? else { return Ok(None) };
+    st.store.get(pk, &log_sk(r.date, log_id)).await
+}
+
 /// The stored copy of a log, wherever it is filed, for a 409 body.
 async fn current_log(st: &AppState, pk: &str, log: &WorkoutLog) -> ApiResult<Option<WorkoutLog>> {
     let date = match st.store.get::<LogRef>(pk, &format!("LOGREF#{}", log.id)).await? {

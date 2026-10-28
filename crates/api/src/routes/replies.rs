@@ -176,6 +176,8 @@ async fn finish(st: &AppState, ctx: &Ctx, scope: &ClientScope, r: &mut Reply) ->
         text,
         reply_id: (!r.key.is_empty()).then(|| r.id.clone()),
         attachment: None,
+        video_id: Some(video.id.clone()),
+        about: super::comments::about(st, scope, Some(&video.log_id), Some(&video.item_id)).await?,
         created_at: r.created_at,
     };
     st.store.put(&scope.pk(), &format!("COMMENT#{}#{}", c.created_at.to_rfc3339(), c.id), &c).await?;

@@ -7,11 +7,11 @@ use axum::extract::{Path, State};
 use axum::Json;
 use chrono::Utc;
 use futures::future::try_join_all;
-use ptcore::model::{Attachment, AttachmentKind, Comment};
+use ptcore::model::{About, Attachment, AttachmentKind, Comment};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use crate::auth::{client_scope, Ctx};
+use crate::auth::{client_scope, ClientScope, Ctx};
 use crate::error::{bad_request, ApiResult};
 use crate::util::{
     audit, check_size, ext_for, new_id, presign_get, presign_put, s3_object_exists, untag, AUDIO_TYPES, IMAGE_TYPES, MAX_PHOTO_BYTES,
@@ -78,6 +78,17 @@ pub struct NewComment {
     item_id: Option<String>,
     set_index: Option<u32>,
     attachment: Option<Attachment>,
+    /// A set video the message is about; its workout and set become the anchor.
+    video_id: Option<String>,
+}
+
+/// What a message anchored to `log_id` (and `item_id`) is about, from the
+/// client's own log; None if that log isn't on the server (yet).
+pub async fn about(st: &AppState, scope: &ClientScope, log_id: Option<&str>, item_id: Option<&str>) -> ApiResult<Option<About>> {
+    let Some(log_id) = log_id else { return Ok(None) };
+    let Some(log) = super::training::find_log(st, &scope.pk(), log_id).await? else { return Ok(None) };
+    let exercise_name = item_id.and_then(|i| log.sets.iter().find(|s| s.item_id == i)).map(|s| s.exercise_name.clone());
+    Ok(Some(About { date: log.date, workout_name: log.workout_name, scheduled_id: log.scheduled_id, exercise_name }))
 }
 
 pub async fn create(
@@ -109,17 +120,26 @@ pub async fn create(
         }
         untag(&st, &a.key).await?;
     }
+    // A message about a set video is anchored to that video's set.
+    let (mut log_id, mut item_id, mut set_index) = (body.log_id, body.item_id, body.set_index);
+    if let Some(vid) = &body.video_id {
+        let v = super::videos::find(&st, &scope, vid).await.map_err(|_| bad_request("that video isn't in this client's list"))?;
+        (log_id, item_id, set_index) = (Some(v.log_id), Some(v.item_id), Some(v.set_index));
+    }
+    let about = about(&st, &scope, log_id.as_deref(), item_id.as_deref()).await?;
     let c = Comment {
         id: new_id(),
         author_id: ctx.user_id().to_string(),
         author_role: ctx.profile.role,
         author_name: ctx.profile.name.clone(),
-        log_id: body.log_id,
-        item_id: body.item_id,
-        set_index: body.set_index,
+        log_id,
+        item_id,
+        set_index,
         text: text.to_string(),
         reply_id: None,
         attachment: body.attachment,
+        video_id: body.video_id,
+        about,
         created_at: Utc::now(),
     };
     st.store

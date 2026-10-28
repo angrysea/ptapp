@@ -490,7 +490,27 @@ pub struct Comment {
     /// A photo or voice note sent with (or as) the message.
     #[serde(default)]
     pub attachment: Option<Attachment>,
+    /// A set video the message is about (MS-3).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub video_id: Option<String>,
+    /// What the anchor refers to, filled in by the server when the message
+    /// is sent, so the thread can show and link it (MS-3).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub about: Option<About>,
     pub created_at: DateTime<Utc>,
+}
+
+/// The workout, exercise or set video a message refers to (MS-3).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct About {
+    pub date: NaiveDate,
+    pub workout_name: String,
+    /// The calendar entry, which the client's app opens.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scheduled_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exercise_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

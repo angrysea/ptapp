@@ -16,6 +16,7 @@ import { askBeforeCellular, onCellular, playReply, playVideo } from '../videos.j
 import { canRecord, recordClip } from './recorder.js';
 import { trimmer } from './trim.js';
 import { celebrate } from './records.js';
+import { commentOn } from './comments.js';
 
 // A finished workout the server refused for good (not a 409, which means a
 // newer copy is already saved) goes back to being a draft, so it is neither
@@ -419,6 +420,11 @@ export async function renderWorkout(date, schedId) {
     h('div', { class: 'row' },
       h('button', { class: 'grow', onclick: () => finish('skipped') }, 'Skip workout'),
       h('button', { class: 'primary grow', onclick: () => finish(null) }, 'Finish workout')),
+    // MS-3: a question about a finished workout links back to it for the coach.
+    bySched[schedId] && bySched[schedId].status !== 'inProgress' && h('button', {
+      class: 'block', style: 'margin-top:8px',
+      onclick: async () => { if (await commentOn(me.userId, bySched[schedId].id)) toast('Sent to your coach'); },
+    }, '💬 Ask your coach about this workout'),
   );
 
   /** The client's note on one exercise, for their coach; kept with the draft. */
