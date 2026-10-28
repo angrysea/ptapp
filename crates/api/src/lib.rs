@@ -42,6 +42,8 @@ pub struct AppState {
     pub realtime: Option<realtime::Realtime>,
     /// Web Push (VAPID_PARAM); None turns it off.
     pub push: Option<push::Push>,
+    /// Password changes (USER_POOL_ID, USER_POOL_CLIENT_ID); None turns them off.
+    pub cognito: Option<routes::password::Cognito>,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -50,6 +52,7 @@ pub fn router(state: AppState) -> Router {
         .route("/health", get(|| async { Json(json!({ "ok": true })) }))
         // identity + onboarding
         .route("/me", get(me::get_me).put(me::update_me))
+        .route("/me/password", post(password::change))
         .route("/invites", get(invites::list).post(invites::create))
         .route("/invites/{code}", get(invites::peek).delete(invites::revoke))
         .route("/invites/{code}/public", get(invites::public))
@@ -130,6 +133,7 @@ impl AppState {
             ses: aws_sdk_sesv2::Client::new(&config),
             invite_from: std::env::var("INVITE_FROM").ok().filter(|f| f.contains('@')),
             realtime: realtime::Realtime::from_env(&config, http.clone()),
+            cognito: routes::password::Cognito::from_env(&config),
             push: push::Push::from_env(&config, http, &app_url).await,
             app_url,
             bucket: std::env::var("MEDIA_BUCKET").expect("MEDIA_BUCKET"),

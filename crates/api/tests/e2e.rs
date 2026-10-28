@@ -132,6 +132,10 @@ async fn full_client_journey() {
     assert_eq!(t.call("GET", "/clients", Some("admin1"), None).await.0, StatusCode::FORBIDDEN);
 
     // --- coach profiles and the public directory (tasks/coaches)
+    // password changes go through the API (Cognito isn't configured locally)
+    let (s, e) = t.call("POST", "/me/password", Some("coach1"), Some(json!({ "current": "old-pass-1", "new": "new-pass-1" }))).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{e}");
+    assert_eq!(t.call("POST", "/me/password", None, Some(json!({ "current": "a", "new": "b" }))).await.0, StatusCode::UNAUTHORIZED);
     let (_, me) = t.call("GET", "/me", Some("coach1"), None).await;
     assert_eq!(me["coachProfileComplete"], false);
     let (_, mine) = t.call("GET", "/me/coach-profile", Some("coach1"), None).await;

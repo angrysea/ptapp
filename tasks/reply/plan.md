@@ -31,7 +31,7 @@ The human ran `web/spikes/reply.html` as a coach on a Windows PC in Chrome 156 w
 | 720×1280 clip, 7.7 s recording | 1.36 MB at 2.5 Mbps; previews and plays |
 | Canvas draws | 120/s (the monitor's refresh rate), so the 30 fps capture is steady |
 
-**Decision 1 confirmed:** record in the browser. Replies record at about 1.6 Mbps (a 5-minute reply is about 60 MB). Still to check by hand: a reply played on the human's iPhone, and recording on Safari (Mac or iPad).
+**Decision 1 confirmed:** record in the browser. Replies record at about 1.6 Mbps (a 5-minute reply is about 60 MB). A reply recorded in Chrome on Windows plays on the human's iPhone (confirmed 2026-10-28). Still to check by hand: recording on Safari (Mac or iPad).
 
 ## Built (2026-10-28)
 

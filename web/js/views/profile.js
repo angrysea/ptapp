@@ -1,6 +1,6 @@
-import { myOutbox, put } from '../api.js';
+import { myOutbox, post, put } from '../api.js';
 import { pendingUploads, removeUpload } from '../uploads.js';
-import { changePassword, devMode, logout, MIN_LENGTH, policyProblem } from '../auth.js';
+import { devMode, logout, MIN_LENGTH, policyProblem } from '../auth.js';
 import { kv, outbox } from '../idb.js';
 import { session } from '../session.js';
 import { $app, busy, field, h, mount, passwordField, select, sheet, toast } from '../ui.js';
@@ -39,10 +39,12 @@ function passwordSheet() {
             || (next.input.value !== again.input.value ? 'The new passwords don’t match.' : null)
             || (next.input.value === current.input.value ? 'Choose a password different from your current one.' : null);
         if (bad) return show(bad);
+        // The API checks the current password with Cognito (routes/password.rs).
         try {
-          await changePassword(current.input.value, next.input.value);
+          await post('/me/password', { current: current.input.value, new: next.input.value });
         } catch (err) {
-          return show(err.message);
+          if (err.status !== 400) throw err;
+          return show(err.message.charAt(0).toUpperCase() + err.message.slice(1) + '.');
         }
         sh.close();
         toast('Password changed');

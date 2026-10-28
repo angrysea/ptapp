@@ -183,12 +183,15 @@ Resources:
       GenerateSecret: false
       AllowedOAuthFlowsUserPoolClient: true
       AllowedOAuthFlows: [code]
-      # aws.cognito.signin.user.admin: users change their own password (auth.js changePassword).
-      AllowedOAuthScopes: [openid, email, profile, aws.cognito.signin.user.admin]
+      # No aws.cognito.signin.user.admin: it would let a stolen browser token
+      # change the account's email (then reset its password). Password changes
+      # go through the API instead (routes/password.rs).
+      AllowedOAuthScopes: [openid, email, profile]
       SupportedIdentityProviders: [COGNITO]
       CallbackURLs: [!Sub "https://${Distribution.DomainName}/", !Sub "${LocalDevOrigin}/", !If [HasAppDomain, !Sub "https://${AppDomain}/", !Ref AWS::NoValue]]
       LogoutURLs: [!Sub "https://${Distribution.DomainName}/", !Sub "${LocalDevOrigin}/", !If [HasAppDomain, !Sub "https://${AppDomain}/", !Ref AWS::NoValue]]
-      ExplicitAuthFlows: [ALLOW_REFRESH_TOKEN_AUTH, ALLOW_USER_SRP_AUTH]
+      # ADMIN_USER_PASSWORD_AUTH: the API checks the current password before a change.
+      ExplicitAuthFlows: [ALLOW_REFRESH_TOKEN_AUTH, ALLOW_USER_SRP_AUTH, ALLOW_ADMIN_USER_PASSWORD_AUTH]
       PreventUserExistenceErrors: ENABLED
       EnableTokenRevocation: true
       IdTokenValidity: 60
@@ -234,6 +237,8 @@ Resources:
           APP_URL: !If [HasAppDomain, !Sub "https://${AppDomain}", !Sub "https://${Distribution.DomainName}"]
           VIDEO_RETENTION_DAYS: !Ref VideoRetentionDays
           EVENTS_HTTP_DOMAIN: !GetAtt EventApi.Dns.Http
+          USER_POOL_ID: !Ref UserPool
+          USER_POOL_CLIENT_ID: !Ref UserPoolClient
           # Web Push key, an SSM SecureString made once by scripts/deploy.sh.
           VAPID_PARAM: !Sub /ptapp/${Stage}/vapid-private-key
           RUST_LOG: info
@@ -258,6 +263,11 @@ Resources:
               Resource:
                 - !Sub "arn:aws:ses:${AWS::Region}:${AWS::AccountId}:identity/*"
                 - !Sub "arn:aws:ses:${AWS::Region}:${AWS::AccountId}:configuration-set/*"
+        # Password changes (routes/password.rs): check the current password, set the new one.
+        - Statement:
+            - Effect: Allow
+              Action: [cognito-idp:AdminInitiateAuth, cognito-idp:AdminSetUserPassword]
+              Resource: !GetAtt UserPool.Arn
         # Chat: publish to users' inbox channels (realtime.rs), and read the
         # Web Push key (push.rs; the AWS-managed SSM key decrypts it).
         - Statement:

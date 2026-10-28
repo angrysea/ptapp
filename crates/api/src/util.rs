@@ -225,6 +225,7 @@ mod tests {
             video_retention_days: 180,
             realtime: None,
             push: None,
+            cognito: None,
         };
         let up = super::presign_put(&state, "k", "image/jpeg", 1234, Some(super::PENDING_TAG)).await.unwrap();
         assert!(up.url.contains("X-Amz-SignedHeaders=content-length%3B"), "{}", up.url);

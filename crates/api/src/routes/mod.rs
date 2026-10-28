@@ -7,6 +7,7 @@ pub mod exercises;
 pub mod invites;
 pub mod me;
 pub mod messages;
+pub mod password;
 pub mod metrics;
 pub mod programs;
 pub mod replies;
