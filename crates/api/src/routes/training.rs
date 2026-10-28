@@ -16,7 +16,7 @@ use serde_json::{json, Value};
 use crate::auth::{client_scope, Ctx};
 use crate::error::{bad_request, ApiError, ApiResult};
 use crate::routes::maxes::maxes_by_exercise;
-use crate::routes::{records, suggestions};
+use crate::routes::{alerts, records, suggestions};
 use crate::store::{key, keyed, s};
 use crate::util::{audit, new_id, parse_date};
 use crate::AppState;
@@ -301,6 +301,9 @@ pub async fn put_log(
                 }
                 if let Err(e) = suggestions::evaluate(&st, &scope, &log).await {
                     tracing::warn!(log = %log.id, "progression suggestions failed: {e:?}");
+                }
+                if let Err(e) = alerts::on_log(&st, &scope, &log).await {
+                    tracing::warn!(log = %log.id, "pain alert failed: {e:?}");
                 }
                 return Ok(Json(log));
             }

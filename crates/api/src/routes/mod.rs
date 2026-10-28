@@ -1,4 +1,5 @@
 pub mod account;
+pub mod alerts;
 pub mod admin;
 pub mod clients;
 pub mod coaches;

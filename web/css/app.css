@@ -106,7 +106,7 @@ button, .btn {
 button.primary, .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
 button.danger { color: var(--bad); border-color: var(--bad); }
 button.ghost { background: transparent; border-color: transparent; }
-button.small { min-height: 36px; padding: 0 12px; font-size: 0.875rem; }
+button.small, .btn.small { min-height: 36px; padding: 0 12px; font-size: 0.875rem; }
 button.block { width: 100%; }
 button:disabled { opacity: 0.5; cursor: default; }
 
@@ -337,3 +337,8 @@ button.reply.new { background: var(--accent); color: var(--accent-ink); }
 /* Filming guidance before a set video (VS-5, videos.js). */
 .film-tip { background: var(--accent-soft); border-radius: 10px; padding: 10px 12px; margin-bottom: 10px; font-size: 0.9rem; }
 .film-tip ul { margin: 6px 0 0; padding-left: 18px; }
+
+/* The coach's alert inbox (views/alerts.js). */
+.alerts { border-left: 4px solid var(--warn); }
+.alert-row { padding: 10px 0; border-bottom: 1px solid var(--line); }
+.alert-row:last-child { border-bottom: 0; }

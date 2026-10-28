@@ -38,6 +38,7 @@ const ROSTER_CONCURRENCY: usize = 8;
 pub async fn roster(State(st): State<AppState>, ctx: Ctx) -> ApiResult<Json<Vec<Value>>> {
     let coach = ctx.require_coach()?;
     let entries: Vec<RosterEntry> = st.store.query_prefix(&format!("COACH#{coach}"), "CLIENT#").await?;
+    let threshold = super::alerts::settings(&st, coach).await?.missed_in_a_row;
     // Clients are summarized a few at a time (each takes five reads) so a big
     // roster doesn't fire hundreds of DynamoDB requests at once.
     let rows: Vec<ApiResult<Value>> = stream::iter(entries)
@@ -56,6 +57,10 @@ pub async fn roster(State(st): State<AppState>, ctx: Ctx) -> ApiResult<Json<Vec<
                     st.store.query_prefix::<Assignment>(&pk, "ASSIGN#"),
                 )?;
                 let a = adherence(&sched, &logs, today);
+                // LG-7: a run of missed workouts becomes an alert (once per run).
+                if let Err(err) = super::alerts::check_missed(&st, coach, threshold, &e, &sched, &logs, today).await {
+                    tracing::warn!(client = %e.client_id, "missed-workout alert failed: {err:?}");
+                }
                 let last_workout = logs.iter().filter(|l| l.status.counts_as_done()).map(|l| l.date).max();
                 let pain_since = today - Duration::days(14);
                 let pain = logs

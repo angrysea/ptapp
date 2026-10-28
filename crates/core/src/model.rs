@@ -413,6 +413,36 @@ pub struct ScheduledWorkout {
     pub workout: Workout,
 }
 
+// ---------------------------------------------------------------- alerts (LG-7)
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum AlertKind {
+    /// A logged workout reported pain.
+    Pain,
+    /// Several scheduled workouts in a row weren't logged.
+    Missed,
+}
+
+/// Something a coach should look at: `COACH#{coach}` / `ALERT#{id}`. Ids are
+/// `pain.{logId}` and `missed.{clientId}.{runStart}`, one per log or run of
+/// missed workouts, so finding it again never repeats it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Alert {
+    pub id: String,
+    pub kind: AlertKind,
+    pub client_id: String,
+    pub client_name: String,
+    /// The workout date (pain) or the latest missed date.
+    pub date: NaiveDate,
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log_id: Option<String>,
+    pub done: bool,
+    pub created_at: DateTime<Utc>,
+}
+
 // ---------------------------------------------------------------- logging
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

@@ -43,6 +43,28 @@ pub fn adherence(scheduled: &[ScheduledWorkout], logs: &[WorkoutLog], today: Nai
     a
 }
 
+/// The run of missed workouts ending with the latest one due (LG-7): how
+/// many, and the date the run started. A completed or skipped workout ends
+/// it (a skip is the client telling the coach). None if the latest due
+/// workout wasn't missed.
+pub fn missed_streak(scheduled: &[ScheduledWorkout], logs: &[WorkoutLog], today: NaiveDate) -> Option<(u32, NaiveDate)> {
+    let logged: HashMap<&str, LogStatus> = logs.iter().filter_map(|l| l.scheduled_id.as_deref().map(|s| (s, l.status))).collect();
+    let mut due: Vec<&ScheduledWorkout> = scheduled.iter().filter(|s| s.date < today).collect();
+    due.sort_by_key(|s| std::cmp::Reverse(s.date));
+    let mut run = 0;
+    let mut start = None;
+    for s in due {
+        match logged.get(s.id.as_str()) {
+            None | Some(LogStatus::InProgress) => {
+                run += 1;
+                start = Some(s.date);
+            }
+            Some(_) => break,
+        }
+    }
+    start.map(|d| (run, d))
+}
+
 /// Epley estimated 1RM. A single is taken at face value.
 pub fn e1rm(load_kg: f64, reps: u32) -> f64 {
     if reps <= 1 {
@@ -186,6 +208,23 @@ mod tests {
             check: None,
             updated_at: Utc.with_ymd_and_hms(2026, 10, day, 12, 0, 0).unwrap(),
         }
+    }
+
+    #[test]
+    fn missed_streak_counts_back_from_the_latest_due() {
+        let s = vec![sched("a", 5), sched("b", 7), sched("c", 9), sched("d", 12), sched("e", 20)];
+        // a done; b, c, d missed; e is in the future
+        let logs = vec![log("a", 5, LogStatus::Completed, vec![])];
+        assert_eq!(missed_streak(&s, &logs, d(14)), Some((3, d(7))));
+        // a skip ends the run: only d counts
+        let logs = vec![log("a", 5, LogStatus::Completed, vec![]), log("c", 9, LogStatus::Skipped, vec![])];
+        assert_eq!(missed_streak(&s, &logs, d(14)), Some((1, d(12))));
+        // the latest due was done: no run
+        let logs = vec![log("d", 12, LogStatus::Completed, vec![])];
+        assert_eq!(missed_streak(&s, &logs, d(14)), None);
+        // started but never finished counts as missed
+        let logs = vec![log("d", 12, LogStatus::InProgress, vec![]), log("c", 9, LogStatus::Completed, vec![])];
+        assert_eq!(missed_streak(&s, &logs, d(14)), Some((1, d(12))));
     }
 
     #[test]

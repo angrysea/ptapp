@@ -430,7 +430,16 @@ with sync_playwright() as p:
     expect(coach.locator(".exercise", has_text="Back Squat").locator(".videobar button", has_text="▶ Set 3 ✓")).to_be_visible()
     coach.get_by_role("link", name="Clients").click()
     expect(coach.get_by_text("Pain reported")).to_be_visible()
+    # the alert inbox (LG-7): the reported pain links to the workout, then is marked done
+    alert = coach.locator(".alert-row.pain").first
+    expect(alert).to_contain_text("Reported pain")
     shot(coach, "13-roster")
+    alert.get_by_role("link", name="See workout").click()
+    expect(coach).to_have_url(re.compile(r"#/c/[^/]+/logs/"))
+    expect(coach.locator(".card.focus")).to_be_visible()
+    coach.get_by_role("link", name="Clients").click()
+    coach.locator(".alert-row.pain").first.get_by_role("button", name="✓ Done").click()
+    expect(coach.locator(".alert-row.pain")).to_have_count(0)
 
     client.get_by_role("link", name="Coach").click()
     expect(client.get_by_text(re.compile("Keep the chest up"))).to_be_visible()

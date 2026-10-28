@@ -1085,4 +1085,23 @@ async fn full_client_journey() {
     assert_eq!(sled["filming"]["notes"], "Whole sled in frame");
     let (_, sled) = t.call("PUT", &format!("/exercises/{}", sled["id"].as_str().unwrap()), Some("coach1"), Some(json!({ "name": "Sled Push" }))).await;
     assert!(sled.get("filming").is_none(), "leaving it out clears it");
+
+    // --- alert inbox (LG-7): the pain reported on log-abc is waiting for the coach
+    assert_eq!(t.call("GET", "/alerts", Some("client1"), None).await.0, StatusCode::FORBIDDEN);
+    let (_, inbox) = t.call("GET", "/alerts", Some("coach1"), None).await;
+    assert_eq!(inbox["settings"]["missedInARow"], 2);
+    let pain = inbox["alerts"].as_array().unwrap().iter().find(|a| a["id"] == "pain.log-abc").expect("a pain alert").clone();
+    assert_eq!(pain["kind"], "pain");
+    assert!(pain["text"].as_str().unwrap().contains("left knee"), "{pain}");
+    // re-saving that log doesn't file it again
+    t.call("PUT", "/clients/client1/logs/log-abc", Some("client1"), Some(log(&chrono::Utc::now().to_rfc3339(), 5))).await;
+    let (_, inbox) = t.call("GET", "/alerts", Some("coach1"), None).await;
+    assert_eq!(inbox["alerts"].as_array().unwrap().iter().filter(|a| a["id"] == "pain.log-abc").count(), 1);
+    assert_eq!(t.call("POST", "/alerts/pain.log-abc/done", Some("coach1"), None).await.0, StatusCode::OK);
+    let (_, inbox) = t.call("GET", "/alerts", Some("coach1"), None).await;
+    assert!(!inbox["alerts"].as_array().unwrap().iter().any(|a| a["id"] == "pain.log-abc"), "done alerts leave the inbox");
+    assert_eq!(t.call("PUT", "/alerts/settings", Some("coach1"), Some(json!({ "missedInARow": 0 }))).await.0, StatusCode::BAD_REQUEST);
+    let (s, set) = t.call("PUT", "/alerts/settings", Some("coach1"), Some(json!({ "missedInARow": 3 }))).await;
+    assert_eq!(s, StatusCode::OK, "{set}");
+    assert_eq!(t.call("GET", "/clients", Some("coach1"), None).await.0, StatusCode::OK, "the roster checks for missed runs");
 }
