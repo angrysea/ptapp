@@ -14,7 +14,7 @@ import { renderCoachPage, renderDirectory } from './views/directory.js';
 import { refreshMessageBadge, renderInbox } from './views/messages.js';
 import { renderReview } from './views/review.js';
 import { onLive, startLive } from './realtime.js';
-import { resync as resyncPush } from './push.js';
+import { disable as pushOff, resync as resyncPush } from './push.js';
 import { loadExercises, renderExercises } from './views/exercises.js';
 import { renderIntake, renderWaiver } from './views/intake.js';
 import { renderMetrics } from './views/metrics.js';
@@ -85,7 +85,12 @@ async function boot() {
   // kept per user in the outbox, see api.js).
   try {
     if (localStorage.getItem(OWNER) !== me.userId) {
-      if (localStorage.getItem(OWNER)) await kv.clear();
+      if (localStorage.getItem(OWNER)) {
+        await kv.clear();
+        // The browser's push subscription was the previous user's; this user
+        // turns notifications on for themselves if they want them.
+        await pushOff();
+      }
       localStorage.setItem(OWNER, me.userId);
     }
   } catch { /* storage unavailable: nothing cached to leak */ }

@@ -732,8 +732,29 @@ async fn full_client_journey() {
     // messages still send when push isn't configured (locally there's no VAPID key)
     assert_eq!(t.call("POST", "/clients/client1/comments", Some("coach1"), Some(json!({ "text": "Push check" }))).await.0, StatusCode::OK);
     assert_eq!(t.call("GET", "/push/key", Some("client1"), None).await.1["publicKey"], Value::Null);
-    let gone = json!({ "endpoint": "https://fcm.googleapis.com/fcm/send/abc" });
-    assert_eq!(t.call("DELETE", "/me/push", Some("client1"), Some(gone)).await.0, StatusCode::OK);
+    // subscriptions per user, counted straight from the table
+    let devices = |user: &'static str| {
+        let (ddb, table) = (ddb.clone(), table.clone());
+        async move {
+            ddb.query().table_name(&table)
+                .key_condition_expression("pk = :p AND begins_with(sk, :s)")
+                .expression_attribute_values(":p", aws_sdk_dynamodb::types::AttributeValue::S(format!("USER#{user}")))
+                .expression_attribute_values(":s", aws_sdk_dynamodb::types::AttributeValue::S("PUSH#".into()))
+                .send().await.unwrap().count()
+        }
+    };
+    assert_eq!(devices("client1").await, 1);
+    // the same browser, now signed in as someone else: the endpoint moves to them
+    assert_eq!(t.call("POST", "/me/push", Some("coach1"), Some(sub("https://fcm.googleapis.com/fcm/send/abc"))).await.0, StatusCode::OK);
+    assert_eq!((devices("client1").await, devices("coach1").await), (0, 1), "a shared device notifies only its latest user");
+    // at most ten devices each, oldest dropped
+    for n in 0..11 {
+        t.call("POST", "/me/push", Some("coach1"), Some(sub(&format!("https://fcm.googleapis.com/fcm/send/dev{n}")))).await;
+    }
+    assert_eq!(devices("coach1").await, 10);
+    let gone = json!({ "endpoint": "https://fcm.googleapis.com/fcm/send/dev10" });
+    assert_eq!(t.call("DELETE", "/me/push", Some("coach1"), Some(gone)).await.0, StatusCode::OK);
+    assert_eq!(devices("coach1").await, 9);
     t.call("POST", "/clients/client1/messages/read", Some("client1"), None).await;
 
     // --- tenant isolation

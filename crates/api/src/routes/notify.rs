@@ -2,11 +2,19 @@
 //! Push subscription as `USER#{user}` / `PUSH#{endpoint}`; a new message or
 //! video reply notifies every device of the recipient (routes/messages.rs).
 //! Sending is push.rs; the service worker shows the notification (web/sw.js).
+//!
+//! A browser has one subscription whoever is signed in, so an endpoint
+//! belongs to exactly one user: `PUSHEP#{endpoint}` / `OWNER` names them,
+//! and subscribing takes it from anyone else (a shared device must not get
+//! the previous user's notifications). Each user keeps at most
+//! `MAX_DEVICES` subscriptions, oldest dropped first.
+
+use std::time::Duration;
 
 use axum::extract::State;
 use axum::Json;
 use chrono::{DateTime, Utc};
-use futures::future::join_all;
+use futures::stream::{self, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -38,8 +46,24 @@ fn yes() -> bool {
     true
 }
 
+/// Most devices a user gets notifications on.
+pub const MAX_DEVICES: usize = 10;
+/// Sends at once per notification, and how long each may take: sending
+/// happens inside the request (a Lambda freezes work left after it answers).
+const PARALLEL_SENDS: usize = 5;
+const SEND_TIMEOUT: Duration = Duration::from_secs(3);
+
 fn sk(endpoint: &str) -> String {
     format!("PUSH#{endpoint}")
+}
+
+fn owner_pk(endpoint: &str) -> String {
+    format!("PUSHEP#{endpoint}")
+}
+
+#[derive(Serialize, Deserialize)]
+struct Owner {
+    user: String,
 }
 
 /// `GET /push/key`: the VAPID public key the browser subscribes with; null
@@ -56,9 +80,36 @@ pub async fn subscribe(State(st): State<AppState>, ctx: Ctx, Json(mut sub): Json
     if sub.keys.p256dh.is_empty() || sub.keys.auth.is_empty() || sub.keys.p256dh.len() > 200 || sub.keys.auth.len() > 100 {
         return Err(bad_request("the subscription's keys are missing"));
     }
+    let me = ctx.user_id().to_string();
+    // The endpoint is this user's now: the previous owner (an earlier user of
+    // this browser) stops getting notifications on it.
+    if let Some(prev) = st.store.get::<Owner>(&owner_pk(&sub.endpoint), "OWNER").await?
+        && prev.user != me
+    {
+        st.store.delete(&format!("USER#{}", prev.user), &sk(&sub.endpoint)).await?;
+    }
+    st.store.put(&owner_pk(&sub.endpoint), "OWNER", &Owner { user: me.clone() }).await?;
     sub.created_at = Utc::now();
-    st.store.put(&format!("USER#{}", ctx.user_id()), &sk(&sub.endpoint), &sub).await?;
+    let pk = format!("USER#{me}");
+    st.store.put(&pk, &sk(&sub.endpoint), &sub).await?;
+    // At most MAX_DEVICES: the oldest go.
+    let mut all: Vec<Subscription> = st.store.query_prefix(&pk, "PUSH#").await?;
+    if all.len() > MAX_DEVICES {
+        all.sort_by_key(|s| s.created_at);
+        for old in &all[..all.len() - MAX_DEVICES] {
+            forget(&st, &me, &old.endpoint).await?;
+        }
+    }
     Ok(Json(json!({ "ok": true })))
+}
+
+/// Drops a user's subscription and, if they own it, the endpoint's owner record.
+async fn forget(st: &AppState, user: &str, endpoint: &str) -> ApiResult<()> {
+    st.store.delete(&format!("USER#{user}"), &sk(endpoint)).await?;
+    if st.store.get::<Owner>(&owner_pk(endpoint), "OWNER").await?.is_some_and(|o| o.user == user) {
+        st.store.delete(&owner_pk(endpoint), "OWNER").await?;
+    }
+    Ok(())
 }
 
 #[derive(Deserialize)]
@@ -68,7 +119,7 @@ pub struct Unsubscribe {
 
 /// `DELETE /me/push`: this device no longer wants notifications (or is signing out).
 pub async fn unsubscribe(State(st): State<AppState>, ctx: Ctx, Json(body): Json<Unsubscribe>) -> ApiResult<Json<Value>> {
-    st.store.delete(&format!("USER#{}", ctx.user_id()), &sk(&body.endpoint)).await?;
+    forget(&st, ctx.user_id(), &body.endpoint).await?;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -92,15 +143,25 @@ pub async fn notify_user(st: &AppState, user: &str, sender: &str, text: &str, ur
         Ok(s) => s,
         Err(e) => return tracing::warn!(user, error = ?e, "couldn't read push subscriptions"),
     };
-    let sends = subs.iter().map(|s| async move {
-        let sub = json!({ "endpoint": s.endpoint, "keys": { "p256dh": s.keys.p256dh, "auth": s.keys.auth } });
-        (s, push.send(&sub, &payload(sender, text, s.preview, url, tag)).await)
-    });
-    for (s, res) in join_all(sends).await {
+    // Each send owns its data, so the stream can be sent between threads.
+    let results: Vec<_> = stream::iter(subs.into_iter().take(MAX_DEVICES))
+        .map(|s| {
+            let push = push.clone();
+            let body = payload(sender, text, s.preview, url, tag);
+            async move {
+                let sub = json!({ "endpoint": s.endpoint, "keys": { "p256dh": s.keys.p256dh, "auth": s.keys.auth } });
+                let sent = tokio::time::timeout(SEND_TIMEOUT, push.send(&sub, &body)).await;
+                (s, sent.unwrap_or_else(|_| Err("timed out".into())))
+            }
+        })
+        .buffer_unordered(PARALLEL_SENDS)
+        .collect()
+        .await;
+    for (s, res) in results {
         match res {
             Ok(Sent::Delivered) => {}
             Ok(Sent::Gone) => {
-                let _ = st.store.delete(&pk, &sk(&s.endpoint)).await;
+                let _ = forget(st, user, &s.endpoint).await;
             }
             Err(e) => tracing::warn!(user, error = %e, "push failed"),
         }
