@@ -113,7 +113,7 @@ async function boot() {
     highlight = tabs([['/', '🧑‍🏫', 'Coaches'], ['/coaches', '🔎', 'Directory'], ['/me', '⚙️', 'Profile']]);
     route('/', renderAdmin);
   } else if (session.isCoach) {
-    document.getElementById('title').textContent = me.profile.businessName || 'PT Coach';
+    document.getElementById('title').textContent = me.profile.businessName || 'Personal Training Coach';
     highlight = tabs([['/', '👥', 'Clients'], ['/videos', '🎥', 'Videos'], ['/programs', '🗓️', 'Programs'], ['/exercises', '🏋️', 'Exercises'], ['/me', '⚙️', 'Profile']]);
     refreshVideoBadge();
     route('/', renderRoster);
