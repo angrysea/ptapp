@@ -13,7 +13,6 @@ export async function renderAdmin() {
   mount($app(),
     h('div', { class: 'spread' }, h('h1', {}, 'Coaches'), h('button', { class: 'primary', onclick: inviteSheet }, '+ Invite coach')),
 
-    h('h2', {}, 'Coaches'),
     coaches.length === 0 && h('div', { class: 'card muted' }, 'No coaches yet. Invite one by email.'),
     coaches.map((c) => h('div', { class: 'card' },
       h('strong', {}, c.name), h('div', { class: 'muted small' }, `${c.email} · joined ${fmtDate(c.joinedAt.slice(0, 10))}`))),

@@ -20,6 +20,10 @@ REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-us-east-1}}"
 : "${COGNITO_DOMAIN_PREFIX:?set COGNITO_DOMAIN_PREFIX to a globally unique name, e.g. myptapp-dev}"
 ADMIN_EMAILS="${ADMIN_EMAILS:-}"
 INVITE_FROM="${INVITE_FROM:-}"
+# APP_DOMAIN (e.g. gymtxcoach.com) serves the app at its own domain, with
+# APP_CERT_ARN an ACM certificate in us-east-1 for it and www (DEPLOY.md).
+APP_DOMAIN="${APP_DOMAIN:-}"
+APP_CERT_ARN="${APP_CERT_ARN:-}"
 # "false" if INVITE_FROM's domain is already an SES identity made outside this stack.
 CREATE_SENDER_IDENTITY="${CREATE_SENDER_IDENTITY:-true}"
 
@@ -35,7 +39,8 @@ sam deploy \
   --resolve-s3 \
   --no-confirm-changeset \
   --no-fail-on-empty-changeset \
-  --parameter-overrides "Stage=$STAGE" "CognitoDomainPrefix=$COGNITO_DOMAIN_PREFIX" "AdminEmails=$ADMIN_EMAILS" "InviteFromAddress=$INVITE_FROM" "CreateSenderIdentity=$CREATE_SENDER_IDENTITY"
+  --parameter-overrides "Stage=$STAGE" "CognitoDomainPrefix=$COGNITO_DOMAIN_PREFIX" "AdminEmails=$ADMIN_EMAILS" "InviteFromAddress=$INVITE_FROM" "CreateSenderIdentity=$CREATE_SENDER_IDENTITY" \
+    "AppDomain=$APP_DOMAIN" "AppCertificateArn=$APP_CERT_ARN"
 
 out() {
   aws cloudformation describe-stacks --region "$REGION" --stack-name "$STACK" \

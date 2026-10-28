@@ -31,8 +31,19 @@ Parameters:
     AllowedValues: ["true", "false"]
     Default: "true"
     Description: '"false" when the sender domain is already an SES identity in this account and region (e.g. created in the console); the stack then uses it as is'
+  AppDomain:
+    Type: String
+    Default: ""
+    Description: The app's own domain, e.g. gymtxcoach.com (www.<domain> redirects to it). Empty serves the app at the CloudFront address only.
+  AppCertificateArn:
+    Type: String
+    Default: ""
+    Description: ACM certificate in us-east-1 covering AppDomain and www.AppDomain (CloudFront only uses us-east-1 certificates). Required with AppDomain.
+    AllowedPattern: '^$|^arn:aws[a-zA-Z-]*:acm:us-east-1:\d{12}:certificate/.+$'
+    ConstraintDescription: empty, or an ACM certificate ARN in us-east-1
 
 Conditions:
+  HasAppDomain: !Not [!Equals [!Ref AppDomain, ""]]
   SendsInvites: !Not [!Equals [!Ref InviteFromAddress, ""]]
   CreatesSenderIdentity: !And [!Condition SendsInvites, !Equals [!Ref CreateSenderIdentity, "true"]]
 
@@ -80,7 +91,7 @@ Resources:
       CorsConfiguration:
         CorsRules:
           - AllowedMethods: [GET, PUT]
-            AllowedOrigins: [!Sub "https://${Distribution.DomainName}", !Ref LocalDevOrigin]
+            AllowedOrigins: [!Sub "https://${Distribution.DomainName}", !Ref LocalDevOrigin, !If [HasAppDomain, !Sub "https://${AppDomain}", !Ref AWS::NoValue]]
             AllowedHeaders: ["*"]
             # Video uploads read each part's ETag to complete the multipart upload.
             ExposedHeaders: [ETag]
@@ -174,8 +185,8 @@ Resources:
       AllowedOAuthFlows: [code]
       AllowedOAuthScopes: [openid, email, profile]
       SupportedIdentityProviders: [COGNITO]
-      CallbackURLs: [!Sub "https://${Distribution.DomainName}/", !Sub "${LocalDevOrigin}/"]
-      LogoutURLs: [!Sub "https://${Distribution.DomainName}/", !Sub "${LocalDevOrigin}/"]
+      CallbackURLs: [!Sub "https://${Distribution.DomainName}/", !Sub "${LocalDevOrigin}/", !If [HasAppDomain, !Sub "https://${AppDomain}/", !Ref AWS::NoValue]]
+      LogoutURLs: [!Sub "https://${Distribution.DomainName}/", !Sub "${LocalDevOrigin}/", !If [HasAppDomain, !Sub "https://${AppDomain}/", !Ref AWS::NoValue]]
       ExplicitAuthFlows: [ALLOW_REFRESH_TOKEN_AUTH, ALLOW_USER_SRP_AUTH]
       PreventUserExistenceErrors: ENABLED
       EnableTokenRevocation: true
@@ -193,7 +204,7 @@ Resources:
         ThrottlingBurstLimit: 100
         ThrottlingRateLimit: 50
       CorsConfiguration:
-        AllowOrigins: [!Sub "https://${Distribution.DomainName}", !Ref LocalDevOrigin]
+        AllowOrigins: [!Sub "https://${Distribution.DomainName}", !Ref LocalDevOrigin, !If [HasAppDomain, !Sub "https://${AppDomain}", !Ref AWS::NoValue]]
         AllowHeaders: [authorization, content-type]
         AllowMethods: [GET, POST, PUT, DELETE, OPTIONS]
         MaxAge: 600
@@ -219,7 +230,7 @@ Resources:
           MEDIA_BUCKET: !Ref MediaBucket
           ADMIN_EMAILS: !Ref AdminEmails
           INVITE_FROM: !Ref InviteFromAddress
-          APP_URL: !Sub "https://${Distribution.DomainName}"
+          APP_URL: !If [HasAppDomain, !Sub "https://${AppDomain}", !Sub "https://${Distribution.DomainName}"]
           VIDEO_RETENTION_DAYS: !Ref VideoRetentionDays
           RUST_LOG: info
       LoggingConfig:
@@ -318,12 +329,25 @@ Resources:
 
   Distribution:
     Type: AWS::CloudFront::Distribution
+    Metadata:
+      cfn-lint:
+        config:
+          # AppCertificateArn's empty default is only used when AppDomain is empty,
+          # which leaves ViewerCertificate out.
+          ignore_checks: [W1030]
     Properties:
       DistributionConfig:
         Enabled: true
         HttpVersion: http2and3
         DefaultRootObject: index.html
         PriceClass: PriceClass_100
+        Aliases: !If [HasAppDomain, [!Ref AppDomain, !Sub "www.${AppDomain}"], !Ref AWS::NoValue]
+        ViewerCertificate: !If
+          - HasAppDomain
+          - AcmCertificateArn: !Ref AppCertificateArn
+            SslSupportMethod: sni-only
+            MinimumProtocolVersion: TLSv1.2_2021
+          - !Ref AWS::NoValue
         Origins:
           - Id: web
             DomainName: !GetAtt WebBucket.RegionalDomainName
@@ -335,10 +359,38 @@ Resources:
           Compress: true
           CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6 # Managed-CachingOptimized
           ResponseHeadersPolicyId: 67f7725c-6f97-4210-82d7-5512b31e9d03 # Managed-SecurityHeadersPolicy
+          FunctionAssociations: !If
+            - HasAppDomain
+            - [{ EventType: viewer-request, FunctionARN: !GetAtt WwwRedirect.FunctionMetadata.FunctionARN }]
+            - !Ref AWS::NoValue
+
+  # www.<AppDomain> → <AppDomain>, keeping the path and query.
+  WwwRedirect:
+    Type: AWS::CloudFront::Function
+    Condition: HasAppDomain
+    Properties:
+      Name: !Sub ptapp-${Stage}-www-redirect
+      AutoPublish: true
+      FunctionConfig:
+        Comment: Redirect www to the bare domain
+        Runtime: cloudfront-js-2.0
+      FunctionCode: !Sub |
+        function handler(event) {
+          var r = event.request;
+          if (r.headers.host && r.headers.host.value.indexOf('www.') === 0) {
+            var qs = Object.keys(r.querystring).map(function (k) { return k + '=' + r.querystring[k].value; }).join('&');
+            return { statusCode: 301, statusDescription: 'Moved Permanently',
+              headers: { location: { value: 'https://${AppDomain}' + r.uri + (qs ? '?' + qs : '') } } };
+          }
+          return r;
+        }
 
 Outputs:
   AppUrl:
-    Value: !Sub https://${Distribution.DomainName}
+    Value: !If [HasAppDomain, !Sub "https://${AppDomain}", !Sub "https://${Distribution.DomainName}"]
+  CloudFrontDomain:
+    Description: Point the app's domain (and www) at this with a CNAME, DNS only
+    Value: !GetAtt Distribution.DomainName
   ApiUrl:
     Value: !Sub https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com
   CognitoDomain:

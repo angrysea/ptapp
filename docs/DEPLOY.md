@@ -44,7 +44,14 @@ Deploys run from a developer machine, not from GitHub. (The AWS Organization thi
 
 * **MFA for coaches.** The pool allows TOTP (`MfaConfiguration: OPTIONAL`). Coaches enable it from the hosted UI. Enforcing it for the coach role is a Phase 1b item.
 * **Emails.** Cognito's default sender is limited to about 50 emails/day. Before real users, configure SES (`EmailConfiguration` on the user pool) with a verified domain.
-* **Custom domain.** Add an ACM certificate (us-east-1) and alias to CloudFront and to the Cognito domain, then add the new URL to the client's callback and logout URLs and the CORS origins.
+* **Custom domain** (e.g. `gymtxcoach.com`, with `www` redirecting to it):
+  1. Request a certificate in **us-east-1** (CloudFront only uses certificates there):
+     `aws acm request-certificate --region us-east-1 --domain-name gymtxcoach.com --subject-alternative-names www.gymtxcoach.com --validation-method DNS`
+  2. Add the two validation CNAMEs from `aws acm describe-certificate --region us-east-1 --certificate-arn <arn>` to the domain's DNS and wait for the status `ISSUED`.
+  3. Deploy with `APP_DOMAIN=gymtxcoach.com APP_CERT_ARN=<arn>`. CloudFront then answers for the domain and `www` (redirected), and the Cognito callback and logout URLs, API and media CORS, and invitation links follow it. The CloudFront address keeps working.
+  4. In DNS, point `gymtxcoach.com` and `www` at the `CloudFrontDomain` output with CNAMEs, **DNS only** (on Cloudflare, the grey cloud; Cloudflare flattens the bare-domain CNAME).
+
+  The Cognito sign-in page keeps its `*.amazoncognito.com` address; giving it its own (e.g. `auth.gymtxcoach.com`) needs another us-east-1 certificate.
 * **Production stage.** Use `STAGE=prod`, a different domain prefix and a separate AWS account if you can. The table and media bucket have `DeletionPolicy: Retain`.
 * **Backups.** PITR gives 35 days of restore points; also schedule AWS Backup for the table and **test a restore** (BRD reliability NFR).
 * **Legal.** Have the waiver text and PAR-Q wording (`web/js/views/intake.js`) reviewed, and add a privacy policy covering CCPA and app-store health-data rules before launch.
