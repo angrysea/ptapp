@@ -42,7 +42,13 @@ Parameters:
     AllowedPattern: '^$|^arn:aws[a-zA-Z-]*:acm:us-east-1:\d{12}:certificate/.+$'
     ConstraintDescription: empty, or an ACM certificate ARN in us-east-1
 
+  AlarmEmail:
+    Type: String
+    Default: ""
+    Description: Who gets an email when the API's errors spike (AWS sends a confirmation link first). Empty sends no emails; the alarms still show in CloudWatch.
+
 Conditions:
+  HasAlarmEmail: !Not [!Equals [!Ref AlarmEmail, ""]]
   HasAppDomain: !Not [!Equals [!Ref AppDomain, ""]]
   SendsInvites: !Not [!Equals [!Ref InviteFromAddress, ""]]
   CreatesSenderIdentity: !And [!Condition SendsInvites, !Equals [!Ref CreateSenderIdentity, "true"]]
@@ -266,7 +272,7 @@ Resources:
         # Password changes (routes/password.rs): check the current password, set the new one.
         - Statement:
             - Effect: Allow
-              Action: [cognito-idp:AdminInitiateAuth, cognito-idp:AdminSetUserPassword]
+              Action: [cognito-idp:AdminInitiateAuth, cognito-idp:AdminSetUserPassword, cognito-idp:AdminDeleteUser]
               Resource: !GetAtt UserPool.Arn
         # Chat: publish to users' inbox channels (realtime.rs), and read the
         # Web Push key (push.rs; the AWS-managed SSM key decrypts it).
@@ -352,6 +358,70 @@ Resources:
           const s = ctx.info.channel.segments;
           if (s.length !== 2 || s[1] !== ctx.identity.sub) util.unauthorized();
         }
+
+  # ------------------------------------------------------------------ alarms
+  # Email when the API misbehaves: errors in the Lambda, 5xx answers, or
+  # throttling. Each needs a few occurrences within 5 minutes, so one odd
+  # request doesn't page anyone.
+  AlarmTopic:
+    Type: AWS::SNS::Topic
+    Condition: HasAlarmEmail
+    Properties:
+      TopicName: !Sub ptapp-${Stage}-alarms
+      KmsMasterKeyId: alias/aws/sns
+      Subscription:
+        - Protocol: email
+          Endpoint: !Ref AlarmEmail
+
+  ApiErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ptapp-${Stage}-api-errors
+      AlarmDescription: The API Lambda failed 5 or more times in 5 minutes (see its logs)
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions: [{ Name: FunctionName, Value: !Ref ApiFunction }]
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 5
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: !If [HasAlarmEmail, [!Ref AlarmTopic], !Ref AWS::NoValue]
+      OKActions: !If [HasAlarmEmail, [!Ref AlarmTopic], !Ref AWS::NoValue]
+
+  Api5xxAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ptapp-${Stage}-api-5xx
+      AlarmDescription: The API answered 10 or more requests with a server error in 5 minutes
+      Namespace: AWS/ApiGateway
+      MetricName: 5xx
+      Dimensions: [{ Name: ApiId, Value: !Ref HttpApi }, { Name: Stage, Value: $default }]
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 10
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: !If [HasAlarmEmail, [!Ref AlarmTopic], !Ref AWS::NoValue]
+      OKActions: !If [HasAlarmEmail, [!Ref AlarmTopic], !Ref AWS::NoValue]
+
+  ApiThrottlesAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ptapp-${Stage}-api-throttles
+      AlarmDescription: The API Lambda was throttled (more requests at once than its concurrency allows)
+      Namespace: AWS/Lambda
+      MetricName: Throttles
+      Dimensions: [{ Name: FunctionName, Value: !Ref ApiFunction }]
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: !If [HasAlarmEmail, [!Ref AlarmTopic], !Ref AWS::NoValue]
 
   ApiLogGroup:
     Type: AWS::Logs::LogGroup

@@ -5,7 +5,7 @@ import { get, post } from '../api.js';
 import { go } from '../router.js';
 import { $app, busy, fmtDateTime, h, mount, toast } from '../ui.js';
 import { onUploads, pendingUploads, removeUpload, retryUpload } from '../uploads.js';
-import { playVideo } from '../videos.js';
+import { onCellular, playVideo } from '../videos.js';
 import { commentOn } from './comments.js';
 import { QUEUE_OPENED } from './review.js';
 
@@ -38,7 +38,8 @@ function sendingReplies() {
   const draw = (list) => mount(box, list.filter((u) => u.kind === 'reply').map((u) => h('div', { class: `card small ${u.state === 'failed' ? 'banner' : ''}` },
     h('div', { class: 'spread' },
       h('span', {}, `Reply to ${u.label}`),
-      h('strong', {}, u.state === 'failed' ? 'Failed' : u.progress != null && navigator.onLine ? `Sending ${Math.round(u.progress * 100)}%` : navigator.onLine ? 'Waiting' : 'Waiting for connection')),
+      h('strong', {}, u.state === 'failed' ? 'Failed' : u.progress != null && navigator.onLine ? `Sending ${Math.round(u.progress * 100)}%`
+        : !navigator.onLine ? 'Waiting for connection' : u.waitForWifi && onCellular() ? 'Waiting for Wi-Fi' : 'Waiting')),
     u.state === 'failed' && h('div', { class: 'row', style: 'margin-top:6px' },
       h('span', { class: 'grow' }, u.error),
       h('button', { class: 'small primary', onclick: () => retryUpload(u.key) }, 'Try again'),

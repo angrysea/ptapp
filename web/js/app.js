@@ -44,7 +44,10 @@ function tabs(items) {
 }
 
 function landing() {
+  let deleted = false;
+  try { deleted = sessionStorage.getItem('pt.accountDeleted') === '1'; sessionStorage.removeItem('pt.accountDeleted'); } catch { /* no storage */ }
   mount($app(),
+    deleted && h('p', { class: 'banner' }, 'Your account and everything in it have been deleted.'),
     h('div', { class: 'center', style: 'padding-top:12vh' },
       h('img', { src: 'icon.svg', alt: '', width: 88, height: 88 }),
       h('h1', {}, 'PT Coach'),

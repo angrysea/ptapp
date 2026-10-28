@@ -24,6 +24,8 @@ INVITE_FROM="${INVITE_FROM:-}"
 # APP_CERT_ARN an ACM certificate in us-east-1 for it and www (DEPLOY.md).
 APP_DOMAIN="${APP_DOMAIN:-}"
 APP_CERT_ARN="${APP_CERT_ARN:-}"
+# ALARM_EMAIL gets an email when the API's errors spike (confirm AWS's first email).
+ALARM_EMAIL="${ALARM_EMAIL:-}"
 # "false" if INVITE_FROM's domain is already an SES identity made outside this stack.
 CREATE_SENDER_IDENTITY="${CREATE_SENDER_IDENTITY:-true}"
 
@@ -49,7 +51,7 @@ sam deploy \
   --no-confirm-changeset \
   --no-fail-on-empty-changeset \
   --parameter-overrides "Stage=$STAGE" "CognitoDomainPrefix=$COGNITO_DOMAIN_PREFIX" "AdminEmails=$ADMIN_EMAILS" "InviteFromAddress=$INVITE_FROM" "CreateSenderIdentity=$CREATE_SENDER_IDENTITY" \
-    "AppDomain=$APP_DOMAIN" "AppCertificateArn=$APP_CERT_ARN"
+    "AppDomain=$APP_DOMAIN" "AppCertificateArn=$APP_CERT_ARN" "AlarmEmail=$ALARM_EMAIL"
 
 out() {
   aws cloudformation describe-stacks --region "$REGION" --stack-name "$STACK" \

@@ -30,7 +30,7 @@ Status legend: ✅ done in MVP · 🟡 partial · ⬜ not started
 | Body metrics | BM-1 ✅ · BM-2 ✅ · BM-3 ✅ · BM-4 ✅ · BM-7 ✅ · BM-8 ✅ | BM-5 ✅ · BM-6 ⬜ |
 | Messaging | MS-1 ✅ (live via AppSync Events, polling fallback; coach inbox; text only) · MS-2 ✅ (Web Push; iPhone needs the Home Screen app) | MS-3 🟡 (comments anchor to log/set) · MS-4 ⬜ · MS-5 ⬜ · MS-6 ⬜ |
 | Business | BZ-1 ⬜ | BZ-2 ⬜ · BZ-3 ⬜ · BZ-4 ⬜ · BZ-5 ⬜ · BZ-6 ⬜ |
-| NFRs | privacy ✅ (private photos, tenant checks, per-user offline cache) · audit log ✅ · offline ✅ · upload size limits ✅ · CI ✅ (tests on every push; deploys run locally) · backups 🟡 (PITR; restore test) · MFA 🟡 (optional) · alarms ⬜ · export/delete ⬜ · video retention ⬜ | |
+| NFRs | privacy ✅ (private photos, tenant checks, per-user offline cache) · audit log ✅ · offline ✅ · upload size limits ✅ · CI ✅ (tests on every push; deploys run locally) · backups ✅ (PITR; restore tested 2026-10-28, see DEPLOY.md) · MFA 🟡 (Cognito TOTP optional; in-app enrollment needs the user.admin scope, removed for safety) · alarms ✅ (email) · export/delete ✅ (clients, self-service; coaches via admin) · video retention ✅ (lifecycle on reviewed videos and replies) | |
 
 ---
 

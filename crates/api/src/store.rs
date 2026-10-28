@@ -95,6 +95,30 @@ impl Store {
         self.query_raw(pk, "begins_with(sk, :p)", vec![(":p", s(prefix))], true).await
     }
 
+    /// Every item in a partition, raw (with `pk` and `sk`): for exporting and
+    /// deleting a user's data (routes/account.rs).
+    pub async fn partition(&self, pk: &str) -> ApiResult<Vec<Item>> {
+        let mut out = Vec::new();
+        let mut start: Option<Item> = None;
+        loop {
+            let page = self
+                .ddb
+                .query()
+                .table_name(&self.table)
+                .key_condition_expression("pk = :pk")
+                .expression_attribute_values(":pk", s(pk))
+                .set_exclusive_start_key(start.take())
+                .send()
+                .await?;
+            out.extend(page.items.unwrap_or_default());
+            match page.last_evaluated_key {
+                Some(k) if !k.is_empty() => start = Some(k),
+                _ => break,
+            }
+        }
+        Ok(out)
+    }
+
     /// The newest `limit` items whose sk starts with `prefix`, newest first.
     pub async fn latest<T: DeserializeOwned>(&self, pk: &str, prefix: &str, limit: i32) -> ApiResult<Vec<T>> {
         let page = self

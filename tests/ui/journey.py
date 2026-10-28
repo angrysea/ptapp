@@ -1,4 +1,4 @@
-import os, re, sys, time, datetime
+import os, re, struct, sys, time, datetime, zlib
 from pathlib import Path
 from playwright.sync_api import sync_playwright, expect
 
@@ -7,6 +7,15 @@ OUT = Path(__file__).parent / "shots"
 OUT.mkdir(exist_ok=True)
 errors = []
 RUN = str(int(time.time()))
+
+def tiny_png(w=8, h=8):
+    """A valid w×h solid-colour PNG, for sending a photo."""
+    def chunk(kind, data):
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xffffffff)
+    row = bytes([0]) + bytes([0x20, 0x80, 0x60]) * w  # filter byte, then RGB pixels
+    signature = bytes([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
+    return (signature + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(row * h)) + chunk(b"IEND", b""))
 
 def watch(page, who):
     page.on("console", lambda m: m.type == "error" and "ERR_INTERNET_DISCONNECTED" not in m.text and errors.append(f"[{who}] console: {m.text}"))
@@ -108,7 +117,7 @@ with sync_playwright() as p:
     coach.get_by_label("Client name").fill("Sam Client")
     # Invites can only be accepted by the invited address; dev users are {id}@dev.local.
     coach.get_by_label("Email").fill(f"client{RUN}@dev.local")
-    coach.get_by_role("button", name="Create invite").click()
+    coach.get_by_role("button", name="Send invitation").click()
     expect(coach.get_by_role("heading", name="Invite link")).to_be_visible()
     link = coach.locator(".sheet input").input_value()
     code = link.rsplit("/", 1)[-1]
@@ -420,7 +429,7 @@ with sync_playwright() as p:
     coach.get_by_role("link", name="Messages").click()
     expect(coach.get_by_role("heading", name="Messages")).to_be_visible()
     client.get_by_label("Message", exact=True).fill("Can we swap Friday for Saturday?")
-    client.get_by_role("button", name="Send").click()
+    client.get_by_role("button", name="Send", exact=True).click()
     # no reload: the page refreshes itself (by polling locally; live events on AWS)
     expect(coach.get_by_text("Can we swap Friday for Saturday?")).to_be_visible(timeout=20000)
     expect(coach.locator('#tabs a[data-path="/messages"] .badge')).to_be_visible()
@@ -428,11 +437,24 @@ with sync_playwright() as p:
     shot(coach, "15-coach-messages")
     coach.get_by_role("button", name="Reply").first.click()
     coach.get_by_label("Reply to Sam Client").fill("Saturday works, see you then")
-    coach.get_by_role("button", name="Send").click()
+    coach.get_by_role("button", name="Send", exact=True).click()
     expect(coach.get_by_text("No new messages.")).to_be_visible()
     expect(coach.locator('#tabs a[data-path="/messages"] .badge')).to_have_count(0)
     expect(client.get_by_text("Saturday works, see you then")).to_be_visible(timeout=20000)
     coach.get_by_label("Only new messages").uncheck()
+
+    # ---------------- a photo and a voice note in the conversation
+    png = tiny_png()
+    client.get_by_label("Photo to send").set_input_files({"name": "form.png", "mimeType": "image/png", "buffer": png})
+    expect(client.locator("img.msg-photo").last).to_be_visible(timeout=15000)
+    client.get_by_role("button", name="Record a voice note").click()
+    time.sleep(1.5)
+    client.get_by_role("button", name="Record a voice note").click()  # stop
+    client.get_by_role("button", name="Send voice note").click()
+    expect(client.locator("audio.msg-voice").last).to_be_visible(timeout=15000)
+    shot(client, "14c-photo-and-voice")
+    # the coach's inbox says what came in, without a reload
+    expect(coach.get_by_text("🎤 Voice note")).to_be_visible(timeout=20000)
 
     # ---------------- notifications: offered in the thread; the switch on Profile
     expect(client.get_by_text("Get a notification when your coach replies?")).to_be_visible()
@@ -452,6 +474,16 @@ with sync_playwright() as p:
     stale = stale_ctx.new_page()  # not watched: the lookup 404s on purpose
     stale.goto(BASE + "#/join/" + coach_code)
     expect(stale.get_by_role("heading", name="This link doesn’t work")).to_be_visible()
+
+    # ---------------- the client downloads their data, then deletes their account
+    client.get_by_role("link", name="Profile").click()
+    with client.expect_download() as dl:
+        client.get_by_role("button", name="Download my data").click()
+    assert dl.value.suggested_filename.startswith("pt-coach-data-"), dl.value.suggested_filename
+    client.get_by_role("button", name="Delete my account").click()
+    client.locator(".sheet").get_by_label("Type your email to confirm").fill(f"client{RUN}@dev.local")
+    client.locator(".sheet").get_by_role("button", name="Delete my account").click()
+    expect(client.get_by_text("Your account and everything in it have been deleted.")).to_be_visible()
 
     browser.close()
 

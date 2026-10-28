@@ -10,7 +10,7 @@
 import { ApiError, post } from './api.js';
 import { uploads } from './idb.js';
 import { session } from './session.js';
-import { putPart, videoType } from './videos.js';
+import { onCellular, putPart, videoType } from './videos.js';
 
 const POSTER_URL_TTL_MS = 14 * 60 * 1000; // presigned URLs last 15 minutes
 const MAX_ATTEMPTS = 6; // restarts before an upload is marked failed
@@ -46,13 +46,13 @@ const save = (r) => uploads.put(r);
  * it if there's a connection. `file` is the converted clip (with its `poster`)
  * or, when the device couldn't convert, the original with `trim` points.
  */
-export async function queueVideo({ clientId, logId, set, file, durationSec, trim, poster }) {
+export async function queueVideo({ clientId, logId, set, file, durationSec, trim, poster, waitForWifi = false }) {
   const owner = session.userId;
   const r = {
     key: `${owner}|${crypto.randomUUID()}`, owner, clientId, logId,
     set: { itemId: set.itemId, setIndex: set.setIndex, exerciseId: set.exerciseId, exerciseName: set.exerciseName },
     blob: file, contentType: videoType(file), size: file.size, durationSec: durationSec ?? null, trim: trim || null,
-    poster: poster || null, posterTarget: null,
+    poster: poster || null, posterTarget: null, waitForWifi,
     videoId: null, partSize: null, parts: [], etags: {},
     state: 'waiting', error: null, attempts: 0, createdAt: new Date().toISOString(),
   };
@@ -65,12 +65,12 @@ export async function queueVideo({ clientId, logId, set, file, durationSec, trim
 }
 
 /** Saves a coach's recorded reply to a client's set video for upload and starts sending it. */
-export async function queueReply({ clientId, replyTo, file, durationSec, note, reviewMs, label }) {
+export async function queueReply({ clientId, replyTo, file, durationSec, note, reviewMs, label, waitForWifi = false }) {
   const owner = session.userId;
   const r = {
     key: `${owner}|${crypto.randomUUID()}`, owner, kind: 'reply', clientId, replyTo, label: label || 'Reply',
     blob: file, contentType: videoType(file), size: file.size, durationSec: durationSec ?? null,
-    note: note || '', reviewMs: reviewMs ?? null, poster: null, posterTarget: null,
+    note: note || '', reviewMs: reviewMs ?? null, poster: null, posterTarget: null, waitForWifi,
     videoId: null, partSize: null, parts: [], etags: {},
     state: 'waiting', error: null, attempts: 0, createdAt: new Date().toISOString(),
   };
@@ -188,6 +188,7 @@ export async function kick() {
   try {
     for (const r of await uploads.all()) {
       if (r.owner !== session.userId || r.state === 'failed') continue;
+      if (r.waitForWifi && onCellular()) continue; // the person chose to wait for Wi-Fi
       try {
         await send(r);
       } catch (e) {
@@ -208,4 +209,5 @@ export async function kick() {
 }
 
 window.addEventListener('online', () => kick());
+navigator.connection?.addEventListener?.('change', () => kick()); // e.g. back on Wi-Fi
 setInterval(() => kick(), 30_000);

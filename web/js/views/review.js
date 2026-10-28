@@ -11,6 +11,7 @@ import { get, post } from '../api.js';
 import { go } from '../router.js';
 import { $app, busy, fmtDateTime, h, mount, toast } from '../ui.js';
 import { queueReply } from '../uploads.js';
+import { askBeforeCellular } from '../videos.js';
 
 const MAX_REPLY_S = 300;
 const FRAME = 1 / 30; // the clip's frame rate isn't exposed; 30 fps is the phones' default
@@ -229,11 +230,13 @@ export async function renderReview(cid, vid) {
   }
 
   async function sendTake() {
+    const when = await askBeforeCellular(take.blob.size);
+    if (!when) return;
     await queueReply({
       clientId: cid, replyTo: vid, file: take.blob, durationSec: take.seconds, note: note.value,
-      reviewMs: Date.now() - opened, label: `${clientName} · ${v.exerciseName} set ${v.setIndex + 1}`,
+      reviewMs: Date.now() - opened, label: `${clientName} · ${v.exerciseName} set ${v.setIndex + 1}`, waitForWifi: when.waitForWifi,
     });
-    done('Sending your reply. You can carry on; it uploads in the background.');
+    done(when.waitForWifi ? 'Your reply is saved on this device and sends when you’re on Wi-Fi.' : 'Sending your reply. You can carry on; it uploads in the background.');
   }
 
   const written = h('textarea', { placeholder: 'Write a reply instead', 'aria-label': 'Written reply', maxlength: 4000 });

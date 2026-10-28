@@ -87,12 +87,26 @@ pub struct CreateInvite {
     client_name: String,
 }
 
-pub async fn create(State(st): State<AppState>, ctx: Ctx, Json(body): Json<CreateInvite>) -> ApiResult<Json<Invite>> {
+/// A coach invites a client: the invitation is emailed (mail.rs), and the
+/// response says whether it went, so the coach can share the link if not.
+pub async fn create(State(st): State<AppState>, ctx: Ctx, Json(body): Json<CreateInvite>) -> ApiResult<Json<Value>> {
     let coach_id = ctx.require_coach()?;
     let coach_name = ctx.profile.business_name.clone().unwrap_or_else(|| ctx.profile.name.clone());
     let invite = new_invite(InviteKind::Client, coach_id, &coach_name, &body.email, &body.client_name)?;
     issue(&st, &invite).await?;
-    Ok(Json(invite))
+    Ok(Json(super::admin::with_email_status(&st, &invite).await?))
+}
+
+/// Sends a pending client invitation's email again.
+pub async fn resend(State(st): State<AppState>, ctx: Ctx, Path(code): Path<String>) -> ApiResult<Json<Value>> {
+    let coach_id = ctx.require_coach()?;
+    let code = code.to_uppercase();
+    let invite = open_invites(&st, &format!("COACH#{coach_id}"))
+        .await?
+        .into_iter()
+        .find(|i| i.code == code)
+        .ok_or(ApiError::NotFound("invite"))?;
+    Ok(Json(super::admin::with_email_status(&st, &invite).await?))
 }
 
 pub async fn list(State(st): State<AppState>, ctx: Ctx) -> ApiResult<Json<Vec<Invite>>> {

@@ -5,7 +5,7 @@
 import { get, post } from '../api.js';
 import { onLive } from '../realtime.js';
 import { session } from '../session.js';
-import { busy, fmtDateTime, h, mount, toast } from '../ui.js';
+import { busy, fmtDateTime, h, mount, sheet, shrinkImage, toast } from '../ui.js';
 import { playReply } from '../videos.js';
 import { markRead } from './messages.js';
 import { dismissPrompt, enable as pushOn, prefetchKey, shouldPrompt } from '../push.js';
@@ -28,6 +28,30 @@ export async function pushPrompt(who) {
       }, 'Turn on'),
       h('button', { class: 'ghost small', onclick: () => { dismissPrompt(); card.remove(); } }, 'Not now')));
   return card;
+}
+
+const VOICE_TYPES = ['audio/mp4', 'audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus'];
+const MAX_VOICE_S = 120;
+
+/** Uploads a photo or voice note for the thread; returns the message's `attachment`. */
+async function upload(clientId, kind, blob, durationSec) {
+  const contentType = blob.type.split(';')[0];
+  const up = await post(`/clients/${clientId}/attachments`, { kind, contentType, size: blob.size });
+  const res = await fetch(up.uploadUrl, { method: 'PUT', headers: up.uploadHeaders, body: blob });
+  if (!res.ok) throw new Error(`Upload failed (${res.status})`);
+  return { kind, key: up.key, contentType, durationSec: durationSec ?? null };
+}
+
+/** A message's photo (tap for full size) or voice note. */
+function attachmentView(c) {
+  const a = c.attachment;
+  if (!a) return null;
+  if (!c.attachmentUrl) return h('div', { class: 'small muted' }, a.kind === 'photo' ? '📷 Photo (needs a connection)' : '🎤 Voice note (needs a connection)');
+  if (a.kind === 'voice') return h('audio', { src: c.attachmentUrl, controls: true, preload: 'none', class: 'msg-voice' });
+  return h('img', {
+    src: c.attachmentUrl, alt: 'Photo', loading: 'lazy', class: 'msg-photo',
+    onclick: () => { const s = sheet(h('img', { src: c.attachmentUrl, alt: 'Photo', class: 'msg-photo-full' }), h('button', { class: 'block', onclick: () => s.close() }, 'Close')); },
+  });
 }
 
 export async function renderThread(el, clientId, logsById = {}) {
@@ -68,24 +92,85 @@ export async function renderThread(el, clientId, logsById = {}) {
       list.map((c) => h('div', { class: `msg ${c.authorId === session.userId ? 'mine' : ''}` },
         h('div', { class: 'meta' }, `${c.authorName} · ${fmtDateTime(c.createdAt)}`),
         anchor(c),
-        h('div', { style: 'white-space:pre-wrap' }, c.text),
+        attachmentView(c),
+        c.text && h('div', { style: 'white-space:pre-wrap' }, c.text),
         play(c))));
     listEl.lastElementChild?.scrollIntoView({ block: 'nearest', behavior: first ? 'auto' : 'smooth' });
     if (list.some((c) => c.authorId !== session.userId) && document.visibilityState === 'visible') markRead(clientId);
   }
+  // ---- photos and voice notes (they need a connection: they upload first)
+  const pending = h('div'); // a recorded voice note waiting to be sent
+  const sendMessage = async (attachment) => {
+    await post(`/clients/${clientId}/comments`, { text: text.value, ...(attachment && { attachment }) });
+    text.value = '';
+    await draw();
+  };
+  const photoPick = h('input', { type: 'file', accept: 'image/*', hidden: true, 'aria-label': 'Photo to send' });
+  const photoBtn = h('button', { class: 'small', 'aria-label': 'Send a photo', onclick: () => photoPick.click() }, '📷 Photo');
+  photoPick.addEventListener('change', () => busy(photoBtn, async () => {
+    const f = photoPick.files?.[0];
+    photoPick.value = '';
+    if (!f) return;
+    await sendMessage(await upload(clientId, 'photo', await shrinkImage(f, 1600)));
+  }).catch((e) => toast(e.message, 'error')));
+
+  let rec = null;
+  const voiceBtn = h('button', { class: 'small', 'aria-label': 'Record a voice note', onclick: () => (rec ? rec.stop() : startVoice()) }, '🎤 Voice');
+  async function startVoice() {
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+    } catch (e) {
+      return toast(e.name === 'NotAllowedError' ? 'The microphone is blocked; allow it in your browser settings.' : `Couldn’t start the microphone: ${e.message}`, 'error');
+    }
+    const mimeType = VOICE_TYPES.find((t) => MediaRecorder.isTypeSupported(t)) || '';
+    rec = new MediaRecorder(stream, { ...(mimeType && { mimeType }), audioBitsPerSecond: 64_000 });
+    const chunks = [];
+    const started = performance.now();
+    const tick = setInterval(() => {
+      const s = (performance.now() - started) / 1000;
+      voiceBtn.textContent = `■ Stop ${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+      if (s >= MAX_VOICE_S) rec?.stop();
+    }, 250);
+    rec.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
+    rec.onstop = () => {
+      clearInterval(tick);
+      stream.getTracks().forEach((t) => t.stop());
+      const blob = new Blob(chunks, { type: (rec.mimeType || mimeType || 'audio/webm').split(';')[0] });
+      const seconds = Math.min(MAX_VOICE_S, (performance.now() - started) / 1000);
+      rec = null;
+      voiceBtn.textContent = '🎤 Voice';
+      const url = URL.createObjectURL(blob);
+      const clear = () => { URL.revokeObjectURL(url); mount(pending); };
+      mount(pending, h('div', { class: 'voice-take' },
+        h('audio', { src: url, controls: true }),
+        h('div', { class: 'row' },
+          h('button', { class: 'ghost small', onclick: clear }, 'Discard'),
+          h('button', {
+            class: 'primary small',
+            onclick: (e) => busy(e.currentTarget, async () => { await sendMessage(await upload(clientId, 'voice', blob, seconds)); clear(); }),
+          }, 'Send voice note'))));
+    };
+    rec.start(1000);
+    voiceBtn.textContent = '■ Stop 0:00';
+  }
+  const canVoice = typeof MediaRecorder === 'function' && !!navigator.mediaDevices?.getUserMedia;
+
   mount(el,
     await pushPrompt(session.isCoach ? 'your client' : 'your coach'),
     listEl,
     h('div', { class: 'card' }, text,
-      h('button', {
-        class: 'primary block', style: 'margin-top:8px',
-        onclick: (e) => busy(e.currentTarget, async () => {
-          if (!text.value.trim()) return;
-          await post(`/clients/${clientId}/comments`, { text: text.value });
-          text.value = '';
-          await draw();
-        }),
-      }, 'Send')),
+      pending,
+      h('div', { class: 'row', style: 'margin-top:8px' },
+        photoBtn, photoPick,
+        canVoice && voiceBtn,
+        h('button', {
+          class: 'primary grow',
+          onclick: (e) => busy(e.currentTarget, async () => {
+            if (!text.value.trim()) return;
+            await sendMessage();
+          }),
+        }, 'Send'))),
   );
   await draw();
   // New messages appear while the thread is open; stops once it's gone.

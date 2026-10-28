@@ -47,6 +47,37 @@ export function putPart(url, headers, blob, onBytes) {
   });
 }
 
+/** Uploads bigger than this ask first on mobile data. */
+const BIG_ON_CELLULAR = 20 * 1024 * 1024;
+
+/** On mobile data (or in data-saver mode). Only some browsers say (Chrome on
+ * Android); elsewhere, e.g. iPhone, this is always false. */
+export function onCellular() {
+  const c = navigator.connection;
+  return !!c && (c.type === 'cellular' || c.saveData === true);
+}
+
+/**
+ * Before a big upload on mobile data: asks whether to upload now or wait for
+ * Wi-Fi. Resolves `{ waitForWifi }`, or null if the person cancelled. Small
+ * uploads, and browsers that can't tell, go straight through.
+ */
+export function askBeforeCellular(bytes) {
+  if (bytes < BIG_ON_CELLULAR || !onCellular()) return Promise.resolve({ waitForWifi: false });
+  return new Promise((resolve) => {
+    let answered = false;
+    const answer = (v) => { answered = true; sh.close(); resolve(v); };
+    const sh = sheet(
+      h('h2', {}, 'You’re on mobile data'),
+      h('p', {}, `This video is about ${Math.round(bytes / (1024 * 1024))} MB. Upload it now, or keep it on this device and send it when you’re on Wi-Fi?`),
+      h('button', { class: 'primary block', onclick: () => answer({ waitForWifi: true }) }, 'Wait for Wi-Fi'),
+      h('button', { class: 'block', onclick: () => answer({ waitForWifi: false }) }, 'Upload now'),
+      h('button', { class: 'ghost block', onclick: () => answer(null) }, 'Cancel'),
+    );
+    sh.onClose = () => { if (!answered) resolve(null); };
+  });
+}
+
 /** Plays a coach's reply (`url` for a recording, `note`) in a sheet. `onPlay`
  * runs the first time it starts playing (the client marks it seen). */
 export function playReply(r, { title = 'Coach’s reply', onPlay } = {}) {

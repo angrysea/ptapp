@@ -282,3 +282,10 @@ textarea.exnote { min-height: 0; margin-top: 8px; font-size: 0.9rem; }
 button.reply { border-color: var(--accent); color: var(--accent); }
 button.reply.new { background: var(--accent); color: var(--accent-ink); }
 @media (hover: none) { .review-controls .keys { display: none; } }
+
+/* Photos and voice notes in messages (views/comments.js). */
+.msg-photo { display: block; max-width: min(260px, 100%); max-height: 260px; border-radius: 8px; margin: 4px 0; cursor: zoom-in; object-fit: cover; }
+.msg-photo-full { display: block; width: 100%; max-height: 75vh; object-fit: contain; border-radius: 8px; margin-bottom: 10px; }
+.msg-voice { display: block; width: min(300px, 100%); margin: 4px 0; }
+.voice-take { margin-top: 8px; }
+.voice-take audio { width: 100%; }

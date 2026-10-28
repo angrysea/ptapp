@@ -41,6 +41,10 @@ pub fn ext_for(content_type: &str, allowed: &[(&'static str, &'static str)]) -> 
 
 pub const IMAGE_TYPES: &[(&str, &str)] = &[("image/jpeg", "jpg"), ("image/png", "png"), ("image/webp", "webp")];
 pub const VIDEO_TYPES: &[(&str, &str)] = &[("video/mp4", "mp4"), ("video/quicktime", "mov"), ("video/webm", "webm")];
+/// Voice notes: what MediaRecorder makes in Safari (MP4/AAC) and Chrome or Firefox (WebM/Opus).
+pub const AUDIO_TYPES: &[(&str, &str)] = &[("audio/mp4", "m4a"), ("audio/webm", "webm"), ("audio/ogg", "ogg"), ("audio/mpeg", "mp3")];
+/// A two-minute voice note is well under 2 MB; this leaves plenty of room.
+pub const MAX_VOICE_BYTES: i64 = 10 * 1024 * 1024;
 
 /// Photos are shrunk in the browser first, so this is generous.
 pub const MAX_PHOTO_BYTES: i64 = 15 * 1024 * 1024;

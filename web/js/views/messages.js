@@ -89,7 +89,8 @@ export async function renderInbox() {
       t.newMessages.length > 0
         ? t.newMessages.map((m) => h('div', { class: 'msg' },
           h('div', { class: 'meta' }, fmtDateTime(m.createdAt)),
-          h('div', { style: 'white-space:pre-wrap' }, m.text)))
+          h('div', { style: 'white-space:pre-wrap' }, m.text || (m.attachment?.kind === 'voice' ? '🎤 Voice note' : m.attachment ? '📷 Photo' : '')),
+          m.text && m.attachment && h('div', { class: 'small muted' }, m.attachment.kind === 'voice' ? '🎤 with a voice note' : '📷 with a photo')))
         : last || h('p', { class: 'small muted' }, 'No messages yet.'),
       replying
         ? h('div', {}, reply, h('div', { class: 'row', style: 'margin-top:8px' },

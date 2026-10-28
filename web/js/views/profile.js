@@ -1,4 +1,4 @@
-import { myOutbox, post, put } from '../api.js';
+import { api, get, myOutbox, post, put } from '../api.js';
 import { pendingUploads, removeUpload } from '../uploads.js';
 import { devMode, logout, MIN_LENGTH, policyProblem } from '../auth.js';
 import { kv, outbox } from '../idb.js';
@@ -18,6 +18,63 @@ export async function signOut() {
   for (const v of videos) await removeUpload(v.key); // clips stay off a shared device
   await pushOff(); // the next person on this device doesn't get this user's notifications
   logout();
+}
+
+/** A client's own data (privacy): download all of it, or delete the account. */
+function yourDataCard(p) {
+  const download = h('button', {
+    class: 'block',
+    onclick: (e) => busy(e.currentTarget, async () => {
+      const data = await get('/me/export');
+      const a = h('a', {
+        href: URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })),
+        download: `pt-coach-data-${new Date().toISOString().slice(0, 10)}.json`,
+      });
+      document.body.append(a);
+      a.click();
+      a.remove();
+      toast('Downloaded. Links to your photos and videos in it work for 15 minutes.');
+    }),
+  }, 'Download my data');
+  const remove = h('button', { class: 'block danger', onclick: () => deleteSheet(p) }, 'Delete my account');
+  return h('div', { class: 'card' },
+    h('h3', {}, 'Your data'),
+    h('p', { class: 'small muted' }, 'Download everything stored about you, or delete your account and all of it.'),
+    download, h('div', { style: 'height:8px' }), remove);
+}
+
+function deleteSheet(p) {
+  const confirmIn = h('input', { type: 'email', autocomplete: 'off', placeholder: p.email });
+  const problem = h('p', { class: 'banner', hidden: true });
+  const sh = sheet(
+    h('h2', {}, 'Delete your account?'),
+    h('p', {}, 'This permanently deletes your account and everything in it: workouts, measurements, photos, videos, messages and your coach’s replies. Your coach will no longer see you. It can’t be undone.'),
+    h('p', { class: 'small muted' }, 'You may want to download your data first.'),
+    field('Type your email to confirm', confirmIn),
+    problem,
+    h('button', {
+      class: 'danger block',
+      onclick: (e) => busy(e.currentTarget, async () => {
+        problem.hidden = true;
+        try {
+          await api('DELETE', '/me/account', { confirm: confirmIn.value });
+        } catch (err) {
+          problem.textContent = err.status === 400 ? 'That isn’t your email address.' : err.message;
+          problem.hidden = false;
+          return;
+        }
+        sh.close();
+        // Nothing of this account stays on the device.
+        await kv.clear();
+        for (const i of await myOutbox()) await outbox.del(i.key);
+        for (const v of await pendingUploads()) await removeUpload(v.key);
+        await pushOff();
+        try { localStorage.clear(); sessionStorage.setItem('pt.accountDeleted', '1'); } catch { /* nothing stored */ }
+        logout(); // the home page then says the account was deleted
+      }),
+    }, 'Delete my account'),
+    h('button', { class: 'ghost block', onclick: () => sh.close() }, 'Cancel'),
+  );
 }
 
 const BLOCKED = 'Notifications are blocked for this app. Allow them in your browser’s site settings (on iPhone: Settings → Notifications → PT Coach), then come back.';
@@ -138,6 +195,7 @@ export async function renderProfile() {
       h('div', { style: 'height:8px' }),
       h('a', { class: 'btn block', href: '#/waiver' }, 'Health screening & waiver')),
     p.role !== 'admin' && notificationsCard(),
+    p.role === 'client' && yourDataCard(p),
     !devMode() && h('div', { class: 'card' },
       h('h3', {}, 'Password'),
       h('button', { class: 'block', onclick: passwordSheet }, 'Change password')),

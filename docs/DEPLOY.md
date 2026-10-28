@@ -53,7 +53,12 @@ Deploys run from a developer machine, not from GitHub. (The AWS Organization thi
 
   The Cognito sign-in page keeps its `*.amazoncognito.com` address; giving it its own (e.g. `auth.gymtxcoach.com`) needs another us-east-1 certificate.
 * **Production stage.** Use `STAGE=prod`, a different domain prefix and a separate AWS account if you can. The table and media bucket have `DeletionPolicy: Retain`.
-* **Backups.** PITR gives 35 days of restore points; also schedule AWS Backup for the table and **test a restore** (BRD reliability NFR).
+* **Backups.** PITR gives 35 days of restore points (BRD reliability NFR). Restoring makes a *new* table, which the stack then has to point at (`TABLE_NAME`); the media bucket isn't covered (S3 versioning would be).
+  * **Restore test (2026-10-28, dev):**
+    * **Restore:** `aws dynamodb restore-table-to-point-in-time --source-table-name ptapp-dev --target-table-name ptapp-dev-restore-test --use-latest-restorable-time --billing-mode-override PAY_PER_REQUEST` took **183 s** to become ACTIVE.
+    * **Contents:** the restore had 150 items, against 162 in the live table when counted. The latest restorable point is a few minutes old, so the 12 were writes made since. A known program came back intact.
+    * **Cleanup:** the test table was then deleted. Repeat this after major data-model changes.
+* **Alarms.** `ALARM_EMAIL` (deploy.sh) gets an email when the API Lambda errors 5+ times or answers 10+ requests with 5xx in 5 minutes, or is throttled; confirm the subscription email AWS sends first. The alarms are `ptapp-{stage}-api-*` in CloudWatch.
 * **Legal.** Have the waiver text and PAR-Q wording (`web/js/views/intake.js`) reviewed, and add a privacy policy covering CCPA and app-store health-data rules before launch.
 
 ## Rollback

@@ -48,6 +48,7 @@ export async function renderRoster() {
     invites.length > 0 && [h('h2', {}, 'Pending invites'), invites.map((i) => h('div', { class: 'card spread' },
       h('div', {}, h('strong', {}, i.clientName || i.email), h('div', { class: 'muted small' }, `${i.email} · code ${i.code}`)),
       h('div', { class: 'row' },
+        h('button', { class: 'small', onclick: (e) => busy(e.currentTarget, async () => emailResult(await post(`/invites/${i.code}/resend`))) }, 'Resend email'),
         h('button', { class: 'small', onclick: () => shareInvite(i) }, 'Share'),
         h('button', { class: 'small danger', onclick: async () => { await del(`/invites/${i.code}`); renderRoster(); } }, 'Revoke'))))],
   );
@@ -57,12 +58,19 @@ function inviteLink(code) {
   return `${location.origin}${location.pathname}#/join/${code}`;
 }
 
-function shareInvite(inv) {
+/** Says whether the invitation email went out; if not, offers the link to share. */
+function emailResult(inv) {
+  if (inv.emailed) toast(`Invitation emailed to ${inv.email}`);
+  else shareInvite(inv, inv.emailError ? 'The email couldn’t be sent, so share this link with them yourself.' : 'Email isn’t set up here, so share this link with them yourself.');
+}
+
+function shareInvite(inv, note) {
   const link = inviteLink(inv.code);
   const subject = encodeURIComponent(`${inv.coachName} invited you to train together`);
   const bodyText = encodeURIComponent(`Hi ${inv.clientName || ''},\n\nJoin me on PT Coach: ${link}\n\nCreate an account with this email (${inv.email}) and you'll be connected automatically. Your invite code is ${inv.code}.`);
   const sh = sheet(
     h('h2', {}, 'Invite link'),
+    note && h('p', { class: 'banner' }, note),
     h('p', { class: 'small' }, `Valid for 14 days. Code: `, h('strong', {}, inv.code)),
     h('input', { value: link, readonly: true, onfocus: (e) => e.target.select() }),
     h('div', { class: 'row', style: 'margin-top:10px' },
@@ -78,6 +86,7 @@ function inviteSheet() {
   const email = h('input', { type: 'email', autocomplete: 'off' });
   const sh = sheet(
     h('h2', {}, 'Invite a client'),
+    h('p', { class: 'small muted' }, 'They get an email with a link to create their account with this address.'),
     field('Client name', name),
     field('Email', email),
     h('button', {
@@ -85,10 +94,10 @@ function inviteSheet() {
       onclick: (e) => busy(e.currentTarget, async () => {
         const inv = await post('/invites', { clientName: name.value, email: email.value });
         sh.close();
-        shareInvite(inv);
+        emailResult(inv);
         renderRoster();
       }),
-    }, 'Create invite'),
+    }, 'Send invitation'),
   );
 }
 

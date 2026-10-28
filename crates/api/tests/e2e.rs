@@ -220,6 +220,11 @@ async fn full_client_journey() {
     let (s, inv) = t.call("POST", "/invites", Some("coach1"), Some(json!({ "email": "Client1@dev.local", "clientName": "Cli Ent" }))).await;
     assert_eq!(s, StatusCode::OK, "{inv}");
     let code = inv["code"].as_str().unwrap().to_string();
+    // client invitations are emailed too (not configured locally, so the coach gets the link)
+    assert_eq!(inv["emailed"], false);
+    let (s, resent) = t.call("POST", &format!("/invites/{code}/resend"), Some("coach1"), None).await;
+    assert_eq!((s, resent["code"].as_str()), (StatusCode::OK, Some(code.as_str())));
+    assert_eq!(t.call("POST", &format!("/invites/{code}/resend"), Some("coach2"), None).await.0, StatusCode::NOT_FOUND);
     let (_, pending) = t.call("GET", "/invites", Some("coach1"), None).await;
     assert_eq!(pending.as_array().unwrap().len(), 1);
 
@@ -719,6 +724,32 @@ async fn full_client_journey() {
     assert_eq!(unread("coach1").await, Some(0));
     assert_eq!(t.call("GET", "/messages", Some("coach1"), None).await.1["threads"][0]["newMessages"], json!([]));
 
+    // --- photos and voice notes in messages
+    let (s, up) = t
+        .call("POST", "/clients/client1/attachments", Some("client1"), Some(json!({ "kind": "photo", "contentType": "image/jpeg", "size": 4 })))
+        .await;
+    assert_eq!(s, StatusCode::OK, "{up}");
+    let akey = up["key"].as_str().unwrap().to_string();
+    assert!(akey.starts_with("media/coach1/client1/messages/") && akey.ends_with(".jpg"), "{akey}");
+    let bad_type = json!({ "kind": "voice", "contentType": "image/jpeg", "size": 4 });
+    assert_eq!(t.call("POST", "/clients/client1/attachments", Some("client1"), Some(bad_type)).await.0, StatusCode::BAD_REQUEST);
+    assert_eq!(t.call("POST", "/clients/client1/attachments", Some("coach2"), Some(json!({ "kind": "photo", "contentType": "image/jpeg", "size": 4 }))).await.0, StatusCode::FORBIDDEN);
+    let photo = |key: &str| json!({ "text": "", "attachment": { "kind": "photo", "key": key, "contentType": "image/jpeg" } });
+    assert_eq!(t.call("POST", "/clients/client1/comments", Some("client1"), Some(photo(&akey))).await.0, StatusCode::BAD_REQUEST, "not uploaded yet");
+    s3.put_object().bucket(&bucket).key(&akey).body(b"jpeg".to_vec().into()).tagging("state=pending").send().await.unwrap();
+    assert_eq!(t.call("POST", "/clients/client1/comments", Some("client1"), Some(photo("media/coach2/x/messages/a.jpg"))).await.0, StatusCode::BAD_REQUEST, "another thread's file");
+    let (s, sent) = t.call("POST", "/clients/client1/comments", Some("client1"), Some(photo(&akey))).await;
+    assert_eq!(s, StatusCode::OK, "{sent}");
+    let tags = s3.get_object_tagging().bucket(&bucket).key(&akey).send().await.unwrap();
+    assert!(tags.tag_set().is_empty(), "confirmed, so it no longer expires");
+    let (_, thread) = t.call("GET", "/clients/client1/comments", Some("coach1"), None).await;
+    let last = thread.as_array().unwrap().last().unwrap();
+    assert_eq!(last["attachment"]["kind"], "photo");
+    assert!(last["attachmentUrl"].as_str().unwrap().contains("X-Amz-Signature"));
+    let (_, inbox) = t.call("GET", "/messages", Some("coach1"), None).await;
+    assert_eq!(inbox["threads"][0]["lastText"], "📷 Photo");
+    t.call("POST", "/clients/client1/messages/read", Some("coach1"), None).await;
+
     // --- push subscriptions (MS-2): only real browser push services; idempotent; removable
     let sub = |endpoint: &str| json!({ "endpoint": endpoint, "keys": { "p256dh": "BPkey", "auth": "authsecret" }, "preview": false });
     for _ in 0..2 {
@@ -800,4 +831,44 @@ async fn full_client_journey() {
     };
     assert!(audits.iter().any(|a| a["action"] == "view-photos" && a["actorId"] == "coach1"));
     assert!(audits.iter().any(|a| a["action"] == "view-video-queue" && a["actorId"] == "coach1"));
+
+    // --- a client exports their data, then deletes their account (privacy NFR)
+    let (_, inv3) = t.call("POST", "/invites", Some("coach1"), Some(json!({ "email": "client3@dev.local", "clientName": "Three" }))).await;
+    let code3 = inv3["code"].as_str().unwrap();
+    assert_eq!(t.call("POST", &format!("/invites/{code3}/accept"), Some("client3"), Some(json!({}))).await.0, StatusCode::OK);
+    t.call("POST", "/clients/client3/comments", Some("client3"), Some(json!({ "text": "Hello coach" }))).await;
+    let (_, ph) = t
+        .call("POST", "/clients/client3/photos", Some("client3"), Some(json!({ "date": "2026-10-01", "pose": "front", "contentType": "image/jpeg", "size": 4 })))
+        .await;
+    let media_bucket = std::env::var("MEDIA_BUCKET").unwrap();
+    let pkey = ph["photo"]["key"].as_str().unwrap().to_string();
+    s3.put_object().bucket(&media_bucket).key(&pkey).body(b"jpeg".to_vec().into()).send().await.unwrap();
+    assert_eq!(t.call("GET", "/me/export", Some("coach1"), None).await.0, StatusCode::FORBIDDEN, "coach accounts aren't self-service");
+    let (s, ex) = t.call("GET", "/me/export", Some("client3"), None).await;
+    assert_eq!(s, StatusCode::OK, "{ex}");
+    assert_eq!(ex["account"]["profile"]["name"], "Three");
+    let records = ex["records"].as_array().unwrap();
+    assert!(records.iter().any(|r| r["text"] == "Hello coach" && r["record"].as_str().unwrap().starts_with("COMMENT#")));
+    assert!(records.iter().all(|r| r.get("pk").is_none()));
+    assert!(ex["files"].as_array().unwrap().iter().any(|f| f["key"] == pkey.as_str() && f["url"].as_str().unwrap().contains("X-Amz-Signature")));
+    // deleting needs the email typed, and only the client themselves
+    assert_eq!(t.call("DELETE", "/me/account", Some("client3"), Some(json!({ "confirm": "nope" }))).await.0, StatusCode::BAD_REQUEST);
+    assert_eq!(t.call("DELETE", "/me/account", Some("coach1"), Some(json!({ "confirm": "coach1@dev.local" }))).await.0, StatusCode::FORBIDDEN);
+    let (s, d) = t.call("DELETE", "/me/account", Some("client3"), Some(json!({ "confirm": "Client3@dev.local" }))).await;
+    assert_eq!(s, StatusCode::OK, "{d}");
+    assert_eq!(t.call("GET", "/me", Some("client3"), None).await.1["profile"], Value::Null);
+    assert!(s3.head_object().bucket(&media_bucket).key(&pkey).send().await.is_err(), "files deleted");
+    let left = ddb
+        .query()
+        .table_name(&table)
+        .key_condition_expression("pk = :pk")
+        .expression_attribute_values(":pk", aws_sdk_dynamodb::types::AttributeValue::S("CLIENT#client3".into()))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(left.count(), 0, "records deleted");
+    let (_, roster) = t.call("GET", "/clients", Some("coach1"), None).await;
+    assert!(!roster.as_array().unwrap().iter().any(|r| r["client"]["clientId"] == "client3"), "off the roster");
+    let (_, inbox) = t.call("GET", "/messages", Some("coach1"), None).await;
+    assert!(!inbox["threads"].as_array().unwrap().iter().any(|r| r["clientId"] == "client3"), "out of the inbox");
 }

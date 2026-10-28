@@ -463,7 +463,40 @@ pub struct Comment {
     /// A coach's video reply this message carries (VR-2), played from the thread.
     #[serde(default)]
     pub reply_id: Option<String>,
+    /// A photo or voice note sent with (or as) the message.
+    #[serde(default)]
+    pub attachment: Option<Attachment>,
     pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum AttachmentKind {
+    Photo,
+    Voice,
+}
+
+/// A file sent in a message, stored at `media/{coach}/{client}/messages/…`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Attachment {
+    pub kind: AttachmentKind,
+    pub key: String,
+    pub content_type: String,
+    #[serde(default)]
+    pub duration_sec: Option<f64>,
+}
+
+impl Comment {
+    /// What a notification or inbox preview says about the message.
+    pub fn preview_text(&self) -> String {
+        match (&self.attachment, self.text.is_empty()) {
+            (_, false) => self.text.clone(),
+            (Some(a), true) if a.kind == AttachmentKind::Photo => "📷 Photo".into(),
+            (Some(_), true) => "🎤 Voice note".into(),
+            (None, true) => String::new(),
+        }
+    }
 }
 
 /// A coach-client conversation's summary, `COACH#{coach}` / `THREAD#{client}`:

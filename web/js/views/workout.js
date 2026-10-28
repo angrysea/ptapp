@@ -12,7 +12,7 @@ import { RATINGS, rpeLogInfo, sessionRpeInfo } from '../effort.js';
 import { $app, addDays, busy, confirmSheet, field, fmtDate, h, mount, num, select, sheet, toast, todayIso, uid, units } from '../ui.js';
 import { CannotEncode, canEncode, encodeClip } from '../encode.js';
 import { onUploads, pendingUploads, queueVideo, removeUpload, retryUpload } from '../uploads.js';
-import { playReply, playVideo } from '../videos.js';
+import { askBeforeCellular, onCellular, playReply, playVideo } from '../videos.js';
 import { canRecord, recordClip } from './recorder.js';
 import { trimmer } from './trim.js';
 
@@ -217,7 +217,7 @@ export async function renderWorkout(date, schedId) {
   function uploadChip(u) {
     const label = u.state === 'failed' ? `⚠ Set ${u.set.setIndex + 1} · failed`
       : u.progress != null && navigator.onLine ? `⏳ Set ${u.set.setIndex + 1} · ${Math.round(u.progress * 100)}%`
-        : `⏳ Set ${u.set.setIndex + 1} · ${navigator.onLine ? 'waiting' : 'waiting for connection'}`;
+        : `⏳ Set ${u.set.setIndex + 1} · ${!navigator.onLine ? 'waiting for connection' : u.waitForWifi && onCellular() ? 'waiting for Wi-Fi' : 'waiting'}`;
     return h('button', {
       class: `small ${u.state === 'failed' ? 'danger' : ''}`,
       onclick: () => {
@@ -331,12 +331,16 @@ export async function renderWorkout(date, schedId) {
                 status.textContent = 'This device can’t convert the clip, so the original will upload.';
               }
             }
+            // On mobile data, a big clip can wait for Wi-Fi.
+            const when = await askBeforeCellular(upload.file.size);
+            if (!when) { prog.hidden = true; status.textContent = 'Not uploaded.'; return; }
             // Saved on this device first, so it survives a lost connection or a
             // closed app; uploads.js sends it in the background.
-            await queueVideo({ clientId: me.userId, logId: log.id, set: sets.find((x) => String(x.setIndex) === which.value), ...upload });
+            await queueVideo({ clientId: me.userId, logId: log.id, set: sets.find((x) => String(x.setIndex) === which.value), ...upload, waitForWifi: when.waitForWifi });
+            sh.close();
+            toast(when.waitForWifi ? 'Saved on this device. It uploads when you’re on Wi-Fi.'
+              : navigator.onLine ? 'Uploading in the background' : 'Saved on this device. It uploads when you’re back online.');
           } catch (err) { prog.hidden = true; status.textContent = err.message; throw err; }
-          sh.close();
-          toast(navigator.onLine ? 'Uploading in the background' : 'Saved on this device. It uploads when you’re back online.');
         }),
       }, 'Upload'),
       h('button', { class: 'ghost block', onclick: () => sh.close() }, 'Cancel'),

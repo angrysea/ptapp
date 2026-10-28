@@ -79,7 +79,7 @@ pub struct CoachInvite {
 /// The invite plus whether its email went out. A failed send (e.g. the
 /// sending domain isn't verified yet, or SES is still in its sandbox) never
 /// fails the invite: the admin page then offers the link to share by hand.
-async fn with_email_status(st: &AppState, invite: &Invite) -> ApiResult<Value> {
+pub async fn with_email_status(st: &AppState, invite: &Invite) -> ApiResult<Value> {
     let mut out = serde_json::to_value(invite).map_err(|e| ApiError::Internal(e.to_string()))?;
     let (emailed, error) = match send_invite(st, invite).await {
         Ok(sent) => (sent, None),

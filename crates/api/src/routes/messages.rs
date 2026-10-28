@@ -53,7 +53,7 @@ pub async fn on_message(st: &AppState, scope: &ClientScope, c: &Comment) {
         .expression_attribute_values(":c", s(client.as_str()))
         .expression_attribute_values(":n", s(scope.client.name.as_str()))
         .expression_attribute_values(":at", s(c.created_at.to_rfc3339()))
-        .expression_attribute_values(":t", s(preview(&c.text)))
+        .expression_attribute_values(":t", s(preview(&c.preview_text())))
         .expression_attribute_values(":r", s(if c.author_role == Role::Client { "client" } else { "coach" }))
         .expression_attribute_values(":one", AttributeValue::N("1".into()))
         .send()
@@ -66,7 +66,7 @@ pub async fn on_message(st: &AppState, scope: &ClientScope, c: &Comment) {
     }
     // A push notification too, for when the app isn't open; tapping it opens the thread.
     let url = if c.author_role == Role::Client { format!("#/c/{client}/messages") } else { "#/coach".to_string() };
-    super::notify::notify_user(st, recipient, &c.author_name, &c.text, &url, &format!("thread-{client}")).await;
+    super::notify::notify_user(st, recipient, &c.author_name, &c.preview_text(), &url, &format!("thread-{client}")).await;
 }
 
 /// `POST /clients/{cid}/messages/read`: the caller has seen the conversation.
