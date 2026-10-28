@@ -19,7 +19,8 @@ export function signedIn() {
   return devMode() ? !!localStorage.getItem('pt.devUser') : !!stored()?.refresh_token;
 }
 
-export async function login() {
+/** Opens Cognito's sign-in page; `loginHint` fills in the email there. */
+export async function login({ loginHint } = {}) {
   if (devMode()) {
     const user = prompt('Dev user id (e.g. coach1, client1)', 'coach1');
     if (user) { localStorage.setItem('pt.devUser', user); location.reload(); }
@@ -32,6 +33,7 @@ export async function login() {
   const q = new URLSearchParams({
     response_type: 'code', client_id: cfg.clientId, redirect_uri: redirectUri(),
     scope: 'openid email profile', state, code_challenge: challenge, code_challenge_method: 'S256',
+    ...(loginHint && { login_hint: loginHint }),
   });
   location.assign(`${cfg.cognitoDomain}/oauth2/authorize?${q}`);
 }
@@ -83,3 +85,28 @@ export function logout() {
   const q = new URLSearchParams({ client_id: cfg.clientId, logout_uri: redirectUri() });
   location.assign(`${cfg.cognitoDomain}/logout?${q}`);
 }
+
+// ---------------------------------------------------------------- sign-up (views/signup.js)
+// The invitation sign-up page creates accounts with Cognito's user pool API
+// directly (public app client, no secret), so it can fill in the invited
+// email; sign-in still goes through Cognito's page.
+
+const region = () => cfg.region || (cfg.cognitoDomain.match(/\.auth\.([a-z0-9-]+)\.amazoncognito\.com/) || [])[1];
+
+async function userPool(action, body) {
+  const res = await fetch(`https://cognito-idp.${region()}.amazonaws.com/`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-amz-json-1.1', 'x-amz-target': `AWSCognitoIdentityProviderService.${action}` },
+    body: JSON.stringify({ ClientId: cfg.clientId, ...body }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw Object.assign(new Error(data.message || `Couldn’t reach the sign-in service (${res.status})`), { code: (data.__type || '').split('#').pop() });
+  }
+  return data;
+}
+
+export const signUp = (email, password) =>
+  userPool('SignUp', { Username: email, Password: password, UserAttributes: [{ Name: 'email', Value: email }] });
+export const confirmSignUp = (email, code) => userPool('ConfirmSignUp', { Username: email, ConfirmationCode: code });
+export const resendSignUpCode = (email) => userPool('ResendConfirmationCode', { Username: email });

@@ -46,6 +46,27 @@ export function field(label, input, hint) {
   return h('div', { class: 'field' }, h('label', { for: control?.id }, label), input, hint && h('div', { class: 'muted small' }, hint));
 }
 
+const EYE = '<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg>';
+const EYE_OFF = '<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.9 17.9A10.4 10.4 0 0 1 12 19c-7 0-11-7-11-7a19 19 0 0 1 5.1-5.9M9.9 4.2A9.7 9.7 0 0 1 12 4c7 0 11 7 11 7a19 19 0 0 1-2.2 3.2"/><path d="M14.1 14.1a3 3 0 1 1-4.2-4.2"/><path d="M1 1l22 22"/></svg>';
+
+/** A labelled password box with an eye button inside it that shows or hides
+ * what's typed. Returns `{ el, input }`. */
+export function passwordField(label, attrs = {}) {
+  const input = h('input', { type: 'password', ...attrs });
+  input.id = `f${++fieldSeq}`;
+  const eye = h('button', { type: 'button', class: 'eye', 'aria-label': `Show ${label.toLowerCase()}`, 'aria-pressed': 'false', 'aria-controls': input.id });
+  eye.innerHTML = EYE; // static markup
+  eye.addEventListener('click', () => {
+    const show = input.type === 'password';
+    input.type = show ? 'text' : 'password';
+    eye.setAttribute('aria-pressed', String(show));
+    eye.setAttribute('aria-label', `${show ? 'Hide' : 'Show'} ${label.toLowerCase()}`);
+    eye.innerHTML = show ? EYE_OFF : EYE;
+  });
+  const el = h('div', { class: 'field' }, h('label', { for: input.id }, label), h('div', { class: 'pw' }, input, eye));
+  return { el, input };
+}
+
 export function select(options, value, attrs = {}) {
   return h('select', { ...attrs, value },
     options.map((o) => (Array.isArray(o) ? h('option', { value: o[0] }, o[1]) : h('option', { value: o }, o))));

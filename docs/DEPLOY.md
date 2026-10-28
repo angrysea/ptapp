@@ -17,7 +17,16 @@ The script:
 
 It prints the app URL (`https://dxxxx.cloudfront.net`).
 
-**First admin.** Coaches can't sign themselves up; an admin invites them or approves their request. Pass `ADMIN_EMAILS` (comma-separated) on every deploy. Someone whose verified email is on the list signs up through **Sign in → Sign up** on the Cognito page and sees **Set up admin account**. Their admin account then stays even if the list changes. Coaches can request an account at `<app URL>#/become-a-coach`; the admin's Coaches page shows the requests and that link.
+**First admin.** Accounts are by invitation only. Pass `ADMIN_EMAILS` (comma-separated) on every deploy. Someone whose email is on the list signs up through **Sign in → Sign up** on the Cognito page and sees **Set up admin account**. Their admin account then stays even if the list changes.
+
+**Invitation emails (SES).** Pass `INVITE_FROM` (e.g. `invites@gymtxcoach.com`) on every deploy. The stack creates an SES identity for its domain, signed with DKIM:
+
+1. Add the three CNAME records from the stack outputs `DkimRecord1`–`DkimRecord3` to the domain's DNS (gymtxcoach.com is hosted on Cloudflare: add each as a CNAME with the proxy turned off (DNS only)). SES verifies the domain within about an hour of the records appearing.
+2. New SES accounts are in the **sandbox**: they can only email addresses verified in SES. Request **production access** (SES console › Account dashboard › Request production access; AWS usually answers within a day).
+
+Until both are done, invitations are still created and the admin page shows the link to share by hand.
+
+If the sender domain is already an SES identity in this account and region (for example, created in the SES console), deploy with `CREATE_SENDER_IDENTITY=false`: the stack then uses that identity, and its three DKIM records are on the identity's page in the SES console (or `aws sesv2 get-email-identity --email-identity <domain>`) instead of in the stack outputs.
 
 ## Signing in and deploying from Windows
 

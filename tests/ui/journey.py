@@ -22,8 +22,14 @@ def add_block(page, kind):
 
 def sign_in(page, user, url=BASE):
     page.goto(url)
-    page.once("dialog", lambda d: d.accept(user))
-    page.get_by_role("button", name="Sign in or create account").click()
+    if "#/join/" in url:
+        # An invitation link opens the sign-up page with the invited email filled
+        # in; in dev mode it continues as that address's dev user ({id}@dev.local).
+        expect(page.locator("input[type=email]")).to_have_value(f"{user}@dev.local")
+        page.get_by_role("button", name=f"Continue as {user} (dev)").click()
+    else:
+        page.once("dialog", lambda d: d.accept(user))
+        page.get_by_role("button", name="Sign in", exact=True).click()
     page.wait_for_load_state("networkidle")
 
 with sync_playwright() as p:
@@ -47,8 +53,9 @@ with sync_playwright() as p:
     admin.get_by_role("button", name="+ Invite coach").click()
     admin.get_by_label("Coach name").fill("Alex Coach")
     admin.get_by_label("Email").fill(f"coach{RUN}@dev.local")
-    admin.get_by_role("button", name="Create invite").click()
-    expect(admin.get_by_role("heading", name="Coach invite")).to_be_visible()
+    admin.get_by_role("button", name="Send invitation").click()
+    # no email locally, so the admin gets the link to share
+    expect(admin.get_by_role("heading", name="Invitation link")).to_be_visible()
     coach_code = admin.locator(".sheet input").input_value().rsplit("/", 1)[-1]
     shot(admin, "00-admin-coach-invite")
 
@@ -328,26 +335,11 @@ with sync_playwright() as p:
     expect(client.get_by_text(re.compile("Keep the chest up"))).to_be_visible()
     shot(client, "14-client-messages")
 
-    # ---------------- a coach requests an account; the admin approves it
-    applicant_ctx = browser.new_context(**mobile)
-    applicant = applicant_ctx.new_page(); watch(applicant, "applicant")
-    sign_in(applicant, "applicant" + RUN, BASE + "#/become-a-coach")
-    expect(applicant.get_by_role("heading", name="Request a coach account")).to_be_visible()
-    applicant.get_by_label("Your name").fill(f"Riley Coach {RUN}")
-    applicant.get_by_label("About your coaching").fill("Strength coach, 5 years")
-    applicant.get_by_role("button", name="Send request").click()
-    expect(applicant.get_by_text(re.compile("being reviewed"))).to_be_visible()
-    shot(applicant, "15-coach-request")
-
-    admin.reload()
-    card = admin.locator(".card", has_text=f"Riley Coach {RUN}")
-    expect(card).to_be_visible()
-    shot(admin, "16-admin-requests")
-    card.get_by_role("button", name="Approve").click()
-    expect(admin.get_by_text(f"Riley Coach {RUN} is now a coach")).to_be_visible()
-
-    applicant.reload()
-    expect(applicant.get_by_role("heading", name="Clients")).to_be_visible()
+    # ---------------- a used invitation link stops working
+    stale_ctx = browser.new_context(**mobile)
+    stale = stale_ctx.new_page()  # not watched: the lookup 404s on purpose
+    stale.goto(BASE + "#/join/" + coach_code)
+    expect(stale.get_by_role("heading", name="This link doesn’t work")).to_be_visible()
 
     browser.close()
 

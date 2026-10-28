@@ -2,11 +2,15 @@
 # Build the Rust Lambda, deploy the SAM stack, generate web/js/config.js and
 # publish the PWA. Run from Linux, macOS, WSL or Git Bash (see docs/DEPLOY.md).
 #
-#   COGNITO_DOMAIN_PREFIX=myptapp-dev ADMIN_EMAILS=you@example.com ./scripts/deploy.sh
+#   COGNITO_DOMAIN_PREFIX=myptapp-dev ADMIN_EMAILS=you@example.com \
+#     INVITE_FROM=invites@example.com ./scripts/deploy.sh
 #
 # ADMIN_EMAILS lists who may set up an admin account (admins onboard
 # coaches). Pass it on every deploy: leaving it out clears the list, though
 # admin accounts that already exist keep working.
+# INVITE_FROM is the sender for invitation emails; its domain must have the
+# DKIM records from the DkimRecord outputs in its DNS. Leaving it out turns
+# emailing off (invitations are then shared by link only).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -15,6 +19,9 @@ STACK="${STACK:-ptapp-$STAGE}"
 REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-us-east-1}}"
 : "${COGNITO_DOMAIN_PREFIX:?set COGNITO_DOMAIN_PREFIX to a globally unique name, e.g. myptapp-dev}"
 ADMIN_EMAILS="${ADMIN_EMAILS:-}"
+INVITE_FROM="${INVITE_FROM:-}"
+# "false" if INVITE_FROM's domain is already an SES identity made outside this stack.
+CREATE_SENDER_IDENTITY="${CREATE_SENDER_IDENTITY:-true}"
 
 echo "==> building Lambda (arm64)"
 cargo lambda build --release --arm64 --bin api
@@ -28,7 +35,7 @@ sam deploy \
   --resolve-s3 \
   --no-confirm-changeset \
   --no-fail-on-empty-changeset \
-  --parameter-overrides "Stage=$STAGE" "CognitoDomainPrefix=$COGNITO_DOMAIN_PREFIX" "AdminEmails=$ADMIN_EMAILS"
+  --parameter-overrides "Stage=$STAGE" "CognitoDomainPrefix=$COGNITO_DOMAIN_PREFIX" "AdminEmails=$ADMIN_EMAILS" "InviteFromAddress=$INVITE_FROM" "CreateSenderIdentity=$CREATE_SENDER_IDENTITY"
 
 out() {
   aws cloudformation describe-stacks --region "$REGION" --stack-name "$STACK" \
@@ -53,6 +60,7 @@ cat > "$SITE/js/config.js" <<EOF
 export default {
   apiUrl: "$API_URL",
   cognitoDomain: "$COGNITO_DOMAIN",
+  region: "$REGION",
   clientId: "$CLIENT_ID",
   devUser: false,
 };
@@ -68,6 +76,16 @@ for f in index.html sw.js js/config.js; do
   aws s3 cp "$SITE/$f" "s3://$WEB_BUCKET/$f" --region "$REGION" --cache-control "no-cache"
 done
 aws cloudfront create-invalidation --distribution-id "$DIST_ID" --paths "/*" >/dev/null
+
+# Smoke check: the browser's CORS preflight must succeed, or every signed-in
+# call fails in the browser (shown as "Can't reach the server").
+PREFLIGHT="$(curl -s -o /dev/null -w '%{http_code}' -X OPTIONS "$API_URL/me" \
+  -H "Origin: $APP_URL" -H 'Access-Control-Request-Method: GET' \
+  -H 'Access-Control-Request-Headers: authorization,content-type')"
+case "$PREFLIGHT" in
+  2??) echo "==> smoke check: CORS preflight OK ($PREFLIGHT)" ;;
+  *) echo "!! smoke check FAILED: CORS preflight to $API_URL/me returned $PREFLIGHT; signed-in users can't reach the API" >&2; exit 1 ;;
+esac
 
 echo
 echo "App:  $APP_URL"

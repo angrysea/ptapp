@@ -4,6 +4,7 @@
 
 pub mod auth;
 pub mod error;
+pub mod mail;
 pub mod routes;
 pub mod store;
 pub mod util;
@@ -21,6 +22,11 @@ use crate::store::Store;
 pub struct AppState {
     pub store: Store,
     pub s3: aws_sdk_s3::Client,
+    pub ses: aws_sdk_sesv2::Client,
+    /// Sender for invitation emails (INVITE_FROM); None turns emailing off.
+    pub invite_from: Option<String>,
+    /// The web app's base URL (APP_URL), for links in emails.
+    pub app_url: String,
     pub bucket: String,
     pub presign_ttl: Duration,
     /// Lowercased emails allowed to set up an admin account (ADMIN_EMAILS,
@@ -38,18 +44,16 @@ pub fn router(state: AppState) -> Router {
         .route("/health", get(|| async { Json(json!({ "ok": true })) }))
         // identity + onboarding
         .route("/me", get(me::get_me).put(me::update_me))
-        .route("/coach-request", put(admin::submit_request))
         .route("/invites", get(invites::list).post(invites::create))
         .route("/invites/{code}", get(invites::peek).delete(invites::revoke))
+        .route("/invites/{code}/public", get(invites::public))
         .route("/invites/{code}/accept", post(invites::accept))
-        // admin: coach invites and coach requests (no open coach signup)
+        // admin: coach invites by email (no open coach signup)
         .route("/admin/register", post(admin::register))
         .route("/admin/coaches", get(admin::coaches))
         .route("/admin/invites", get(admin::list_invites).post(admin::create_invite))
         .route("/admin/invites/{code}", delete(admin::revoke_invite))
-        .route("/admin/requests", get(admin::requests))
-        .route("/admin/requests/{uid}/approve", post(admin::approve))
-        .route("/admin/requests/{uid}/decline", post(admin::decline))
+        .route("/admin/invites/{code}/resend", post(admin::resend_invite))
         // coach library
         .route("/exercises", get(exercises::list).post(exercises::create))
         .route("/exercises/{id}", put(exercises::update).delete(exercises::remove))
@@ -94,6 +98,9 @@ impl AppState {
                 table: std::env::var("TABLE_NAME").expect("TABLE_NAME"),
             },
             s3: aws_sdk_s3::Client::new(&config),
+            ses: aws_sdk_sesv2::Client::new(&config),
+            invite_from: std::env::var("INVITE_FROM").ok().filter(|f| f.contains('@')),
+            app_url: std::env::var("APP_URL").unwrap_or_else(|_| "http://localhost:8080".into()),
             bucket: std::env::var("MEDIA_BUCKET").expect("MEDIA_BUCKET"),
             presign_ttl: Duration::from_secs(900),
             video_retention_days: std::env::var("VIDEO_RETENTION_DAYS").ok().and_then(|d| d.parse().ok()).unwrap_or(180),

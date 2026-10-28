@@ -1,34 +1,25 @@
 use axum::extract::State;
 use axum::Json;
 use chrono::NaiveDate;
-use ptcore::model::{valid_time_zone, CoachRequest, Profile, Role, Sex, UnitSystem};
+use ptcore::model::{valid_time_zone, Profile, Role, Sex, UnitSystem};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::auth::{Caller, Ctx};
 use crate::error::{bad_request, ApiResult};
-use crate::routes::invites::ADMIN_PK;
 use crate::AppState;
 
-/// Who am I? `profile` is null until the user accepts an invite, has a
-/// coach request approved, or (if listed in ADMIN_EMAILS) sets up an admin
-/// account. Until then the onboarding screen uses `adminEligible` and
-/// `coachRequest` (their own request, if any).
+/// Who am I? `profile` is null until the user accepts an invite or (if
+/// listed in ADMIN_EMAILS) sets up an admin account; `adminEligible` tells
+/// the onboarding screen whether to offer the latter.
 pub async fn get_me(State(st): State<AppState>, caller: Caller) -> ApiResult<Json<Value>> {
     let profile: Option<Profile> = st.store.get(&format!("USER#{}", caller.sub), "PROFILE").await?;
-    let (admin_eligible, request) = match &profile {
-        Some(_) => (false, None),
-        None => {
-            let request: Option<CoachRequest> = st.store.get(ADMIN_PK, &format!("REQUEST#{}", caller.sub)).await?;
-            (st.is_admin_email(&caller), request)
-        }
-    };
+    let admin_eligible = profile.is_none() && st.is_admin_email(&caller);
     Ok(Json(json!({
         "userId": caller.sub,
         "email": caller.email,
         "profile": profile,
         "adminEligible": admin_eligible,
-        "coachRequest": request,
     })))
 }
 

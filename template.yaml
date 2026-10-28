@@ -22,6 +22,19 @@ Parameters:
     Type: String
     Default: ""
     Description: Comma-separated emails that may set up an admin account (admins onboard coaches; there is no open coach signup)
+  InviteFromAddress:
+    Type: String
+    Default: ""
+    Description: Sender for invitation emails, e.g. invites@gymtxcoach.com. Its domain becomes an SES identity (add the DkimRecord outputs to its DNS). Empty turns emailing off.
+  CreateSenderIdentity:
+    Type: String
+    AllowedValues: ["true", "false"]
+    Default: "true"
+    Description: '"false" when the sender domain is already an SES identity in this account and region (e.g. created in the console); the stack then uses it as is'
+
+Conditions:
+  SendsInvites: !Not [!Equals [!Ref InviteFromAddress, ""]]
+  CreatesSenderIdentity: !And [!Condition SendsInvites, !Equals [!Ref CreateSenderIdentity, "true"]]
 
 Globals:
   Function:
@@ -128,6 +141,28 @@ Resources:
     Properties:
       Domain: !Ref CognitoDomainPrefix
       UserPoolId: !Ref UserPool
+      # 2 = managed login (the successor to the classic hosted UI, version 1).
+      ManagedLoginVersion: 2
+
+  # The invitation sender's domain, signed with Easy DKIM. Sending works once
+  # the three CNAMEs in the DkimRecord outputs are in the domain's DNS, and to
+  # any address once the account has SES production access.
+  InviteSenderDomain:
+    Type: AWS::SES::EmailIdentity
+    Condition: CreatesSenderIdentity
+    Properties:
+      EmailIdentity: !Select [1, !Split ["@", !Ref InviteFromAddress]]
+      DkimSigningAttributes:
+        NextSigningKeyLength: RSA_2048_BIT
+
+  # Managed login shows nothing for an app client until it has a branding
+  # style; Cognito's defaults are enough for now.
+  LoginBranding:
+    Type: AWS::Cognito::ManagedLoginBranding
+    Properties:
+      UserPoolId: !Ref UserPool
+      ClientId: !Ref UserPoolClient
+      UseCognitoProvidedValues: true
 
   UserPoolClient:
     Type: AWS::Cognito::UserPoolClient
@@ -183,6 +218,8 @@ Resources:
           TABLE_NAME: !Ref Table
           MEDIA_BUCKET: !Ref MediaBucket
           ADMIN_EMAILS: !Ref AdminEmails
+          INVITE_FROM: !Ref InviteFromAddress
+          APP_URL: !Sub "https://${Distribution.DomainName}"
           VIDEO_RETENTION_DAYS: !Ref VideoRetentionDays
           RUST_LOG: info
       LoggingConfig:
@@ -197,6 +234,11 @@ Resources:
             - Effect: Allow
               Action: [s3:PutObjectTagging, s3:DeleteObjectTagging, s3:AbortMultipartUpload]
               Resource: !Sub "${MediaBucket.Arn}/*"
+        # Invitation emails (mail.rs), from this account's SES identities.
+        - Statement:
+            - Effect: Allow
+              Action: ses:SendEmail
+              Resource: !Sub "arn:aws:ses:${AWS::Region}:${AWS::AccountId}:identity/*"
       Events:
         Api:
           Type: HttpApi
@@ -209,6 +251,26 @@ Resources:
           Properties:
             ApiId: !Ref HttpApi
             Path: /health
+            Method: GET
+            Auth: { Authorizer: NONE }
+        # Browsers send a CORS preflight (OPTIONS, never with a token) before
+        # every authorized call. The ANY route above would put it through the
+        # JWT authorizer and fail it with 401, so preflights get their own
+        # unauthenticated route; the Lambda's CORS layer answers them.
+        Preflight:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /{proxy+}
+            Method: OPTIONS
+            Auth: { Authorizer: NONE }
+        # The sign-up page reads an invitation (to fill in its email) before
+        # the person has an account; the code itself is the secret.
+        PublicInvite:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /invites/{code}/public
             Method: GET
             Auth: { Authorizer: NONE }
 
@@ -293,3 +355,14 @@ Outputs:
     Value: !Ref Table
   MediaBucketName:
     Value: !Ref MediaBucket
+  # Add these three CNAME records to the sender domain's DNS so SES can send
+  # invitations from it (each value is "name -> target").
+  DkimRecord1:
+    Condition: CreatesSenderIdentity
+    Value: !Sub "${InviteSenderDomain.DkimDNSTokenName1} CNAME ${InviteSenderDomain.DkimDNSTokenValue1}"
+  DkimRecord2:
+    Condition: CreatesSenderIdentity
+    Value: !Sub "${InviteSenderDomain.DkimDNSTokenName2} CNAME ${InviteSenderDomain.DkimDNSTokenValue2}"
+  DkimRecord3:
+    Condition: CreatesSenderIdentity
+    Value: !Sub "${InviteSenderDomain.DkimDNSTokenName3} CNAME ${InviteSenderDomain.DkimDNSTokenValue3}"

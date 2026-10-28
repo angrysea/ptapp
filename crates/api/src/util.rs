@@ -214,6 +214,11 @@ mod tests {
         let state = crate::AppState {
             store: crate::store::Store { ddb, table: "t".into() },
             s3: aws_sdk_s3::Client::from_conf(conf),
+            ses: aws_sdk_sesv2::Client::from_conf(
+                aws_sdk_sesv2::Config::builder().behavior_version(BehaviorVersion::latest()).region(Region::new("us-east-1")).build(),
+            ),
+            invite_from: None,
+            app_url: "http://localhost:8080".into(),
             bucket: "b".into(),
             presign_ttl: std::time::Duration::from_secs(60),
             admin_emails: vec![],

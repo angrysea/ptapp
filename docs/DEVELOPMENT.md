@@ -34,7 +34,7 @@ cargo run -p api --bin local &
 python3 -m http.server 8080 -d web
 ```
 
-Open <http://localhost:8080>, click **Sign in**, and enter the user id `admin` (the local server sets `ADMIN_EMAILS=admin@dev.local`). Set up the admin account and invite a coach with the email `coach1@dev.local`. Dev users' emails are `{id}@dev.local`, and invites only accept the invited address. In a private window, open the invite link (`#/join/CODE`), sign in as `coach1` and accept it. As the coach, invite `client1@dev.local` the same way. To try the request flow instead, open `#/become-a-coach` as a new user.
+Open <http://localhost:8080>, click **Sign in**, and enter the user id `admin` (the local server sets `ADMIN_EMAILS=admin@dev.local`). Set up the admin account and invite a coach with the email `coach1@dev.local` (nothing is emailed locally; the admin page shows the link). Dev users' emails are `{id}@dev.local`, and invites only accept the invited address. In a private window, open the invite link (`#/join/CODE`): the sign-up page shows the invited email and, in dev mode, **Continue as coach1 (dev)** instead of a password form. Accept the invite. As the coach, invite `client1@dev.local` the same way.
 
 `web/js/config.js` is the dev config (`devUser: true`, `apiUrl: http://localhost:9000`). The deploy script publishes a generated config instead and leaves this file alone. **Never deploy with `devUser: true`**; the deployed Lambda ignores the dev header anyway because `DEV_AUTH` is not set there.
 

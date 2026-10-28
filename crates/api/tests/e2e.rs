@@ -86,13 +86,27 @@ async fn full_client_journey() {
     assert_eq!(a["role"], "admin");
     assert_eq!(t.call("POST", "/admin/register", Some("admin1"), Some(json!({ "name": "x" }))).await.0, StatusCode::CONFLICT);
 
-    // --- no open coach signup: coaches come from an admin invite...
+    // --- no open coach signup: coaches only come from an admin's emailed invitation
     assert_eq!(t.call("POST", "/coach/register", Some("coach1"), Some(json!({ "name": "x" }))).await.0, StatusCode::NOT_FOUND);
+    assert_eq!(t.call("PUT", "/coach-request", Some("coach1"), Some(json!({ "name": "x" }))).await.0, StatusCode::NOT_FOUND);
+    assert_eq!(t.call("GET", "/admin/requests", Some("admin1"), None).await.0, StatusCode::NOT_FOUND);
     assert_eq!(t.call("POST", "/admin/invites", Some("coach1"), Some(json!({ "email": "coach1@dev.local", "name": "x" }))).await.0, StatusCode::FORBIDDEN);
     let (s, ci) = t.call("POST", "/admin/invites", Some("admin1"), Some(json!({ "email": "coach1@dev.local", "name": "Coach One" }))).await;
     assert_eq!(s, StatusCode::OK, "{ci}");
     assert_eq!(ci["kind"], "coach");
+    // no INVITE_FROM here, so nothing is emailed and the admin page offers the link instead
+    assert_eq!(ci["emailed"], false);
     let coach_code = ci["code"].as_str().unwrap().to_string();
+    // the sign-up page reads the invitation without signing in, to fill in its email
+    let (s, pubinv) = t.call("GET", &format!("/invites/{}/public", coach_code.to_lowercase()), None, None).await;
+    assert_eq!(s, StatusCode::OK, "{pubinv}");
+    assert_eq!(pubinv["email"], "coach1@dev.local");
+    assert_eq!(pubinv["kind"], "coach");
+    assert_eq!(t.call("GET", "/invites/NOSUCHCODE/public", None, None).await.0, StatusCode::NOT_FOUND);
+    let (s, resent) = t.call("POST", &format!("/admin/invites/{coach_code}/resend"), Some("admin1"), None).await;
+    assert_eq!(s, StatusCode::OK, "{resent}");
+    assert_eq!(resent["code"], coach_code.as_str());
+    assert_eq!(t.call("POST", &format!("/admin/invites/{coach_code}/resend"), Some("coach1"), None).await.0, StatusCode::FORBIDDEN);
     let (_, peek) = t.call("GET", &format!("/invites/{coach_code}"), Some("coach1"), None).await;
     assert_eq!(peek["kind"], "coach");
     assert_eq!(t.call("POST", &format!("/invites/{coach_code}/accept"), Some("coach9"), Some(json!({}))).await.0, StatusCode::FORBIDDEN);
@@ -103,31 +117,14 @@ async fn full_client_journey() {
     assert_eq!(p["name"], "Coach One");
     let (_, admin_invites) = t.call("GET", "/admin/invites", Some("admin1"), None).await;
     assert_eq!(admin_invites.as_array().unwrap().len(), 0);
-
-    // ...or an approved request from a signed-in user
-    let (s, rq) = t
-        .call("PUT", "/coach-request", Some("coach2"), Some(json!({ "name": "Coach Two", "businessName": "Two Fit", "message": "10 years" })))
-        .await;
-    assert_eq!(s, StatusCode::OK, "{rq}");
-    assert_eq!(rq["status"], "pending");
-    let (_, me2) = t.call("GET", "/me", Some("coach2"), None).await;
-    assert_eq!(me2["coachRequest"]["status"], "pending");
-    assert_eq!(t.call("GET", "/admin/requests", Some("coach1"), None).await.0, StatusCode::FORBIDDEN);
-    let (_, reqs) = t.call("GET", "/admin/requests", Some("admin1"), None).await;
-    assert_eq!(reqs[0]["userId"], "coach2");
-    let (s, c2) = t.call("POST", "/admin/requests/coach2/approve", Some("admin1"), None).await;
+    // once used, the link stops working: the sign-up page's lookup and resend both refuse it
+    assert_eq!(t.call("GET", &format!("/invites/{coach_code}/public"), None, None).await.0, StatusCode::NOT_FOUND);
+    assert_eq!(t.call("POST", &format!("/admin/invites/{coach_code}/resend"), Some("admin1"), None).await.0, StatusCode::NOT_FOUND);
+    // a second coach the same way
+    let (_, ci2) = t.call("POST", "/admin/invites", Some("admin1"), Some(json!({ "email": "coach2@dev.local", "name": "Coach Two" }))).await;
+    let (s, c2) = t.call("POST", &format!("/invites/{}/accept", ci2["code"].as_str().unwrap()), Some("coach2"), Some(json!({}))).await;
     assert_eq!(s, StatusCode::OK, "{c2}");
     assert_eq!(c2["role"], "coach");
-    assert_eq!(c2["businessName"], "Two Fit");
-    assert_eq!(t.call("POST", "/admin/requests/coach2/approve", Some("admin1"), None).await.0, StatusCode::CONFLICT);
-    assert_eq!(t.call("PUT", "/coach-request", Some("coach2"), Some(json!({ "name": "again" }))).await.0, StatusCode::CONFLICT);
-    // a declined request can be sent again
-    t.call("PUT", "/coach-request", Some("coach3"), Some(json!({ "name": "Coach Three" }))).await;
-    assert_eq!(t.call("POST", "/admin/requests/coach3/decline", Some("admin1"), None).await.0, StatusCode::OK);
-    let (_, me3) = t.call("GET", "/me", Some("coach3"), None).await;
-    assert_eq!(me3["coachRequest"]["status"], "declined");
-    assert!(me3["profile"].is_null());
-    assert_eq!(t.call("POST", "/admin/requests/coach3/approve", Some("admin1"), None).await.0, StatusCode::CONFLICT);
     let (_, coaches) = t.call("GET", "/admin/coaches", Some("admin1"), None).await;
     let names: Vec<&str> = coaches.as_array().unwrap().iter().map(|c| c["name"].as_str().unwrap()).collect();
     assert_eq!(names, ["Coach One", "Coach Two"]);

@@ -47,7 +47,6 @@ When a coach reads intake, waiver, metrics or photos, an `AUDIT#` item is writte
 | `INVITE#{code}` | `INVITE` | invite lookup (client or coach invite), `ttl` 14 days |
 | `ADMIN` | `INVITE#{code}` | pending coach invite from an admin (deleted on accept) |
 | `ADMIN` | `COACH#{coach}` | coach list entry, written when a coach joins |
-| `ADMIN` | `REQUEST#{sub}` | coach request: pending, approved or declined |
 | `COACH#{coach}` | `EXERCISE#{id}` | custom exercise (built-ins are compiled into the binary) |
 | `COACH#{coach}` | `PROGRAM#{id}` | whole program document |
 | `COACH#{coach}` | `REVIEW#{createdAt}#{video}` | unreviewed set video in the coach's review queue (oldest first); deleted when marked reviewed |
@@ -75,13 +74,16 @@ When a coach reads intake, waiver, metrics or photos, an `AUDIT#` item is writte
 
 ## API surface
 
-All routes need `Authorization: Bearer <Cognito ID token>` except `GET /health`.
+All routes need `Authorization: Bearer <Cognito ID token>` except `GET /health`, `GET /invites/{code}/public` and CORS preflights (`OPTIONS`, which API Gateway would otherwise send through the JWT authorizer and fail; `deploy.sh` smoke-tests this).
+
+**Sign-up is by invitation only.** An invitation stores its email; the emailed link (`#/join/CODE`) opens the app's own sign-up page (`web/js/views/signup.js`), which reads the invitation through the public route, fills in and locks the email, and creates the account with the Cognito user pool API (`SignUp`, `ConfirmSignUp`). Sign-in stays on Cognito's managed login page, opened with `login_hint` so the email is filled in. Accepting the invitation marks it used, after which the link and its lookup return 404.
 
 ```
-GET  /me                         PUT /me                     PUT /coach-request
+GET  /me                         PUT /me
 POST /admin/register             GET /admin/coaches          GET|POST /admin/invites   DELETE /admin/invites/{code}
-GET  /admin/requests             POST /admin/requests/{uid}/approve   POST /admin/requests/{uid}/decline
+POST /admin/invites/{code}/resend
 GET  /invites  POST /invites     GET|DELETE /invites/{code}  POST /invites/{code}/accept
+GET  /invites/{code}/public      (no sign-in: the sign-up page reads the invited email)
 GET  /exercises POST /exercises  PUT|DELETE /exercises/{id}  POST /exercises/{id}/demo-upload  POST /exercises/{id}/demo-confirm
 GET  /programs POST /programs    GET|PUT|DELETE /programs/{id}  POST /programs/{id}/copy
 GET  /clients                    GET /clients/{cid}

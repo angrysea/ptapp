@@ -1,6 +1,7 @@
 //! ON-1: coach invites a client by email or link; client accepts after
-//! creating a Cognito account. Admins invite coaches the same way (see
-//! routes/admin.rs); there is no open coach signup.
+//! creating a Cognito account on the app's own sign-up page, which fills in
+//! the email from the invitation (`public`). Admins invite coaches the same
+//! way, by email (routes/admin.rs); there is no open coach signup.
 
 use aws_sdk_dynamodb::types::{Delete, Put, TransactWriteItem, Update};
 use axum::extract::{Path, State};
@@ -115,6 +116,16 @@ async fn open_invite(st: &AppState, code: &str) -> ApiResult<Invite> {
         return Err(ApiError::NotFound("invite"));
     }
     Ok(inv)
+}
+
+/// The app's sign-up page (before any sign-in) reads the invitation here to
+/// fill in, and lock, the email address. Open invitations only: once
+/// accepted or expired, the link stops working. The code is the secret (10
+/// random characters, single use, 14 days), and it only reveals the address
+/// it was sent to.
+pub async fn public(State(st): State<AppState>, Path(code): Path<String>) -> ApiResult<Json<Value>> {
+    let inv = open_invite(&st, &code).await?;
+    Ok(Json(json!({ "kind": inv.kind, "coachName": inv.coach_name, "clientName": inv.client_name, "email": inv.email })))
 }
 
 /// Lets the join screen show "Join <coach>'s team" (or the coach-invite

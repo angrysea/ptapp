@@ -18,6 +18,11 @@ async fn main() {
         if std::env::var("MEDIA_BUCKET").is_err() {
             std::env::set_var("MEDIA_BUCKET", "ptapp-local-media");
         }
+        // Invitation links point at the local web server; INVITE_FROM is
+        // unset, so nothing is emailed.
+        if std::env::var("APP_URL").is_err() {
+            std::env::set_var("APP_URL", "http://localhost:8080");
+        }
         // Sign in as dev user "admin" to set up the admin account.
         if std::env::var("ADMIN_EMAILS").is_err() {
             std::env::set_var("ADMIN_EMAILS", "admin@dev.local");

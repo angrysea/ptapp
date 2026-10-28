@@ -107,32 +107,6 @@ pub enum InviteKind {
     Coach,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum RequestStatus {
-    Pending,
-    Approved,
-    Declined,
-}
-
-/// A signed-in user asking to become a coach (`ADMIN` / `REQUEST#{user}`).
-/// Approval turns their account into a coach account directly.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CoachRequest {
-    pub user_id: String,
-    pub email: String,
-    pub name: String,
-    #[serde(default)]
-    pub business_name: Option<String>,
-    #[serde(default)]
-    pub message: String,
-    pub status: RequestStatus,
-    pub created_at: DateTime<Utc>,
-    #[serde(default)]
-    pub decided_at: Option<DateTime<Utc>>,
-}
-
 /// An admin's list of coaches (`ADMIN` / `COACH#{id}`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

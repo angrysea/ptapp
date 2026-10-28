@@ -4,6 +4,7 @@
 export default {
   apiUrl: "http://localhost:9000",
   cognitoDomain: "",
+  region: "",
   clientId: "",
   devUser: true,
 };
