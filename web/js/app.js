@@ -89,6 +89,9 @@ async function boot() {
   if (invite && await renderInviteSignedIn(invite[1].toUpperCase(), me)) return;
   if (!me.profile) return renderOnboarding(me);
   session.profile = me.profile;
+  // The header carries the coach's brand, for the coach and their clients alike.
+  const brand = session.isCoach ? me.profile : me.coach;
+  if (brand) document.getElementById('title').textContent = brand.businessName || brand.name || 'Personal Training Coach';
   // Coaches fill in their profile before anything else (tasks/coaches).
   if (session.isCoach && me.coachProfileComplete === false) return renderCoachSetup({ onboarding: true });
   // The server judges "today" (missed workouts, adherence) in the user's own
@@ -113,7 +116,6 @@ async function boot() {
     highlight = tabs([['/', '🧑‍🏫', 'Coaches'], ['/coaches', '🔎', 'Directory'], ['/me', '⚙️', 'Profile']]);
     route('/', renderAdmin);
   } else if (session.isCoach) {
-    document.getElementById('title').textContent = me.profile.businessName || 'Personal Training Coach';
     highlight = tabs([['/', '👥', 'Clients'], ['/videos', '🎥', 'Videos'], ['/programs', '🗓️', 'Programs'], ['/exercises', '🏋️', 'Exercises'], ['/me', '⚙️', 'Profile']]);
     refreshVideoBadge();
     route('/', renderRoster);

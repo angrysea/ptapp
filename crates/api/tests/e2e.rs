@@ -228,6 +228,9 @@ async fn full_client_journey() {
     assert_eq!(s, StatusCode::OK, "{cp}");
     assert_eq!(cp["role"], "client");
     assert_eq!(cp["coachId"], "coach1");
+    // the client's header shows their coach
+    let (_, me) = t.call("GET", "/me", Some("client1"), None).await;
+    assert_eq!(me["coach"]["name"], "Coach One");
     // single use
     assert_eq!(t.call("POST", &format!("/invites/{code}/accept"), Some("client2"), Some(json!({}))).await.0, StatusCode::NOT_FOUND);
     let (_, pending) = t.call("GET", "/invites", Some("coach1"), None).await;

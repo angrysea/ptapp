@@ -20,12 +20,22 @@ pub async fn get_me(State(st): State<AppState>, caller: Caller) -> ApiResult<Jso
         Some(p) if p.role == Role::Coach => Some(super::coaches::complete(&st, &caller.sub).await?),
         _ => None,
     };
+    // A client's coach, for the header: their business name, else their name.
+    let coach = match &profile {
+        Some(p) if p.role == Role::Client => st
+            .store
+            .get::<Profile>(&format!("USER#{}", p.coach_id), "PROFILE")
+            .await?
+            .map(|c| json!({ "name": c.name, "businessName": c.business_name })),
+        _ => None,
+    };
     Ok(Json(json!({
         "userId": caller.sub,
         "email": caller.email,
         "profile": profile,
         "adminEligible": admin_eligible,
         "coachProfileComplete": coach_profile_complete,
+        "coach": coach,
     })))
 }
 

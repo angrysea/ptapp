@@ -149,6 +149,7 @@ with sync_playwright() as p:
     expect(client.get_by_role("heading", name=f"Join Coach {RUN}")).to_be_visible()
     client.get_by_role("button", name="Accept invite").click()
     expect(client.get_by_role("heading", name=re.compile("Step 1 of 2"))).to_be_visible()
+    expect(client.locator("#title")).to_have_text(f"Coach {RUN}")  # the header shows the client's coach
     client.get_by_label("Goals").fill("Squat 140 kg by summer")
     client.get_by_label("Sex (for body-fat equations)").select_option("male")
     client.get_by_label("Birth date").fill("1994-03-02")
