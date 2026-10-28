@@ -747,6 +747,11 @@ async fn full_client_journey() {
     // the same browser, now signed in as someone else: the endpoint moves to them
     assert_eq!(t.call("POST", "/me/push", Some("coach1"), Some(sub("https://fcm.googleapis.com/fcm/send/abc"))).await.0, StatusCode::OK);
     assert_eq!((devices("client1").await, devices("coach1").await), (0, 1), "a shared device notifies only its latest user");
+    // but only that browser can hand it over: different keys are refused, the owner keeps it
+    let mut forged = sub("https://fcm.googleapis.com/fcm/send/abc");
+    forged["keys"]["auth"] = json!("someone-elses");
+    assert_eq!(t.call("POST", "/me/push", Some("client1"), Some(forged)).await.0, StatusCode::BAD_REQUEST);
+    assert_eq!((devices("client1").await, devices("coach1").await), (0, 1));
     // at most ten devices each, oldest dropped
     for n in 0..11 {
         t.call("POST", "/me/push", Some("coach1"), Some(sub(&format!("https://fcm.googleapis.com/fcm/send/dev{n}")))).await;

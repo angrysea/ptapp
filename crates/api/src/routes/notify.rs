@@ -83,10 +83,18 @@ pub async fn subscribe(State(st): State<AppState>, ctx: Ctx, Json(mut sub): Json
     let me = ctx.user_id().to_string();
     // The endpoint is this user's now: the previous owner (an earlier user of
     // this browser) stops getting notifications on it.
+    // Only the browser holding the subscription can hand it over: it sends
+    // the same keys. Anyone else who learned the endpoint is refused.
     if let Some(prev) = st.store.get::<Owner>(&owner_pk(&sub.endpoint), "OWNER").await?
         && prev.user != me
     {
-        st.store.delete(&format!("USER#{}", prev.user), &sk(&sub.endpoint)).await?;
+        let theirs: Option<Subscription> = st.store.get(&format!("USER#{}", prev.user), &sk(&sub.endpoint)).await?;
+        if let Some(theirs) = theirs {
+            if theirs.keys.p256dh != sub.keys.p256dh || theirs.keys.auth != sub.keys.auth {
+                return Err(bad_request("this device's notifications belong to another account; turn them off and on again"));
+            }
+            st.store.delete(&format!("USER#{}", prev.user), &sk(&sub.endpoint)).await?;
+        }
     }
     st.store.put(&owner_pk(&sub.endpoint), "OWNER", &Owner { user: me.clone() }).await?;
     sub.created_at = Utc::now();
