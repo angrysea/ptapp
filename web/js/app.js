@@ -3,6 +3,7 @@
 import { flush, get, onSync, put } from './api.js';
 import { handleCallback, login, signedIn } from './auth.js';
 import { kv } from './idb.js';
+import { kick as resumeUploads } from './uploads.js';
 import { route, start } from './router.js';
 import { session } from './session.js';
 import { $app, errorToast, h, mount, toast } from './ui.js';
@@ -15,6 +16,7 @@ import { COACH_REQUEST_PATH, captureInvite, renderOnboarding } from './views/onb
 import { renderThread } from './views/comments.js';
 import { renderProfile } from './views/profile.js';
 import { renderProgramEditor, renderPrograms } from './views/programs.js';
+import { refreshVideoBadge, renderVideoQueue } from './views/videos.js';
 import { renderToday, renderWorkout } from './views/workout.js';
 
 const OWNER = 'pt.owner';
@@ -81,6 +83,7 @@ async function boot() {
   });
   window.addEventListener('offline', () => flush());
   flush();
+  resumeUploads(); // set videos queued earlier carry on from where they stopped
   loadExercises().catch(() => {});
 
   let highlight;
@@ -89,13 +92,15 @@ async function boot() {
     route('/', renderAdmin);
   } else if (session.isCoach) {
     document.getElementById('title').textContent = me.profile.businessName || 'PT Coach';
-    highlight = tabs([['/', '👥', 'Clients'], ['/programs', '🗓️', 'Programs'], ['/exercises', '🏋️', 'Exercises'], ['/me', '⚙️', 'Profile']]);
+    highlight = tabs([['/', '👥', 'Clients'], ['/videos', '🎥', 'Videos'], ['/programs', '🗓️', 'Programs'], ['/exercises', '🏋️', 'Exercises'], ['/me', '⚙️', 'Profile']]);
+    refreshVideoBadge();
     route('/', renderRoster);
     route('/c/:id', (id) => renderClient(id));
     route('/c/:id/:tab', (id, tab) => renderClient(id, tab));
     route('/programs', renderPrograms);
     route('/programs/:id', renderProgramEditor);
     route('/exercises', renderExercises);
+    route('/videos', renderVideoQueue);
   } else {
     highlight = tabs([['/', '🏋️', 'Today'], ['/progress', '📈', 'Progress'], ['/coach', '💬', 'Coach'], ['/me', '⚙️', 'Profile']]);
     route('/', renderToday);

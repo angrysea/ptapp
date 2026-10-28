@@ -85,7 +85,9 @@ jobs:
       - name: Browser journey
         run: python tests/ui/journey.py
         env:
-          BROWSER_CHANNEL: chromium
+          # Google Chrome (preinstalled on the runner) has the H.264 encoder that
+          # set-video conversion needs; Playwright's bundled Chromium doesn't.
+          BROWSER_CHANNEL: chrome
       - name: Upload screenshots and logs
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

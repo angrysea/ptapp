@@ -9,6 +9,8 @@ import {
   $app, addDays, barChart, busy, confirmSheet, errorToast, field, fmtDate, fmtDateTime, h, isoDate, lineChart, mount, round, select,
   sheet, subtabs, toast, todayIso, units,
 } from '../ui.js';
+import { playVideo } from '../videos.js';
+import { refreshVideoBadge } from './videos.js';
 import { commentOn, renderThread } from './comments.js';
 import { intakeSummary, waiverSummary } from './intake.js';
 import { renderMetrics, stat } from './metrics.js';
@@ -176,12 +178,14 @@ async function calendar(el, client) {
 
 async function logs(el, client) {
   const u = units(session.profile);
-  const [list, comments] = await Promise.all([
+  const [list, comments, videos] = await Promise.all([
     get(`/clients/${client.userId}/logs?from=${addDays(todayIso(), -60)}&to=${todayIso()}`),
     get(`/clients/${client.userId}/comments`),
+    get(`/clients/${client.userId}/videos`).catch(() => []),
   ]);
   const byLog = {};
   for (const c of comments) if (c.logId) (byLog[c.logId] ||= []).push(c);
+  const videosFor = (logId, itemId) => videos.filter((v) => v.logId === logId && v.itemId === itemId).sort((a, b) => a.setIndex - b.setIndex);
   const refresh = () => logs(el, client);
   mount(el,
     list.length === 0 && h('p', { class: 'muted' }, 'No workouts logged in the last 60 days.'),
@@ -197,7 +201,23 @@ async function logs(el, client) {
           c.rpe != null && h('span', {}, `sRPE ${c.rpe}`), c.energy != null && h('span', {}, `energy ${c.energy}/5`),
           c.sleep != null && h('span', {}, `sleep ${c.sleep}/5`), c.soreness != null && h('span', {}, `soreness ${c.soreness}/5`),
           c.pain && h('span', { class: 'chip bad' }, `Pain: ${c.painLocation || 'unspecified'}`)),
-        Object.values(byEx).map((ex) => h('div', { class: 'exercise' }, h('strong', { class: 'small' }, ex.name),
+        Object.entries(byEx).map(([itemId, ex]) => h('div', { class: 'exercise' }, h('strong', { class: 'small' }, ex.name),
+          videosFor(l.id, itemId).length > 0 && h('div', { class: 'videobar' },
+            videosFor(l.id, itemId).map((v) => h('button', {
+              class: 'small', title: v.reviewedAt ? 'Reviewed' : 'Not reviewed yet',
+              onclick: () => {
+                const sh = playVideo(v, !v.reviewedAt && h('button', {
+                  class: 'primary block',
+                  onclick: (e) => busy(e.currentTarget, async () => {
+                    await post(`/clients/${client.userId}/videos/${v.id}/reviewed`);
+                    sh.close();
+                    toast('Marked reviewed');
+                    refreshVideoBadge();
+                    refresh();
+                  }),
+                }, '✓ Mark reviewed'));
+              },
+            }, `▶ Set ${v.setIndex + 1}${v.reviewedAt ? ' ✓' : ''}`))),
           h('div', { class: 'row small' }, ex.sets.sort((a, b) => a.setIndex - b.setIndex).map((s) => h('button', {
             class: `small ${s.done ? '' : 'ghost'}`, title: 'Comment on this set',
             onclick: async () => { if (await commentOn(client.userId, l.id, s.setIndex, s.itemId)) refresh(); },

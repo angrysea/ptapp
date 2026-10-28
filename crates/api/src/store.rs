@@ -3,7 +3,7 @@
 //!
 //! Key layout (see docs/ARCHITECTURE.md):
 //!   USER#{sub}      PROFILE
-//!   COACH#{coach}   CLIENT#{client} | INVITE#{code} | EXERCISE#{id} | PROGRAM#{id}
+//!   COACH#{coach}   CLIENT#{client} | INVITE#{code} | EXERCISE#{id} | PROGRAM#{id} | REVIEW#{ts}#{video}
 //!   INVITE#{code}   INVITE
 //!   ADMIN           INVITE#{code} | COACH#{coach} | REQUEST#{sub}
 //!   CLIENT#{client} INTAKE | WAIVER#{ts} | ASSIGN#{id} | SCHED#{date}#{id} | LOG#{date}#{id}

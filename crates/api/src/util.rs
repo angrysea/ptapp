@@ -167,9 +167,15 @@ struct AuditEntry<'a> {
 /// Records a coach reading a client's sensitive data (security NFR: audit
 /// log of coach access). Kept for a year; failures never block the request.
 pub async fn audit(state: &AppState, ctx: &Ctx, scope: &ClientScope, action: &str) {
-    if !scope.by_coach {
-        return;
+    if scope.by_coach {
+        audit_client(state, ctx, &scope.pk(), action).await;
     }
+}
+
+/// `audit` for a coach reading data of the client whose partition is
+/// `client_pk`, where there is no single `ClientScope` (e.g. the video
+/// review queue spans all of a coach's clients).
+pub async fn audit_client(state: &AppState, ctx: &Ctx, client_pk: &str, action: &str) {
     let now = Utc::now();
     let entry = AuditEntry {
         actor_id: ctx.user_id(),
@@ -179,7 +185,7 @@ pub async fn audit(state: &AppState, ctx: &Ctx, scope: &ClientScope, action: &st
         ttl: now.timestamp() + 365 * 24 * 3600,
     };
     let sk = format!("AUDIT#{}#{}", now.to_rfc3339(), &new_id()[..8]);
-    if let Err(e) = state.store.put(&scope.pk(), &sk, &entry).await {
+    if let Err(e) = state.store.put(client_pk, &sk, &entry).await {
         tracing::warn!(?e, "audit write failed");
     }
 }
@@ -211,6 +217,7 @@ mod tests {
             bucket: "b".into(),
             presign_ttl: std::time::Duration::from_secs(60),
             admin_emails: vec![],
+            video_retention_days: 180,
         };
         let up = super::presign_put(&state, "k", "image/jpeg", 1234, Some(super::PENDING_TAG)).await.unwrap();
         assert!(up.url.contains("X-Amz-SignedHeaders=content-length%3B"), "{}", up.url);

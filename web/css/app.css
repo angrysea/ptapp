@@ -140,6 +140,36 @@ th { color: var(--muted); font-weight: 600; }
 .setrow .done { min-height: 52px; padding: 0; font-size: 1.4rem; }
 .setrow.is-done input { background: var(--good-soft); }
 .setrow.is-done .done { background: var(--good); border-color: var(--good); color: #fff; }
+/* Trim: two range inputs over one track; only their thumbs take pointer input. */
+.trim { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+.trim-range { position: relative; height: 44px; }
+.trim-track { position: absolute; left: 0; right: 0; top: 50%; height: 8px; margin-top: -4px; border-radius: 4px; background: var(--line); }
+.trim-sel { position: absolute; top: 0; bottom: 0; border-radius: 4px; background: var(--accent); }
+.trim-range input[type="range"] {
+  position: absolute; inset: 0; width: 100%; height: 44px; min-height: 0; margin: 0; padding: 0; border: 0;
+  background: transparent; pointer-events: none; -webkit-appearance: none; appearance: none;
+}
+.trim-range input[type="range"]::-webkit-slider-runnable-track { height: 44px; background: transparent; }
+.trim-range input[type="range"]::-moz-range-track { background: transparent; }
+.trim-range input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none; pointer-events: auto; width: 22px; height: 40px; margin-top: 2px;
+  border-radius: 6px; border: 3px solid var(--accent); background: var(--card); cursor: ew-resize;
+}
+.trim-range input[type="range"]::-moz-range-thumb {
+  pointer-events: auto; width: 16px; height: 34px; border-radius: 6px; border: 3px solid var(--accent); background: var(--card); cursor: ew-resize;
+}
+.trim-range input[type="range"]:focus-visible::-webkit-slider-thumb { outline: 3px solid var(--accent-soft); }
+.trim-range input[type="range"]:focus-visible::-moz-range-thumb { outline: 3px solid var(--accent-soft); }
+.rec-time { font-weight: 600; font-variant-numeric: tabular-nums; }
+/* Coach video review queue */
+.queue-item { display: flex; gap: 12px; align-items: flex-start; }
+.queue-item .thumb { flex: 0 0 72px; width: 72px; height: 96px; min-height: 0; padding: 0; overflow: hidden; display: grid; place-items: center; background: #000; color: #fff; font-size: 1.4rem; border-radius: 10px; }
+.queue-item .thumb img { width: 100%; height: 100%; object-fit: cover; }
+.queue-body { flex: 1; min-width: 0; }
+#tabs a { position: relative; }
+#tabs .badge { position: absolute; top: 2px; right: calc(50% - 22px); min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--bad); color: #fff; font-size: 0.7rem; font-weight: 700; line-height: 18px; text-align: center; }
+.videobar { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+video.player { width: 100%; max-height: 70vh; border-radius: 10px; background: #000; }
 .sethead { display: grid; grid-template-columns: 34px 1fr 1fr 1fr 56px; gap: 6px; font-size: 0.75rem; color: var(--muted); text-align: center; margin-top: 8px; }
 
 /* overlays */

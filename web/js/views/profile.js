@@ -1,4 +1,5 @@
 import { myOutbox, put } from '../api.js';
+import { pendingUploads, removeUpload } from '../uploads.js';
 import { logout } from '../auth.js';
 import { kv, outbox } from '../idb.js';
 import { session } from '../session.js';
@@ -10,7 +11,8 @@ export async function renderProfile() {
   const unitsSel = select([['metric', 'Metric (kg, cm)'], ['imperial', 'Imperial (lb, in)']], p.units);
   const business = p.role === 'coach' && h('input', { value: p.businessName || '' });
   const mine = await myOutbox();
-  const pending = mine.length;
+  const videos = await pendingUploads();
+  const pending = mine.length + videos.length;
   mount($app(),
     h('h1', {}, 'Profile'),
     h('div', { class: 'card' },
@@ -30,13 +32,16 @@ export async function renderProfile() {
       h('div', { style: 'height:8px' }),
       h('a', { class: 'btn block', href: '#/waiver' }, 'Health screening & waiver')),
     h('div', { class: 'card' },
-      h('p', { class: 'small muted' }, pending ? `${pending} change(s) waiting to sync.` : 'Everything is synced.'),
+      h('p', { class: 'small muted' }, pending
+        ? [mine.length && `${mine.length} change(s)`, videos.length && `${videos.length} video(s)`].filter(Boolean).join(' and ') + ' waiting to sync.'
+        : 'Everything is synced.'),
       h('button', {
         class: 'block danger',
         onclick: async () => {
           if (pending && !confirm('Some changes have not synced yet and will be lost. Sign out anyway?')) return;
           // Only this user's queued writes go; another user's stay until they sign in.
           await kv.clear(); for (const i of mine) await outbox.del(i.key);
+          for (const v of videos) await removeUpload(v.key); // clips stay off a shared device
           logout();
         },
       }, 'Sign out')),

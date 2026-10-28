@@ -4,6 +4,7 @@
 //! bucket on startup. See docs/DEVELOPMENT.md.
 
 use aws_sdk_dynamodb::types::{AttributeDefinition, BillingMode, KeySchemaElement, KeyType, ScalarAttributeType};
+use aws_sdk_s3::types::{CorsConfiguration, CorsRule};
 
 #[tokio::main]
 async fn main() {
@@ -43,6 +44,23 @@ async fn main() {
             println!("created table {}", state.store.table);
         }
         let _ = state.s3.create_bucket().bucket(&state.bucket).send().await;
+        // Same CORS as the media bucket in template.yaml, so browser uploads
+        // (which read each part's ETag) work against the emulator too.
+        let rule = CorsRule::builder()
+            .allowed_methods("GET")
+            .allowed_methods("PUT")
+            .allowed_origins("*")
+            .allowed_headers("*")
+            .expose_headers("ETag")
+            .build()
+            .unwrap();
+        let _ = state
+            .s3
+            .put_bucket_cors()
+            .bucket(&state.bucket)
+            .cors_configuration(CorsConfiguration::builder().cors_rules(rule).build().unwrap())
+            .send()
+            .await;
     }
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:9000").await.expect("bind :9000");

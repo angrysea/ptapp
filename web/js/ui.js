@@ -57,8 +57,11 @@ export function sheet(...content) {
   back.append(box);
   back.addEventListener('click', (e) => { if (e.target === back) close(); });
   document.body.append(back);
-  function close() { back.remove(); }
-  return { close, box };
+  // `onClose` runs however the sheet closes (a button or a tap outside it),
+  // e.g. to stop a video that would otherwise keep playing.
+  const api = { close, box, onClose: null };
+  function close() { back.remove(); api.onClose?.(); }
+  return api;
 }
 
 export function confirmSheet(message, okLabel = 'OK') {

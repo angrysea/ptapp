@@ -3,12 +3,17 @@
 // in-progress sets are saved as a local draft, and the finished log goes
 // through the outbox with a client-generated id.
 
-import { enqueue, get, onSync } from '../api.js';
+import { del, enqueue, get, onSync } from '../api.js';
 import { kv } from '../idb.js';
 import { go } from '../router.js';
 import { session } from '../session.js';
 import { blockTimer, restTimer } from '../timer.js';
-import { $app, addDays, field, fmtDate, h, mount, num, select, sheet, toast, todayIso, uid, units } from '../ui.js';
+import { $app, addDays, busy, confirmSheet, field, fmtDate, h, mount, num, select, sheet, toast, todayIso, uid, units } from '../ui.js';
+import { CannotEncode, canEncode, encodeClip } from '../encode.js';
+import { onUploads, pendingUploads, queueVideo, removeUpload, retryUpload } from '../uploads.js';
+import { playVideo } from '../videos.js';
+import { canRecord, recordClip } from './recorder.js';
+import { trimmer } from './trim.js';
 
 // A finished workout the server refused for good (not a 409, which means a
 // newer copy is already saved) goes back to being a draft, so it is neither
@@ -167,6 +172,159 @@ export async function renderWorkout(date, schedId) {
 
   const exerciseInfo = (id) => session.exercises?.[id];
 
+  // Videos already uploaded for this workout's sets (needs a connection).
+  let videos = [];
+  const loadVideos = async () => {
+    try { videos = await get(`/clients/${me.userId}/videos?logId=${encodeURIComponent(log.id)}`); } catch { /* offline: none shown */ }
+  };
+  await loadVideos();
+
+  // Clips saved on this device and still uploading (uploads.js), shown as
+  // chips beside the uploaded ones; bars redraw as uploads progress or land.
+  let pending = (await pendingUploads()).filter((u) => u.logId === log.id);
+  const bars = [];
+  const redrawBars = () => bars.forEach((draw) => draw());
+  const stopWatching = onUploads(async (list) => {
+    if (!bars.some((b) => b.el.isConnected)) return stopWatching(); // left this workout
+    const mine = list.filter((u) => u.logId === log.id);
+    const landed = mine.length < pending.length;
+    pending = mine;
+    if (landed) await loadVideos();
+    redrawBars();
+  });
+
+  function deleteVideo(v, sh) {
+    return h('button', {
+      class: 'danger block',
+      onclick: async () => {
+        if (!(await confirmSheet('Delete this video? Your coach won’t see it any more.', 'Delete'))) return;
+        await del(`/clients/${me.userId}/videos/${v.id}`);
+        sh().close();
+        await loadVideos();
+        redrawBars();
+        toast('Video deleted');
+      },
+    }, 'Delete video');
+  }
+
+  function uploadChip(u) {
+    const label = u.state === 'failed' ? `⚠ Set ${u.set.setIndex + 1} · failed`
+      : u.progress != null && navigator.onLine ? `⏳ Set ${u.set.setIndex + 1} · ${Math.round(u.progress * 100)}%`
+        : `⏳ Set ${u.set.setIndex + 1} · ${navigator.onLine ? 'waiting' : 'waiting for connection'}`;
+    return h('button', {
+      class: `small ${u.state === 'failed' ? 'danger' : ''}`,
+      onclick: () => {
+        const s = sheet(
+          h('h2', {}, `Set ${u.set.setIndex + 1} video`),
+          h('p', {}, u.state === 'failed' ? `The upload failed: ${u.error}`
+            : navigator.onLine ? 'It’s uploading. You can leave this page; it carries on next time the app is open.'
+              : 'It’s saved on this device and uploads when you’re back online.'),
+          u.state === 'failed' && h('button', { class: 'primary block', onclick: () => { s.close(); retryUpload(u.key); } }, 'Try again'),
+          h('button', {
+            class: 'danger block',
+            onclick: async () => {
+              if (!(await confirmSheet('Remove this video from the upload queue?', 'Remove'))) return;
+              s.close();
+              removeUpload(u.key);
+            },
+          }, 'Remove'),
+          h('button', { class: 'ghost block', onclick: () => s.close() }, 'Close'),
+        );
+      },
+    }, label);
+  }
+
+  /** Per exercise: ▶ for each set with a video, chips for uploads in progress, and Add video. */
+  function videoBar(it) {
+    const bar = h('div', { class: 'videobar' });
+    const draw = () => mount(bar,
+      videos.filter((v) => v.itemId === it.id).sort((a, b) => a.setIndex - b.setIndex)
+        .map((v) => h('button', {
+          class: 'small',
+          onclick: () => { let sh; sh = playVideo(v, deleteVideo(v, () => sh)); },
+        }, `▶ Set ${v.setIndex + 1}`)),
+      pending.filter((u) => u.set.itemId === it.id).map(uploadChip),
+      h('button', { class: 'small ghost', onclick: () => addVideo(it) }, '🎥 Add video'));
+    bars.push(Object.assign(draw, { el: bar }));
+    draw();
+    return bar;
+  }
+
+  function addVideo(it) {
+    const sets = setsFor(it.id);
+    const lastDone = [...sets].reverse().find((x) => x.done) || sets[0];
+    const which = select(sets.map((x) => [String(x.setIndex), `Set ${x.setIndex + 1}`]), String(lastDone.setIndex));
+    // No `capture` on the picker: on iOS that records at 480×360, so
+    // recording goes through the in-app recorder instead.
+    const file = h('input', { type: 'file', accept: 'video/*' });
+    const slot = h('div');
+    const prog = h('progress', { value: 0, max: 1, hidden: true });
+    const status = h('p', { class: 'small muted' }, 'Record the set or choose a clip, then pick up to 60 seconds of it.');
+    let clip = null, trim = null;
+    const converting = new AbortController();
+    const useClip = (f, duration) => {
+      trim?.destroy();
+      clip = f;
+      trim = f ? trimmer(f, { duration }) : null;
+      mount(slot, trim?.el);
+    };
+    file.addEventListener('change', () => useClip(file.files?.[0] || null));
+    const record = canRecord() && h('button', {
+      class: 'block', type: 'button',
+      onclick: async () => {
+        const r = await recordClip();
+        if (r) { file.value = ''; useClip(r.file, r.durationSec); }
+      },
+    }, '● Record with camera');
+    const sh = sheet(
+      h('h2', {}, `Video: ${it.exerciseName}`),
+      field('Set', which),
+      record,
+      field(record ? 'Or choose a clip' : 'Clip', file),
+      slot, prog, status,
+      h('button', {
+        class: 'primary block',
+        onclick: (e) => busy(e.currentTarget, async () => {
+          const f = clip;
+          if (!f) throw new Error('Record or choose a clip first');
+          const duration = await trim.ready;
+          const r = trim.range();
+          saveDraft(); // the video names this log, so make sure the draft exists
+          prog.hidden = false;
+          try {
+            // Convert the selection on this device; if it can't, upload the
+            // original with trim points (sent only when the selection is
+            // shorter than the clip) and the player keeps to them.
+            const cut = duration != null && (r.start > 0.05 || r.end < duration - 0.05) ? { start: r.start, end: r.end } : null;
+            let upload = { file: f, durationSec: duration, trim: cut, poster: null };
+            if (duration != null && canEncode()) {
+              try {
+                const out = await encodeClip(f, {
+                  start: r.start, end: r.end, signal: converting.signal,
+                  onProgress: (x) => { prog.value = x; status.textContent = `Preparing video… ${Math.round(x * 100)}%`; },
+                });
+                upload = { file: out.blob, durationSec: out.durationSec, trim: null, poster: out.poster };
+              } catch (err) {
+                // Any conversion failure (not only the expected CannotEncode) falls
+                // back to the original: recordings vary by browser.
+                if (err?.name === 'AbortError') throw err;
+                console.warn('uploading the original:', err instanceof CannotEncode ? err.message : err);
+                status.textContent = 'This device can’t convert the clip, so the original will upload.';
+              }
+            }
+            // Saved on this device first, so it survives a lost connection or a
+            // closed app; uploads.js sends it in the background.
+            await queueVideo({ clientId: me.userId, logId: log.id, set: sets.find((x) => String(x.setIndex) === which.value), ...upload });
+          } catch (err) { prog.hidden = true; status.textContent = err.message; throw err; }
+          sh.close();
+          toast(navigator.onLine ? 'Uploading in the background' : 'Saved on this device. It uploads when you’re back online.');
+        }),
+      }, 'Upload'),
+      h('button', { class: 'ghost block', onclick: () => sh.close() }, 'Cancel'),
+    );
+    sh.onClose = () => { converting.abort(); trim?.destroy(); };
+  }
+
   function setRow(set, item, block) {
     const reps = h('input', { type: 'number', inputmode: 'numeric', value: set.reps ?? '', 'aria-label': 'reps' });
     const load = h('input', { type: 'number', inputmode: 'decimal', step: 'any', value: set.loadKg != null ? u.toW(set.loadKg) : '', 'aria-label': u.w });
@@ -220,7 +378,8 @@ export async function renderWorkout(date, schedId) {
           h('div', { class: 'prescription' }, prescription(it)),
           it.notes && h('div', { class: 'small' }, it.notes),
           h('div', { class: 'sethead' }, h('span', {}, 'Set'), h('span', {}, 'Reps'), h('span', {}, u.w), h('span', {}, 'RPE'), h('span', {})),
-          setsFor(it.id).map((set) => setRow(set, it, b)));
+          setsFor(it.id).map((set) => setRow(set, it, b)),
+          videoBar(it));
       }));
   }
 

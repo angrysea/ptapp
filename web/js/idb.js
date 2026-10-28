@@ -1,11 +1,14 @@
-// IndexedDB: a key/value store for cached reads and drafts, and an outbox of
-// writes waiting for connectivity (LG-3).
+// IndexedDB: a key/value store for cached reads and drafts, an outbox of
+// writes waiting for connectivity (LG-3), and set videos waiting to upload
+// (VS-3, uploads.js).
 
 const open = () => new Promise((resolve, reject) => {
-  const req = indexedDB.open('ptapp', 1);
+  const req = indexedDB.open('ptapp', 2);
   req.onupgradeneeded = () => {
-    req.result.createObjectStore('kv');
-    req.result.createObjectStore('outbox', { keyPath: 'key' });
+    const d = req.result;
+    if (!d.objectStoreNames.contains('kv')) d.createObjectStore('kv');
+    if (!d.objectStoreNames.contains('outbox')) d.createObjectStore('outbox', { keyPath: 'key' });
+    if (!d.objectStoreNames.contains('uploads')) d.createObjectStore('uploads', { keyPath: 'key' });
   };
   req.onsuccess = () => resolve(req.result);
   req.onerror = () => reject(req.error);
@@ -43,4 +46,12 @@ export const outbox = {
   get: (key) => run('outbox', 'readonly', (s) => s.get(key)),
   del: (key) => run('outbox', 'readwrite', (s) => s.delete(key)),
   clear: () => run('outbox', 'readwrite', (s) => s.clear()),
+};
+
+/** Set videos waiting to upload, with the parts already sent (uploads.js). */
+export const uploads = {
+  put: (item) => run('uploads', 'readwrite', (s) => s.put(item)),
+  get: (key) => run('uploads', 'readonly', (s) => s.get(key)),
+  all: async () => ((await run('uploads', 'readonly', (s) => s.getAll())) || []).sort((a, b) => a.createdAt.localeCompare(b.createdAt)),
+  del: (key) => run('uploads', 'readwrite', (s) => s.delete(key)),
 };

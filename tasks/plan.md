@@ -124,7 +124,7 @@ Tasks with acceptance criteria are in `tasks/todo.md`.
 
 ## Open Questions
 
-1. **Retention:** how long should videos be kept? The BRD calls for a video-retention policy. Proposal: keep reviewed videos 180 days, then delete them; never delete unreviewed ones automatically.
+1. **Retention (default adopted: 180 days after upload, once reviewed; template parameter `VideoRetentionDays`):** how long should videos be kept? The BRD calls for a video-retention policy. Proposal: keep reviewed videos 180 days, then delete them; never delete unreviewed ones automatically.
 2. **Sources:** should clients both record in the app and pick from their camera roll? Proposal: both. Camera roll matters when a training partner films.
 3. **Cap:** the BRD says 60 s. Is that a hard limit, or should coaches be able to raise it per exercise?
 4. **Who can delete:** proposal is that the client can delete their own videos, and the coach can mark them reviewed but not delete them.

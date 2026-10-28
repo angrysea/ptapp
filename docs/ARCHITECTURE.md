@@ -50,6 +50,7 @@ When a coach reads intake, waiver, metrics or photos, an `AUDIT#` item is writte
 | `ADMIN` | `REQUEST#{sub}` | coach request: pending, approved or declined |
 | `COACH#{coach}` | `EXERCISE#{id}` | custom exercise (built-ins are compiled into the binary) |
 | `COACH#{coach}` | `PROGRAM#{id}` | whole program document |
+| `COACH#{coach}` | `REVIEW#{createdAt}#{video}` | unreviewed set video in the coach's review queue (oldest first); deleted when marked reviewed |
 | `CLIENT#{client}` | `INTAKE` | intake answers |
 | `CLIENT#{client}` | `WAIVER#{rfc3339}` | immutable signature record |
 | `CLIENT#{client}` | `ASSIGN#{id}` | program assignment |
@@ -69,6 +70,7 @@ When a coach reads intake, waiver, metrics or photos, an `AUDIT#` item is writte
 2. **Reads**: `api.get(path, {cache:true})` stores the last good response in IndexedDB and serves it when the network fails.
 3. **Workout in progress**: every set tick is saved to an IndexedDB draft, so closing the app loses nothing.
 4. **Finishing**: the log (with a client-generated id) goes into the **outbox**, keyed `log:{id}` so newer edits replace older queued ones. The outbox flushes on `online`, every 30 s and at start-up.
+4b. **Set videos** (`web/js/uploads.js`): a clip is converted on the device (`encode.js`), then saved in IndexedDB's `uploads` store with the multipart upload's id and each part's ETag as it lands. Sending runs on `online`, every 30 s and at start-up, and resumes at the next part. Expired part URLs are re-issued; an upload S3 already discarded starts again. Queued clips are per user and removed at sign-out.
 5. **Server**: `PUT /clients/{id}/logs/{logId}` is an idempotent upsert with condition `attribute_not_exists(pk) OR ver <= :incomingMillis`. An older replay gets `409` plus the current copy and is dropped; the newest edit wins. Phone clocks more than 5 minutes ahead are clamped. A replay that edits the log's date replaces the old-dated item too, so one log id never has two live copies.
 
 ## API surface
@@ -76,9 +78,11 @@ When a coach reads intake, waiver, metrics or photos, an `AUDIT#` item is writte
 All routes need `Authorization: Bearer <Cognito ID token>` except `GET /health`.
 
 ```
-GET  /me                         PUT /me                     POST /coach/register
+GET  /me                         PUT /me                     PUT /coach-request
+POST /admin/register             GET /admin/coaches          GET|POST /admin/invites   DELETE /admin/invites/{code}
+GET  /admin/requests             POST /admin/requests/{uid}/approve   POST /admin/requests/{uid}/decline
 GET  /invites  POST /invites     GET|DELETE /invites/{code}  POST /invites/{code}/accept
-GET  /exercises POST /exercises  PUT|DELETE /exercises/{id}  POST /exercises/{id}/demo-upload
+GET  /exercises POST /exercises  PUT|DELETE /exercises/{id}  POST /exercises/{id}/demo-upload  POST /exercises/{id}/demo-confirm
 GET  /programs POST /programs    GET|PUT|DELETE /programs/{id}  POST /programs/{id}/copy
 GET  /clients                    GET /clients/{cid}
 GET|PUT  /clients/{cid}/intake   GET|POST /clients/{cid}/waiver   GET /clients/{cid}/dashboard?weeks=
@@ -87,7 +91,12 @@ GET  /clients/{cid}/schedule?from&to  GET /clients/{cid}/logs?from&to  PUT /clie
 GET|POST /clients/{cid}/comments
 GET|POST /clients/{cid}/metrics?kind=  DELETE /clients/{cid}/metrics/{mid}
 GET|POST /clients/{cid}/photos         DELETE /clients/{cid}/photos/{pid}
+GET|POST /clients/{cid}/videos?logId=  DELETE /clients/{cid}/videos/{vid}
+POST /clients/{cid}/videos/{vid}/parts   POST /clients/{cid}/videos/{vid}/complete   POST /clients/{cid}/videos/{vid}/reviewed
+GET  /videos/queue
 ```
+
+Media in the private bucket is uploaded with presigned PUTs signed for an exact size (set videos as a multipart upload in 8 MiB parts) and tagged `state=pending` until the API confirms it; a lifecycle rule deletes anything still pending after 2 days. Marking a set video reviewed tags it `reviewed=true`, and another rule deletes those objects `VideoRetentionDays` (default 180) after upload; the API hides such records. Unreviewed videos are never deleted automatically.
 
 ## Cost at MVP scale (1 coach, 10 to 50 clients)
 

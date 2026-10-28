@@ -27,7 +27,9 @@ def sign_in(page, user, url=BASE):
     page.wait_for_load_state("networkidle")
 
 with sync_playwright() as p:
-    browser = p.chromium.launch(channel=os.environ.get("BROWSER_CHANNEL", "msedge"), headless=True)
+    # A fake camera and microphone, granted without a prompt, for in-app recording.
+    browser = p.chromium.launch(channel=os.environ.get("BROWSER_CHANNEL", "msedge"), headless=True,
+                                args=["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"])
     mobile = dict(viewport={"width": 390, "height": 844}, device_scale_factor=2, is_mobile=True, has_touch=True)
 
     # ---------------- admin invites the coach (there is no open coach signup)
@@ -160,6 +162,89 @@ with sync_playwright() as p:
     expect(client.locator("#sync")).to_be_hidden(timeout=10000)
     print("synced after reconnect")
 
+    # ---------------- client attaches a video to a set (online; goes straight to S3)
+    client.locator(".card.today").first.click()
+    client.locator(".videobar").first.get_by_role("button", name="🎥 Add video").click()
+    client.locator(".sheet input[type=file]").set_input_files(str(Path(__file__).parent / "fixtures" / "clip.mp4"))
+    # trim (VS-2): a 65 s clip starts with its first 60 s selected; pulling the
+    # end handle to 1:05 pushes the start to 0:05 to stay within 60 s
+    readout = client.locator(".trim span[aria-live]")
+    expect(readout).to_contain_text("0:00.0 – 1:00.0 · 60.0 s")
+    client.locator(".trim input[aria-label=End]").evaluate(
+        "(el) => { el.value = '65'; el.dispatchEvent(new Event('input', { bubbles: true })); }")
+    expect(readout).to_contain_text("0:05.0 – 1:05.0 · 60.0 s")
+    shot(client, "08a-trim")
+    # Browsers with an H.264 encoder convert the selection on the device; the
+    # others (e.g. Playwright's bundled Chromium) upload the original with trim points.
+    converts = client.evaluate("""async () => 'VideoEncoder' in window &&
+        (await VideoEncoder.isConfigSupported({ codec: 'avc1.42e01f', width: 160, height: 120, bitrate: 2500000 })).supported""")
+    print("video path:", "convert on device" if converts else "upload original with trim points")
+    client.locator(".sheet").get_by_role("button", name="Upload").click()
+    expect(client.locator(".videobar").first.get_by_role("button", name=re.compile("▶ Set"))).to_be_visible(timeout=30000)
+    shot(client, "08b-set-video")
+    # the fallback for devices that can't convert: the original uploads with trim points
+    client.evaluate("localStorage.setItem('pt.forceVideoFallback', '1')")
+    client.locator(".videobar").nth(1).get_by_role("button", name="🎥 Add video").click()
+    client.locator(".sheet input[type=file]").set_input_files(str(Path(__file__).parent / "fixtures" / "clip.mp4"))
+    expect(readout).to_contain_text("60.0 s")
+    client.locator(".trim input[aria-label=End]").evaluate(
+        "(el) => { el.value = '30'; el.dispatchEvent(new Event('input', { bubbles: true })); }")
+    expect(readout).to_contain_text("0:00.0 – 0:30.0 · 30.0 s")
+    client.locator(".sheet").get_by_role("button", name="Upload").click()
+    expect(client.locator(".videobar").nth(1).get_by_role("button", name=re.compile("▶ Set"))).to_be_visible(timeout=30000)
+    client.evaluate("localStorage.removeItem('pt.forceVideoFallback')")
+    # in-app recording (VS-1): about 3 s from the fake camera, as set 1 of the squats
+    client.locator(".videobar").first.get_by_role("button", name="🎥 Add video").click()
+    client.locator(".sheet select").first.select_option("0")
+    client.get_by_role("button", name="● Record with camera").click()
+    rec = client.get_by_role("button", name="● Record", exact=True)
+    expect(rec).to_be_enabled(timeout=10000)
+    shot(client, "08c-recorder")
+    rec.click()
+    client.wait_for_timeout(3000)
+    client.get_by_role("button", name="■ Stop").click()
+    expect(readout).to_contain_text(re.compile(r"0:00\.0 – 0:0[2-4]"))
+    client.locator(".sheet").get_by_role("button", name="Upload").click()
+    expect(client.locator(".videobar").first.get_by_role("button", name="▶ Set 1")).to_be_visible(timeout=30000)
+
+    # offline (VS-3): a clip saved with no connection waits on the device...
+    fixture = str(Path(__file__).parent / "fixtures" / "clip.mp4")
+    burpee_bar = client.locator(".videobar").nth(1)
+    client_ctx.set_offline(True)
+    client.evaluate("window.dispatchEvent(new Event('offline'))")
+    burpee_bar.get_by_role("button", name="🎥 Add video").click()
+    client.locator(".sheet select").first.select_option("1")
+    client.locator(".sheet input[type=file]").set_input_files(fixture)
+    expect(readout).to_contain_text("60.0 s")
+    client.locator(".trim input[aria-label=End]").evaluate(
+        "(el) => { el.value = '10'; el.dispatchEvent(new Event('input', { bubbles: true })); }")
+    client.locator(".sheet").get_by_role("button", name="Upload").click()
+    expect(burpee_bar.get_by_role("button", name="⏳ Set 2 · waiting for connection")).to_be_visible(timeout=30000)
+    shot(client, "08d-queued-offline")
+    # ...starts by itself when the connection returns, and when the part upload
+    # is cut off, a reload carries on from where it stopped with fresh part URLs
+    cut = []
+    def cut_part(route):
+        cut.append(route.request.url)
+        route.abort("internetdisconnected")  # like losing the connection mid-upload
+    client.route(re.compile(r".*partNumber=\d+.*"), cut_part)
+    client_ctx.set_offline(False)
+    client.evaluate("window.dispatchEvent(new Event('online'))")
+    for _ in range(100):
+        if cut: break
+        client.wait_for_timeout(100)
+    assert cut, "the queued upload didn't start when the connection came back"
+    client.unroute(re.compile(r".*partNumber=\d+.*"))
+    client.reload()
+    expect(client.locator(".videobar").nth(1).get_by_role("button", name="▶ Set 2")).to_be_visible(timeout=30000)
+    # the client can delete their own video
+    client.locator(".videobar").nth(1).get_by_role("button", name="▶ Set 2").click()
+    client.locator(".sheet").get_by_role("button", name="Delete video").click()
+    client.locator(".sheet").last.get_by_role("button", name="Delete", exact=True).click()
+    expect(client.locator(".videobar").nth(1).get_by_role("button", name="▶ Set 2")).to_have_count(0)
+    expect(client.get_by_text("Video deleted")).to_be_visible()
+    client.get_by_role("button", name="‹ Back").click()
+
     # ---------------- client body metrics
     client.get_by_role("link", name="Progress").click()
     for d, w in [(-14, 84.0), (-7, 83.2), (0, 82.5)]:
@@ -184,9 +269,57 @@ with sync_playwright() as p:
     shot(coach, "11-coach-overview")
     coach.get_by_role("button", name="Logs").click()
     coach.once("dialog", lambda d: d.accept("Great depth. Keep the chest up on set 3"))
-    coach.locator(".exercise button").nth(2).click()
+    coach.locator(".exercise .row button").nth(2).click()  # set 3 of the first exercise
     expect(coach.get_by_text(re.compile("Keep the chest up"))).to_be_visible()
     shot(coach, "12-coach-logs")
+    # the client's set video plays for the coach
+    squat = coach.locator(".exercise", has_text="Back Squat")
+    squat.locator(".videobar button", has_text="▶ Set 3").click()
+    expect(coach.locator(".sheet video.player")).to_be_visible()
+    coach.wait_for_function("document.querySelector('.sheet video.player').readyState >= 1", timeout=15000)
+    if converts:
+        # converted: just the 60 s selection, with a poster frame
+        coach.wait_for_function("Math.abs(document.querySelector('.sheet video.player').duration - 60) < 1", timeout=10000)
+        assert coach.locator(".sheet video.player").get_attribute("poster"), "converted video has no poster"
+        expect(coach.locator(".sheet")).not_to_contain_text("of the original")
+    else:
+        # original: the player keeps to the trim points, starting at 0:05
+        coach.wait_for_function("Math.abs(document.querySelector('.sheet video.player').currentTime - 5) < 0.5", timeout=10000)
+        expect(coach.locator(".sheet")).to_contain_text("Plays 5.0–65.0 s of the original")
+    shot(coach, "12b-coach-video")
+    coach.locator(".sheet").get_by_role("button", name="Close").click()
+    # the burpees' video took the fallback: the original, kept to 0–30 s
+    coach.locator(".exercise", has_text="Burpee").locator(".videobar button", has_text="▶ Set").first.click()
+    expect(coach.locator(".sheet")).to_contain_text("Plays 0.0–30.0 s of the original")
+    coach.wait_for_function("document.querySelector('.sheet video.player').readyState >= 1", timeout=15000)
+    coach.locator(".sheet").get_by_role("button", name="Close").click()
+    # the in-app recording plays too
+    squat.locator(".videobar button", has_text="▶ Set 1").click()
+    coach.wait_for_function("document.querySelector('.sheet video.player').readyState >= 1", timeout=15000)
+    coach.locator(".sheet").get_by_role("button", name="Close").click()
+
+    # ---------------- coach review queue (VS-4): oldest first, mark reviewed
+    coach.locator('#tabs a[data-path="/videos"]').click()
+    expect(coach.get_by_role("heading", name="Videos")).to_be_visible()
+    items = coach.locator(".queue-item")
+    expect(items).to_have_count(3)
+    badge = coach.locator('#tabs a[data-path="/videos"] .badge')
+    expect(badge).to_have_text("3")
+    expect(items.nth(0)).to_contain_text("Back Squat · set 3")  # uploaded first
+    expect(items.nth(1)).to_contain_text("Burpee · set 1")
+    expect(items.nth(2)).to_contain_text("Back Squat · set 1")
+    shot(coach, "12c-video-queue")
+    items.nth(0).get_by_role("button", name="✓ Reviewed").click()
+    expect(items).to_have_count(2)
+    expect(badge).to_have_text("2")
+    # from the player too
+    items.nth(0).get_by_role("button", name="▶ Watch").click()
+    coach.locator(".sheet").get_by_role("button", name="✓ Mark reviewed").click()
+    expect(items).to_have_count(1)
+    expect(items.nth(0)).to_contain_text("Back Squat · set 1")
+    # reviewed videos are marked in the client's logs
+    coach.go_back()
+    expect(coach.locator(".exercise", has_text="Back Squat").locator(".videobar button", has_text="▶ Set 3 ✓")).to_be_visible()
     coach.get_by_role("link", name="Clients").click()
     expect(coach.get_by_text("Pain reported")).to_be_visible()
     shot(coach, "13-roster")
@@ -200,18 +333,18 @@ with sync_playwright() as p:
     applicant = applicant_ctx.new_page(); watch(applicant, "applicant")
     sign_in(applicant, "applicant" + RUN, BASE + "#/become-a-coach")
     expect(applicant.get_by_role("heading", name="Request a coach account")).to_be_visible()
-    applicant.get_by_label("Your name").fill("Riley Coach")
+    applicant.get_by_label("Your name").fill(f"Riley Coach {RUN}")
     applicant.get_by_label("About your coaching").fill("Strength coach, 5 years")
     applicant.get_by_role("button", name="Send request").click()
     expect(applicant.get_by_text(re.compile("being reviewed"))).to_be_visible()
     shot(applicant, "15-coach-request")
 
     admin.reload()
-    card = admin.locator(".card", has_text="Riley Coach")
+    card = admin.locator(".card", has_text=f"Riley Coach {RUN}")
     expect(card).to_be_visible()
     shot(admin, "16-admin-requests")
     card.get_by_role("button", name="Approve").click()
-    expect(admin.get_by_text("Riley Coach is now a coach")).to_be_visible()
+    expect(admin.get_by_text(f"Riley Coach {RUN} is now a coach")).to_be_visible()
 
     applicant.reload()
     expect(applicant.get_by_role("heading", name="Clients")).to_be_visible()

@@ -13,6 +13,11 @@ Parameters:
     Type: String
     Default: http://localhost:8080
     Description: Extra origin allowed for CORS and OAuth callbacks while developing the web app locally
+  VideoRetentionDays:
+    Type: Number
+    Default: 180
+    MinValue: 1
+    Description: Days after upload that set videos are deleted once a coach has reviewed them (unreviewed videos are kept)
   AdminEmails:
     Type: String
     Default: ""
@@ -78,6 +83,11 @@ Resources:
             Status: Enabled
             TagFilters: [{ Key: state, Value: pending }]
             ExpirationInDays: 2
+          # Marking a set video reviewed tags it reviewed=true (routes/videos.rs).
+          - Id: expire-reviewed-set-videos
+            Status: Enabled
+            TagFilters: [{ Key: reviewed, Value: "true" }]
+            ExpirationInDays: !Ref VideoRetentionDays
 
   MediaBucketPolicy:
     Type: AWS::S3::BucketPolicy
@@ -173,16 +183,19 @@ Resources:
           TABLE_NAME: !Ref Table
           MEDIA_BUCKET: !Ref MediaBucket
           ADMIN_EMAILS: !Ref AdminEmails
+          VIDEO_RETENTION_DAYS: !Ref VideoRetentionDays
           RUST_LOG: info
       LoggingConfig:
         LogGroup: !Ref ApiLogGroup
       Policies:
         - DynamoDBCrudPolicy: { TableName: !Ref Table }
         - S3CrudPolicy: { BucketName: !Ref MediaBucket }
-        # Presigned uploads carry a pending tag, and confirming removes it.
+        # Presigned uploads carry a pending tag, confirming removes it, and
+        # reviewed videos are tagged for retention. Clients can abandon a
+        # video mid-upload.
         - Statement:
             - Effect: Allow
-              Action: [s3:PutObjectTagging, s3:DeleteObjectTagging]
+              Action: [s3:PutObjectTagging, s3:DeleteObjectTagging, s3:AbortMultipartUpload]
               Resource: !Sub "${MediaBucket.Arn}/*"
       Events:
         Api:

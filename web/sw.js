@@ -7,9 +7,11 @@ const VERSION = 'dev';
 const CACHE = `ptapp-${VERSION}`;
 const SHELL = [
   './', 'index.html', 'manifest.webmanifest', 'icon.svg', 'css/app.css',
-  'js/app.js', 'js/api.js', 'js/auth.js', 'js/config.js', 'js/idb.js', 'js/router.js', 'js/session.js', 'js/timer.js', 'js/ui.js',
+  'js/app.js', 'js/api.js', 'js/auth.js', 'js/config.js', 'js/encode.js', 'js/idb.js', 'js/router.js', 'js/session.js', 'js/timer.js', 'js/ui.js', 'js/uploads.js', 'js/videos.js',
   'js/views/admin.js', 'js/views/coach.js', 'js/views/comments.js', 'js/views/exercises.js', 'js/views/intake.js', 'js/views/metrics.js',
-  'js/views/onboarding.js', 'js/views/profile.js', 'js/views/programs.js', 'js/views/workout.js',
+  'js/views/onboarding.js', 'js/views/profile.js', 'js/views/programs.js', 'js/views/recorder.js', 'js/views/trim.js', 'js/views/videos.js', 'js/views/workout.js',
+  // set-video conversion (encode.js); precached so it works offline
+  'vendor/mp4box-0.5.2.all.min.js', 'vendor/mp4-muxer-5.1.3.js',
 ];
 
 self.addEventListener('install', (e) => {

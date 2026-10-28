@@ -23,7 +23,7 @@ Status legend: ✅ done in MVP · 🟡 partial · ⬜ not started
 | Onboarding | ON-1 🟡 (link + mailto, bound to the invited verified email; SES email in 1b) · ON-2 ✅ · ON-3 ✅ | ON-4 ⬜ · ON-5 ⬜ |
 | Builder | WB-1 ✅ · WB-2 ✅ · WB-3 ✅ · WB-4 ✅ | WB-5 ⬜ · WB-6 ⬜ · WB-7 ⬜ |
 | Logging | LG-1 ✅ · LG-2 ✅ · LG-3 ✅ · LG-4 ✅ · LG-6 ✅ | LG-5 🟡 (e1RM trend; no PR events) · LG-7 🟡 (roster flags; no alerts) · LG-8 ⬜ |
-| Video submission | VS-1 ⬜ · VS-2 ⬜ · VS-3 ⬜ · VS-4 ⬜ | VS-5 ⬜ |
+| Video submission | VS-1 ✅ · VS-2 ✅ · VS-3 ✅ · VS-4 ✅ (real-device checks pending, see `tasks/todo.md`) | VS-5 ⬜ |
 | Video reply | VR-1 ⬜ · VR-2 ⬜ · VR-3 ⬜ | VR-4…VR-7 ⬜ |
 | Feedback | FB-1 ✅ · FB-2 ✅ | FB-3 ⬜ · FB-4 ⬜ |
 | AI | AI-6/AI-7 (whenever AI ships) | AI-1…AI-5 ⬜ |
@@ -38,30 +38,20 @@ Status legend: ✅ done in MVP · 🟡 partial · ⬜ not started
 
 The BRD's Phase 1 also includes video, chat and payments. Build in this order: video is the differentiator and the biggest risk, so prototype it first (BRD risk #1).
 
-### 1. Exercise video submission (VS-1 … VS-4)
+### 1. Exercise video submission (VS-1 … VS-4) ✅
 
-**Infra**
-* Add a GSI to the table: `gsi1pk` (S) / `gsi1sk` (S), projection ALL.
-* `VideoQueue`: an SQS queue + DLQ.
-* `TranscodeFunction`: a Lambda **container image** (arm64) with a static `ffmpeg`, 2048 MB, 5 min timeout, triggered by the SQS queue. A video under 60 s transcodes in seconds. At higher volume switch to MediaConvert or Fargate without changing the queue contract.
-* S3 event notification on `media/*/*/videos/raw/*` (`s3:ObjectCreated:CompleteMultipartUpload` and `Put`) → SQS.
-* Lifecycle rule: `videos/raw/` → Glacier Instant Retrieval after 30 days and delete after 90 days (BRD video NFR); keep `videos/mp4/`.
+Built per `tasks/plan.md`. It departs from the original design here in favour of less infrastructure, after a spike on real devices (results in the plan):
 
-**Core:** `Video { id, logId, itemId, setIndex, exerciseId, status: uploading|processing|ready|failed, rawKey, mp4Key, posterKey, durationSec, reviewedAt, createdAt }`.
+* **Conversion happens on the device, not in an ffmpeg Lambda.** `web/js/encode.js` demuxes with mp4box, decodes and re-encodes the trimmed range with WebCodecs to H.264 (up to 720p, 2.5 Mbps), copies AAC audio and makes a JPEG poster; mp4-muxer writes the MP4 (libraries vendored in `web/vendor/`). An iPhone converted a 1080p clip at 2.3× real time. When a browser can't convert, the original uploads with trim points and the player keeps to them. No SQS, container image or S3 event triggers were needed. Server-side transcoding stays an option if HEVC on some devices turns out to need it.
+* **Recording in the app** (`web/js/views/recorder.js`, `getUserMedia` + `MediaRecorder` at 720p, stops at 60 s), because iOS's `<input capture>` hands pages a 480×360 recording.
+* **Resumable uploads** as planned: S3 multipart, 8 MiB parts each presigned for its exact size, tagged pending until completed; the device keeps the clip and part ETags in IndexedDB (`web/js/uploads.js`).
+* **The review queue is a per-coach item** (`COACH#` / `REVIEW#{createdAt}#{video}`) instead of a GSI; a prefix query is oldest first.
+* **Playback uses presigned S3 GETs.** CloudFront signed URLs (cheaper egress) move to the reply editor below, where heavy playback starts.
+* **Retention:** reviewed videos are tagged and deleted by a lifecycle rule `VideoRetentionDays` (template parameter, default 180) after upload.
 
-**API**
-* `POST /clients/{cid}/videos` with the file size → creates `VIDEO#{id}`, starts an S3 **multipart upload** (`CreateMultipartUpload`, tagged `state=pending` so abandoned uploads expire) and returns `uploadId` plus presigned `UploadPart` URLs for N parts (8 MB each), each signed for its exact part length like `util::presign_put`. This gives **resumable** uploads (VS-3): the client keeps the part list in IndexedDB and re-requests URLs with `POST /videos/{id}/parts`.
-* `POST /clients/{cid}/videos/{id}/complete` with `{parts:[{n, etag}]}` → `CompleteMultipartUpload`; status becomes processing.
-* Transcode worker: `ffmpeg -i raw -vf scale=-2:'min(1080,ih)' -c:v libx264 -crf 26 -preset veryfast -movflags +faststart -c:a aac -b:a 96k`, plus a poster frame; writes `mp4Key`; sets status ready and `gsi1pk=COACH#{coach}#UNREVIEWED`, `gsi1sk={createdAt}`.
-* `GET /videos/queue` (coach) → Query GSI `COACH#{coach}#UNREVIEWED` ascending, i.e. **oldest first (VS-4)**; `POST /videos/{id}/reviewed` removes the GSI attributes.
-* Playback through a **CloudFront signed URL** on a second behavior `/media/*` (S3 origin with OAC + trusted key group). This cuts egress cost compared with S3 presigned URLs and allows range requests for scrubbing.
+Still open: real-device checks (iPhone Safari and the home-screen app, an HEVC clip, Android), the cellular-data warning before a large original uploads, and VS-5 filming guidance.
 
-**PWA**
-* On the set row, a 🎥 button → `<input type="file" accept="video/*" capture="environment">` (VS-1).
-* **Trim + cap (VS-2):** preview in a `<video>`, two range sliders for in/out, and hard-cap duration at 60 s. Re-encode in the browser with **WebCodecs** (`VideoEncoder`, H.264 at 1080p, about 4 Mbps), muxed with a small MP4 muxer such as `mp4-muxer`. If WebCodecs is unavailable (older iOS), upload the original and send `trimStart/trimEnd` so the worker trims with `-ss/-to`.
-* An upload manager in `js/uploads.js` stores parts in IndexedDB and runs from the outbox loop, so uploads resume after offline periods.
-
-**Exit test:** a 60 s phone clip on throttled 3G resumes after airplane mode; the coach queue shows it oldest first.
+**Exit test:** a 60 s phone clip on throttled 3G resumes after airplane mode; the coach queue shows it oldest first. The resume and queue order are covered by the browser journey; the throttled-3G run on a phone is still to do.
 
 ### 2. Coach video reply editor (VR-1 … VR-3)
 

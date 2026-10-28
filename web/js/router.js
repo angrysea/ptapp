@@ -16,8 +16,17 @@ let onChange = () => {};
 export function start({ home, afterRender }) {
   fallback = home;
   onChange = afterRender || onChange;
-  window.addEventListener('hashchange', run);
-  run();
+  window.addEventListener('hashchange', schedule);
+  schedule();
+}
+
+// Views await data before drawing, so two quick navigations could finish out
+// of order and leave the older page on screen. Renders run one at a time,
+// and a navigation superseded while queued is skipped: the latest one wins.
+let queue = Promise.resolve();
+function schedule() {
+  const path = current();
+  queue = queue.then(() => (path === current() ? run() : undefined));
 }
 
 async function run() {

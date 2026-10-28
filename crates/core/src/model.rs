@@ -565,6 +565,32 @@ pub struct Video {
     pub reviewed_at: Option<DateTime<Utc>>,
 }
 
+/// A ready video waiting for the coach's review (VS-4), stored as
+/// `COACH#{coach}` / `REVIEW#{createdAt}#{videoId}` so a prefix query returns
+/// the queue oldest first across all of the coach's clients. Carries what the
+/// queue shows and plays, so listing it needs no per-video reads.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewEntry {
+    pub video_id: String,
+    pub client_id: String,
+    pub client_name: String,
+    pub log_id: String,
+    pub item_id: String,
+    pub set_index: u32,
+    pub exercise_name: String,
+    pub key: String,
+    #[serde(default)]
+    pub poster_key: Option<String>,
+    #[serde(default)]
+    pub duration_sec: Option<f64>,
+    #[serde(default)]
+    pub trim_start: Option<f64>,
+    #[serde(default)]
+    pub trim_end: Option<f64>,
+    pub created_at: DateTime<Utc>,
+}
+
 pub const TAPE_SITES: &[&str] = &[
     "neck", "chest", "waist", "hips", "armL", "armR", "thighL", "thighR", "calfL", "calfR",
 ];

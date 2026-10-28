@@ -11,21 +11,30 @@
 //!
 //! Abandoned uploads are cleaned up by the media bucket's lifecycle rules
 //! (incomplete multipart uploads after 2 days; pending-tagged objects).
+//!
+//! VS-4: completing an upload also puts the video in the coach's review
+//! queue, oldest first; marking it reviewed takes it out.
+//!
+//! Retention: marking a video reviewed tags its objects `reviewed=true`, and
+//! the media bucket's lifecycle rule deletes tagged objects
+//! `video_retention_days` after upload (S3 counts from creation). Records past
+//! that are hidden here, so no one gets a dead link. Unreviewed videos are
+//! never deleted automatically.
 
-use aws_sdk_s3::types::{CompletedMultipartUpload, CompletedPart};
+use aws_sdk_s3::types::{CompletedMultipartUpload, CompletedPart, Tag, Tagging};
 use axum::extract::{Path, Query, State};
 use axum::Json;
-use chrono::Utc;
+use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use futures::future::try_join_all;
-use ptcore::model::{Video, VideoStatus};
+use ptcore::model::{ReviewEntry, Video, VideoStatus};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::auth::{client_scope, ClientScope, Ctx};
 use crate::error::{bad_request, ApiError, ApiResult};
 use crate::util::{
-    audit, check_size, dated_id, ext_for, presign_get, presign_part, presign_put, s3_object_exists, s3_object_size, untag,
-    Upload, PENDING_TAG, VIDEO_TYPES,
+    audit, audit_client, check_size, dated_id, ext_for, presign_get, presign_part, presign_put, s3_object_exists, s3_object_size,
+    untag, Upload, PENDING_TAG, VIDEO_TYPES,
 };
 use crate::AppState;
 
@@ -52,6 +61,13 @@ fn video_sk(id: &str) -> String {
     format!("VIDEO#{id}")
 }
 
+/// The video's place in its coach's review queue. Derived from the video, so
+/// marking it reviewed can find the entry without a lookup; fixed-width UTC
+/// timestamps sort oldest first.
+fn review_sk(v: &Video) -> String {
+    format!("REVIEW#{}#{}", v.created_at.to_rfc3339_opts(SecondsFormat::Millis, true), v.id)
+}
+
 fn poster_key_for(video_key: &str) -> String {
     match video_key.rsplit_once('.') {
         Some((stem, _)) => format!("{stem}.jpg"),
@@ -74,6 +90,11 @@ async fn client_owned(st: &AppState, ctx: &Ctx, cid: &str) -> ApiResult<ClientSc
         return Err(ApiError::Forbidden("only the client uploads their videos"));
     }
     Ok(scope)
+}
+
+/// Whether the lifecycle rule has (or soon will have) deleted a reviewed video.
+pub fn expired(v: &Video, now: DateTime<Utc>, retention_days: i64) -> bool {
+    v.reviewed_at.is_some() && v.created_at + Duration::days(retention_days) <= now
 }
 
 async fn load(st: &AppState, scope: &ClientScope, vid: &str) -> ApiResult<Video> {
@@ -204,7 +225,14 @@ pub async fn parts(
 ) -> ApiResult<Json<Value>> {
     let scope = client_owned(&st, &ctx, &cid).await?;
     let v = load(&st, &scope, &vid).await?;
-    Ok(Json(json!({ "parts": part_urls(&st, &v, &body.parts).await? })))
+    // Each URL costs a signature: never sign more than the upload has parts.
+    let mut numbers = body.parts;
+    numbers.sort_unstable();
+    numbers.dedup();
+    if numbers.len() > part_sizes(v.size_bytes, v.part_size).len() {
+        return Err(bad_request("more parts requested than the upload has"));
+    }
+    Ok(Json(json!({ "parts": part_urls(&st, &v, &numbers).await? })))
 }
 
 #[derive(Deserialize)]
@@ -269,8 +297,120 @@ pub async fn complete(
     }
     v.status = VideoStatus::Ready;
     v.upload_id = None;
+    // Queue first: if marking the video ready then fails, a retried complete
+    // writes the same entry again rather than leaving a ready video unqueued.
+    let entry = ReviewEntry {
+        video_id: v.id.clone(),
+        client_id: scope.client.user_id.clone(),
+        client_name: scope.client.name.clone(),
+        log_id: v.log_id.clone(),
+        item_id: v.item_id.clone(),
+        set_index: v.set_index,
+        exercise_name: v.exercise_name.clone(),
+        key: v.key.clone(),
+        poster_key: v.poster_key.clone(),
+        duration_sec: v.duration_sec,
+        trim_start: v.trim_start,
+        trim_end: v.trim_end,
+        created_at: v.created_at,
+    };
+    st.store.put(&format!("COACH#{}", scope.client.coach_id), &review_sk(&v), &entry).await?;
     st.store.put(&scope.pk(), &video_sk(&v.id), &v).await?;
     Ok(Json(v))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewOut {
+    #[serde(flatten)]
+    entry: ReviewEntry,
+    url: String,
+    poster_url: Option<String>,
+}
+
+/// The coach's unreviewed videos across all their clients, oldest first.
+pub async fn queue(State(st): State<AppState>, ctx: Ctx) -> ApiResult<Json<Vec<ReviewOut>>> {
+    let coach = ctx.require_coach()?;
+    let entries: Vec<ReviewEntry> = st.store.query_prefix(&format!("COACH#{coach}"), "REVIEW#").await?;
+    let mut clients: Vec<&str> = entries.iter().map(|e| e.client_id.as_str()).collect();
+    clients.sort_unstable();
+    clients.dedup();
+    for c in clients {
+        audit_client(&st, &ctx, &format!("CLIENT#{c}"), "view-video-queue").await;
+    }
+    let out = try_join_all(entries.into_iter().map(|entry| {
+        let st = &st;
+        async move {
+            let url = presign_get(st, &entry.key).await?;
+            let poster_url = match &entry.poster_key {
+                Some(k) => Some(presign_get(st, k).await?),
+                None => None,
+            };
+            ApiResult::Ok(ReviewOut { entry, url, poster_url })
+        }
+    }))
+    .await?;
+    Ok(Json(out))
+}
+
+/// The client's coach marks a video reviewed: it leaves the queue and shows
+/// as reviewed in the client's logs. Repeating it is harmless.
+pub async fn reviewed(
+    State(st): State<AppState>,
+    ctx: Ctx,
+    Path((cid, vid)): Path<(String, String)>,
+) -> ApiResult<Json<Video>> {
+    ctx.require_coach()?;
+    let scope = client_scope(&st, &ctx, &cid).await?;
+    let mut v = load(&st, &scope, &vid).await?;
+    if v.status != VideoStatus::Ready {
+        return Err(bad_request("this video hasn't finished uploading"));
+    }
+    if v.reviewed_at.is_none() {
+        v.reviewed_at = Some(Utc::now());
+        st.store.put(&scope.pk(), &video_sk(&v.id), &v).await?;
+    }
+    st.store.delete(&format!("COACH#{}", scope.client.coach_id), &review_sk(&v)).await?;
+    // Start the retention clock. A failed tag only means the object is kept.
+    let tagging = Tagging::builder()
+        .tag_set(Tag::builder().key("reviewed").value("true").build().map_err(|e| ApiError::Internal(e.to_string()))?)
+        .build()
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    for key in std::iter::once(&v.key).chain(&v.poster_key) {
+        if let Err(e) = st.s3.put_object_tagging().bucket(&st.bucket).key(key).tagging(tagging.clone()).send().await {
+            tracing::warn!("tagging {key} reviewed failed: {e}");
+        }
+    }
+    Ok(Json(v))
+}
+
+/// VS-3: the client deletes their own video: an unfinished upload is
+/// aborted, the objects and the coach's queue entry go with it.
+pub async fn remove(
+    State(st): State<AppState>,
+    ctx: Ctx,
+    Path((cid, vid)): Path<(String, String)>,
+) -> ApiResult<Json<Value>> {
+    let scope = client_owned(&st, &ctx, &cid).await?;
+    let v = load(&st, &scope, &vid).await?;
+    if let Some(upload_id) = &v.upload_id {
+        // Already gone (e.g. expired by the lifecycle rule) is fine.
+        let _ = st.s3.abort_multipart_upload().bucket(&st.bucket).key(&v.key).upload_id(upload_id).send().await;
+    }
+    // The poster may exist even if it never got recorded (an upload that was
+    // never completed), so delete it by its derived key.
+    for key in [v.key.clone(), poster_key_for(&v.key)] {
+        st.s3
+            .delete_object()
+            .bucket(&st.bucket)
+            .key(&key)
+            .send()
+            .await
+            .map_err(|e| ApiError::Internal(format!("s3 delete: {e}")))?;
+    }
+    st.store.delete(&format!("COACH#{}", scope.client.coach_id), &review_sk(&v)).await?;
+    st.store.delete(&scope.pk(), &video_sk(&v.id)).await?;
+    Ok(Json(json!({ "ok": true })))
 }
 
 #[derive(Deserialize)]
@@ -299,7 +439,10 @@ pub async fn list(
     let scope = client_scope(&st, &ctx, &cid).await?;
     audit(&st, &ctx, &scope, "view-videos").await;
     let mut videos: Vec<Video> = st.store.query_prefix(&scope.pk(), "VIDEO#").await?;
-    videos.retain(|v| v.status == VideoStatus::Ready && q.log_id.as_ref().is_none_or(|l| *l == v.log_id));
+    let now = Utc::now();
+    videos.retain(|v| {
+        v.status == VideoStatus::Ready && !expired(v, now, st.video_retention_days) && q.log_id.as_ref().is_none_or(|l| *l == v.log_id)
+    });
     videos.sort_by_key(|v| std::cmp::Reverse(v.created_at));
     let out = try_join_all(videos.into_iter().map(|video| {
         let st = &st;
@@ -330,6 +473,35 @@ mod tests {
         assert_eq!(big.iter().sum::<i64>(), MAX_SET_VIDEO_BYTES);
         assert!(big[..big.len() - 1].iter().all(|&p| p == PART_SIZE));
         assert!(part_sizes(0, PART_SIZE).is_empty());
+    }
+
+    #[test]
+    fn reviewed_videos_expire_after_the_retention_period() {
+        let created = Utc::now() - Duration::days(200);
+        let mut v = Video {
+            id: "v".into(),
+            log_id: "l".into(),
+            item_id: "i".into(),
+            set_index: 0,
+            exercise_id: "e".into(),
+            exercise_name: "E".into(),
+            status: VideoStatus::Ready,
+            key: "k.mp4".into(),
+            content_type: "video/mp4".into(),
+            size_bytes: 1,
+            upload_id: None,
+            part_size: PART_SIZE,
+            poster_key: None,
+            duration_sec: None,
+            trim_start: None,
+            trim_end: None,
+            created_at: created,
+            reviewed_at: None,
+        };
+        assert!(!expired(&v, Utc::now(), 180), "unreviewed videos are kept");
+        v.reviewed_at = Some(created + Duration::days(1));
+        assert!(expired(&v, Utc::now(), 180));
+        assert!(!expired(&v, Utc::now(), 365));
     }
 
     #[test]

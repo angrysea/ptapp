@@ -27,6 +27,9 @@ pub struct AppState {
     /// comma-separated). Only needed to bootstrap: an admin profile stays
     /// once created.
     pub admin_emails: Vec<String>,
+    /// Days after upload that reviewed set videos are deleted (template
+    /// parameter VideoRetentionDays, which also sets the S3 lifecycle rule).
+    pub video_retention_days: i64,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -74,6 +77,9 @@ pub fn router(state: AppState) -> Router {
         .route("/clients/{cid}/videos", get(videos::list).post(videos::create))
         .route("/clients/{cid}/videos/{vid}/parts", post(videos::parts))
         .route("/clients/{cid}/videos/{vid}/complete", post(videos::complete))
+        .route("/clients/{cid}/videos/{vid}", delete(videos::remove))
+        .route("/clients/{cid}/videos/{vid}/reviewed", post(videos::reviewed))
+        .route("/videos/queue", get(videos::queue))
         // API Gateway owns CORS in AWS; this layer only matters for local dev.
         .layer(CorsLayer::new().allow_origin(Any).allow_methods(Any).allow_headers(Any))
         .with_state(state)
@@ -90,6 +96,7 @@ impl AppState {
             s3: aws_sdk_s3::Client::new(&config),
             bucket: std::env::var("MEDIA_BUCKET").expect("MEDIA_BUCKET"),
             presign_ttl: Duration::from_secs(900),
+            video_retention_days: std::env::var("VIDEO_RETENTION_DAYS").ok().and_then(|d| d.parse().ok()).unwrap_or(180),
             admin_emails: std::env::var("ADMIN_EMAILS")
                 .unwrap_or_default()
                 .split(',')

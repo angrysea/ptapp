@@ -395,6 +395,10 @@ async fn full_client_journey() {
     let (s, re) = t.call("POST", &format!("/clients/client1/videos/{vid}/parts"), Some("client1"), Some(json!({ "parts": [2] }))).await;
     assert_eq!(s, StatusCode::OK, "{re}");
     assert_eq!(re["parts"][0]["n"], 2);
+    // duplicates collapse; asking for more parts than exist is refused
+    let (_, dup) = t.call("POST", &format!("/clients/client1/videos/{vid}/parts"), Some("client1"), Some(json!({ "parts": [2, 2, 2] }))).await;
+    assert_eq!(dup["parts"].as_array().unwrap().len(), 1);
+    assert_eq!(t.call("POST", &format!("/clients/client1/videos/{vid}/parts"), Some("client1"), Some(json!({ "parts": [1, 2, 3] }))).await.0, StatusCode::BAD_REQUEST);
     // completing before the parts are uploaded fails and leaves the video uploading
     let early = json!({ "parts": [{ "n": 1, "etag": "\"x\"" }, { "n": 2, "etag": "\"y\"" }] });
     assert_eq!(t.call("POST", &format!("/clients/client1/videos/{vid}/complete"), Some("client1"), Some(early)).await.0, StatusCode::BAD_REQUEST);
@@ -453,6 +457,80 @@ async fn full_client_journey() {
     let (_, vids) = t.call("GET", "/clients/client1/videos", Some("client1"), None).await;
     assert_eq!(vids.as_array().unwrap().len(), 1);
 
+    // --- coach review queue (VS-4): oldest first, mark reviewed
+    let mut ids = vec![vid.clone()];
+    for set_index in [1, 2] {
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await; // distinct creation times
+        let (_, c) = t
+            .call("POST", "/clients/client1/videos", Some("client1"), Some(new_video(json!({ "size": 3, "setIndex": set_index, "posterSize": null }))))
+            .await;
+        let (id, k) = (c["video"]["id"].as_str().unwrap().to_string(), c["video"]["key"].as_str().unwrap().to_string());
+        let uid = s3.list_multipart_uploads().bucket(&bucket).prefix(&k).send().await.unwrap().uploads()[0].upload_id().unwrap().to_string();
+        let out = s3.upload_part().bucket(&bucket).key(&k).upload_id(&uid).part_number(1).body(b"mp4".to_vec().into()).send().await.unwrap();
+        let (s, d) = t
+            .call("POST", &format!("/clients/client1/videos/{id}/complete"), Some("client1"), Some(json!({ "parts": [{ "n": 1, "etag": out.e_tag().unwrap() }] })))
+            .await;
+        assert_eq!(s, StatusCode::OK, "{d}");
+        ids.push(id);
+    }
+    assert_eq!(t.call("GET", "/videos/queue", Some("client1"), None).await.0, StatusCode::FORBIDDEN);
+    let (_, q2) = t.call("GET", "/videos/queue", Some("coach2"), None).await;
+    assert_eq!(q2.as_array().unwrap().len(), 0, "another coach's queue is separate");
+    let (s, queue) = t.call("GET", "/videos/queue", Some("coach1"), None).await;
+    assert_eq!(s, StatusCode::OK, "{queue}");
+    let order: Vec<&str> = queue.as_array().unwrap().iter().map(|e| e["videoId"].as_str().unwrap()).collect();
+    assert_eq!(order, ids.iter().map(String::as_str).collect::<Vec<_>>(), "oldest first");
+    assert_eq!(queue[0]["clientName"], "Cli Ent");
+    assert_eq!(queue[0]["exerciseName"], "Back Squat");
+    assert!(queue[0]["url"].as_str().unwrap().contains("X-Amz-Signature"));
+    assert!(queue[0]["posterUrl"].as_str().unwrap().contains("X-Amz-Signature"));
+    // only the client's coach marks it reviewed; doing it twice is fine
+    let reviewed = |id: &str| format!("/clients/client1/videos/{id}/reviewed");
+    assert_eq!(t.call("POST", &reviewed(&ids[1]), Some("client1"), None).await.0, StatusCode::FORBIDDEN);
+    assert_eq!(t.call("POST", &reviewed(&ids[1]), Some("coach2"), None).await.0, StatusCode::FORBIDDEN);
+    let (s, r) = t.call("POST", &reviewed(&ids[1]), Some("coach1"), None).await;
+    assert_eq!(s, StatusCode::OK, "{r}");
+    assert!(r["reviewedAt"].is_string());
+    assert_eq!(t.call("POST", &reviewed(&ids[1]), Some("coach1"), None).await.0, StatusCode::OK);
+    let pending_id = pending["video"]["id"].as_str().unwrap();
+    assert_eq!(t.call("POST", &reviewed(pending_id), Some("coach1"), None).await.0, StatusCode::BAD_REQUEST);
+    let (_, queue) = t.call("GET", "/videos/queue", Some("coach1"), None).await;
+    let order: Vec<&str> = queue.as_array().unwrap().iter().map(|e| e["videoId"].as_str().unwrap()).collect();
+    assert_eq!(order, [ids[0].as_str(), ids[2].as_str()]);
+    // the client's list keeps the reviewed video, marked reviewed
+    let (_, vids) = t.call("GET", "/clients/client1/videos", Some("client1"), None).await;
+    let rv = vids.as_array().unwrap().iter().find(|v| v["id"] == ids[1].as_str()).unwrap();
+    assert!(rv["reviewedAt"].is_string());
+    // reviewing starts the retention clock: the lifecycle rule deletes objects tagged reviewed=true
+    let rkey = rv["key"].as_str().unwrap();
+    let tags = s3.get_object_tagging().bucket(&bucket).key(rkey).send().await.unwrap();
+    assert!(tags.tag_set().iter().any(|t| t.key() == "reviewed" && t.value() == "true"), "{:?}", tags.tag_set());
+
+    // --- the client deletes their own videos (VS-3)
+    let del = |id: &str| format!("/clients/client1/videos/{id}");
+    assert_eq!(t.call("DELETE", &del(&ids[2]), Some("coach1"), None).await.0, StatusCode::FORBIDDEN);
+    assert_eq!(t.call("DELETE", &del(&ids[2]), Some("client2"), None).await.0, StatusCode::FORBIDDEN);
+    let gone_key = queue[1]["key"].as_str().unwrap().to_string();
+    let (s, d) = t.call("DELETE", &del(&ids[2]), Some("client1"), None).await;
+    assert_eq!(s, StatusCode::OK, "{d}");
+    assert_eq!(t.call("DELETE", &del(&ids[2]), Some("client1"), None).await.0, StatusCode::NOT_FOUND);
+    let (_, vids) = t.call("GET", "/clients/client1/videos", Some("client1"), None).await;
+    assert!(!vids.as_array().unwrap().iter().any(|v| v["id"] == ids[2].as_str()));
+    let (_, queue) = t.call("GET", "/videos/queue", Some("coach1"), None).await;
+    let order: Vec<&str> = queue.as_array().unwrap().iter().map(|e| e["videoId"].as_str().unwrap()).collect();
+    assert_eq!(order, [ids[0].as_str()], "a deleted video leaves the coach's queue");
+    assert!(s3.head_object().bucket(&bucket).key(&gone_key).send().await.is_err(), "object deleted");
+    // deleting a video that never finished uploading aborts its multipart upload
+    let pending_key = pending["video"]["key"].as_str().unwrap().to_string();
+    let open_uploads = |k: String| {
+        let s3 = s3.clone();
+        let bucket = bucket.clone();
+        async move { s3.list_multipart_uploads().bucket(&bucket).prefix(&k).send().await.unwrap().uploads().len() }
+    };
+    assert_eq!(open_uploads(pending_key.clone()).await, 1);
+    assert_eq!(t.call("DELETE", &del(pending_id), Some("client1"), None).await.0, StatusCode::OK);
+    assert_eq!(open_uploads(pending_key).await, 0);
+
     // --- comments (FB-1)
     let (s, _) = t
         .call("POST", "/clients/client1/comments", Some("coach1"), Some(json!({ "text": "Great depth on set 2", "logId": "log-abc", "setIndex": 1 })))
@@ -498,4 +576,5 @@ async fn full_client_journey() {
         out.items.unwrap_or_default().into_iter().map(|i| serde_dynamo::aws_sdk_dynamodb_1::from_item(i).unwrap()).collect()
     };
     assert!(audits.iter().any(|a| a["action"] == "view-photos" && a["actorId"] == "coach1"));
+    assert!(audits.iter().any(|a| a["action"] == "view-video-queue" && a["actorId"] == "coach1"));
 }
