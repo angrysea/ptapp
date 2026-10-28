@@ -239,6 +239,9 @@ pub struct Item {
     /// `load_kg` from their max (strength.rs); in a program it stays empty.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub load_pct: Option<f64>,
+    /// Suggest a change for the next workout when this one goes well (WB-6).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progression: Option<crate::progression::ProgressionRule>,
     pub tempo: Option<String>,
     pub rest_sec: Option<u32>,
     pub rpe: Option<f64>,
@@ -334,6 +337,9 @@ impl Program {
                     }
                     if it.load_kg.is_some_and(|l| l < 0.0) {
                         return Err(format!("{}: load cannot be negative", it.exercise_name));
+                    }
+                    if let Some(rule) = &it.progression {
+                        rule.validate().map_err(|e| format!("{}: {e}", it.exercise_name))?;
                     }
                     if it.load_pct.is_some_and(|p| !(p > 0.0 && p <= crate::strength::MAX_PCT)) {
                         return Err(format!("{}: % of 1RM must be above 0 and at most {}", it.exercise_name, crate::strength::MAX_PCT));
@@ -749,6 +755,7 @@ mod tests {
             reps: "5".into(),
             load_kg: Some(100.0),
             load_pct: None,
+            progression: None,
             tempo: None,
             rest_sec: Some(180),
             rpe,

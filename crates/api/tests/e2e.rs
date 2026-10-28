@@ -990,4 +990,52 @@ async fn full_client_journey() {
     assert_eq!(r["restored"]["kg"], 100.0);
     let (_, all) = t.call("GET", "/clients/client1/records", Some("coach1"), None).await;
     assert!(all.as_array().unwrap().iter().any(|r| r["key"] == "pr-lift#R05" && r["kg"] == 100.0));
+
+    // --- progression suggestions (WB-6): a met rule suggests the next workout's load
+    let rule_item = |kg: f64| json!({ "exerciseId": "press", "exerciseName": "Press", "sets": 2, "reps": "5", "loadKg": kg,
+        "progression": { "maxRpe": 8, "addKg": 2.5, "capKg": 70 } });
+    let mut bad_rule = rule_item(60.0);
+    bad_rule["progression"] = json!({ "maxRpe": 8 });
+    let prog_body = |items: [Value; 2]| json!({ "name": "Progressive", "weeks": 1, "workouts": [
+        { "week": 1, "day": 1, "workout": { "name": "P1", "blocks": [{ "kind": "straight", "items": [items[0].clone()] }] } },
+        { "week": 1, "day": 3, "workout": { "name": "P2", "blocks": [{ "kind": "straight", "items": [items[1].clone()] }] } }
+    ] });
+    assert_eq!(t.call("POST", "/programs", Some("coach1"), Some(prog_body([bad_rule, rule_item(60.0)]))).await.0, StatusCode::BAD_REQUEST, "a rule must add something");
+    let (s, pp) = t.call("POST", "/programs", Some("coach1"), Some(prog_body([rule_item(60.0), rule_item(60.0)]))).await;
+    assert_eq!(s, StatusCode::OK, "{pp}");
+    let pday = today + chrono::Duration::days(300);
+    let (s, a) = t.call("POST", "/clients/client1/assignments", Some("coach1"), Some(json!({ "programId": pp["id"], "startDate": pday.to_string() }))).await;
+    assert_eq!(s, StatusCode::OK, "{a}");
+    let range = format!("/clients/client1/schedule?from={pday}&to={}", pday + chrono::Duration::days(6));
+    let (_, ws) = t.call("GET", &range, Some("client1"), None).await;
+    let find = |ws: &Value, name: &str| ws.as_array().unwrap().iter().find(|w| w["workout"]["name"] == name).unwrap().clone();
+    let p1 = find(&ws, "P1");
+    let item_id = p1["workout"]["blocks"][0]["items"][0]["id"].as_str().unwrap().to_string();
+    let press_log = |rpe: f64| json!({
+        "id": "press1", "scheduledId": p1["id"], "date": pday.to_string(), "workoutName": "P1", "status": "completed",
+        "updatedAt": chrono::Utc::now().to_rfc3339(),
+        "sets": ([0, 1].iter().map(|i| json!({ "itemId": item_id, "exerciseId": "press", "exerciseName": "Press", "setIndex": i, "reps": 5, "loadKg": 60.0, "rpe": rpe, "done": true })).collect::<Vec<_>>())
+    });
+    // too hard: nothing suggested
+    assert_eq!(t.call("PUT", "/clients/client1/logs/press1", Some("client1"), Some(press_log(9.0))).await.0, StatusCode::OK);
+    assert_eq!(t.call("GET", "/suggestions", Some("coach1"), None).await.1, json!([]));
+    // within the RPE: a suggestion for P2 (re-saving files it only once)
+    assert_eq!(t.call("PUT", "/clients/client1/logs/press1", Some("client1"), Some(press_log(8.0))).await.0, StatusCode::OK);
+    assert_eq!(t.call("PUT", "/clients/client1/logs/press1", Some("client1"), Some(press_log(7.5))).await.0, StatusCode::OK);
+    assert_eq!(t.call("GET", "/suggestions", Some("client1"), None).await.0, StatusCode::FORBIDDEN);
+    let (_, sugg) = t.call("GET", "/suggestions", Some("coach1"), None).await;
+    let sugg = sugg.as_array().unwrap();
+    assert_eq!(sugg.len(), 1, "{sugg:?}");
+    assert_eq!(sugg[0]["proposed"]["loadKg"], 62.5);
+    assert_eq!(sugg[0]["current"]["loadKg"], 60.0);
+    assert!(!sugg[0]["clientName"].as_str().unwrap().is_empty());
+    let sid = sugg[0]["id"].as_str().unwrap().to_string();
+    let long = json!({ "reps": "x".repeat(21) });
+    assert_eq!(t.call("POST", &format!("/suggestions/{sid}/accept"), Some("coach1"), Some(long)).await.0, StatusCode::BAD_REQUEST);
+    let (s, acc) = t.call("POST", &format!("/suggestions/{sid}/accept"), Some("coach1"), Some(json!({}))).await;
+    assert_eq!(s, StatusCode::OK, "{acc}");
+    let (_, ws) = t.call("GET", &range, Some("client1"), None).await;
+    assert_eq!(find(&ws, "P2")["workout"]["blocks"][0]["items"][0]["loadKg"], 62.5, "the next workout now has the new load");
+    assert_eq!(t.call("POST", &format!("/suggestions/{sid}/accept"), Some("coach1"), Some(json!({}))).await.0, StatusCode::BAD_REQUEST, "already handled");
+    assert_eq!(t.call("GET", "/suggestions", Some("coach1"), None).await.1, json!([]));
 }

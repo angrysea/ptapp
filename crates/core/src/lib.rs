@@ -5,6 +5,7 @@ pub mod bodycomp;
 pub mod coach;
 pub mod library;
 pub mod model;
+pub mod progression;
 pub mod schedule;
 pub mod records;
 pub mod stats;

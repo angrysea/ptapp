@@ -144,8 +144,14 @@ with sync_playwright() as p:
     expect(coach.locator(".item-card").first.get_by_label("Load unit")).to_have_value("w")  # lb, or % 1RM
     coach.locator(".item-card").first.get_by_label("Load", exact=True).fill("225")
     coach.locator(".item-card").first.get_by_label("Load", exact=True).press("Tab")
-    coach.locator(".item-card").first.get_by_label("Reps").fill("5")
-    coach.locator(".item-card").first.get_by_label("Reps").press("Tab")
+    coach.locator(".item-card").first.get_by_label("Reps", exact=True).fill("5")
+    coach.locator(".item-card").first.get_by_label("Reps", exact=True).press("Tab")
+    # a progression rule: suggest +5 lb next time when every set is at RPE 8 or lower
+    squat_card = coach.locator(".item-card").first
+    squat_card.get_by_text("Progression: None").click()
+    squat_card.get_by_label("Add load (lb)").fill("5"); squat_card.get_by_label("Add load (lb)").press("Tab")
+    squat_card.get_by_label("At RPE or lower").fill("8"); squat_card.get_by_label("At RPE or lower").press("Tab")
+    expect(squat_card.get_by_text("Progression: +5 lb, at RPE ≤ 8")).to_be_visible()
     add_block(coach, "emom")
     coach.locator(".block-card").nth(1).locator("select").nth(1).select_option(label="Burpee")
     shot(coach, "02-program-builder")

@@ -20,6 +20,6 @@
 ## A3: progression suggestions (WB-6)
 
 **Acceptance criteria:**
-- [ ] A coach sets a rule per program item (all reps at or below RPE x → add load or reps, with a cap)
-- [ ] After a log, matching rules propose next-week changes as pending suggestions
-- [ ] The coach accepts (updates the upcoming workout) or dismisses; pain flags block increases
+- [x] A coach sets a rule per program item (all reps at or below RPE x → add load or reps, with a cap)
+- [x] After a log, matching rules propose next-week changes as pending suggestions
+- [x] The coach accepts (updates the upcoming workout) or dismisses; pain flags block increases (suggestions card not covered by the journey)

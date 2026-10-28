@@ -107,6 +107,7 @@ mod tests {
             reps: "5".into(),
             load_kg,
             load_pct: pct,
+            progression: None,
             tempo: None,
             rest_sec: None,
             rpe: None,

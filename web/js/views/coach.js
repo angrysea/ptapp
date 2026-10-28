@@ -16,6 +16,7 @@ import { commentOn, renderThread } from './comments.js';
 import { intakeSummary, waiverSummary } from './intake.js';
 import { renderMetrics, stat } from './metrics.js';
 import { statusChip } from './workout.js';
+import { suggestionsCard } from './progression.js';
 
 /** The client's 1-5 rating of a workout; bad ones stand out. */
 function ratingChip(n) {
@@ -24,11 +25,12 @@ function ratingChip(n) {
 }
 
 export async function renderRoster() {
-  const [rows, invites] = await Promise.all([get('/clients', { cache: true }), get('/invites').catch(() => [])]);
+  const [rows, invites, suggestions] = await Promise.all([get('/clients', { cache: true }), get('/invites').catch(() => []), suggestionsCard()]);
   rows.sort((a, b) => (b.painFlag - a.painFlag) || ((a.adherence.pct ?? 101) - (b.adherence.pct ?? 101)));
   mount($app(),
     h('div', { class: 'spread page-head' }, h('h1', {}, 'Clients'), h('button', { class: 'primary', onclick: inviteSheet }, '+ Invite')),
     rows.length === 0 && h('div', { class: 'card muted' }, 'No clients yet. Invite your first client to get started.'),
+    suggestions,
     rows.map((r) => {
       const a = r.adherence;
       const flags = [

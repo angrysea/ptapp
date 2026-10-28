@@ -311,3 +311,11 @@ button.reply.new { background: var(--accent); color: var(--accent-ink); }
 @media (prefers-reduced-motion: reduce) { .pr-burst { animation: none; } }
 .pr-list { padding-left: 20px; }
 .pr-list li { margin-bottom: 6px; }
+
+/* Progression rules and suggestions (views/progression.js). */
+.rule { margin-top: 8px; }
+.rule summary { cursor: pointer; color: var(--accent); padding: 6px 0; font-size: 0.9rem; }
+.rule label { display: flex; flex-direction: column; gap: 4px; }
+.suggestion { padding: 10px 0; border-bottom: 1px solid var(--line); }
+.suggestion:last-child { border-bottom: 0; }
+.suggestion input { width: 6em; }

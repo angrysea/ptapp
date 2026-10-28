@@ -8,6 +8,7 @@ import { session } from '../session.js';
 import { rirTargetInfo, rpeTargetInfo } from '../effort.js';
 import { $app, busy, confirmSheet, field, h, mount, num, select, sheet, toast, units } from '../ui.js';
 import { loadExercises } from './exercises.js';
+import { ruleEditor } from './progression.js';
 
 const KINDS = [['straight', 'Straight sets'], ['superset', 'Superset'], ['circuit', 'Circuit'], ['amrap', 'AMRAP'], ['emom', 'EMOM'], ['interval', 'Intervals']];
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
@@ -208,7 +209,8 @@ export async function renderProgramEditor(id) {
           field('Rest (s)', numIn(it, 'restSec')),
           field('RPE', numIn(it, 'rpe', { step: '0.5', min: 1, max: 10 }), null, rpeTargetInfo()),
           field('RIR', numIn(it, 'rir', { min: 0, max: 10 }), null, rirTargetInfo())),
-        h('input', { value: it.notes, placeholder: 'Notes / cues for this exercise', onchange: (e) => { it.notes = e.target.value; touch(); } }))),
+        h('input', { value: it.notes, placeholder: 'Notes / cues for this exercise', onchange: (e) => { it.notes = e.target.value; touch(); } }),
+        ruleEditor(it, u, touch))),
       h('div', { style: 'margin-top:8px' }, exSel),
     );
   }
