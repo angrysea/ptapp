@@ -309,6 +309,15 @@ Resources:
             Path: /{proxy+}
             Method: OPTIONS
             Auth: { Authorizer: NONE }
+        # Calendar feeds (routes/sessions.rs): calendar apps can't sign in;
+        # the unguessable token in the path is the key.
+        CalendarFeed:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /cal/{file}
+            Method: GET
+            Auth: { Authorizer: NONE }
         # The public coach directory (routes/coaches.rs): read-only, no sign-in.
         PublicDirectory:
           Type: HttpApi

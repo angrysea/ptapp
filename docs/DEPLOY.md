@@ -39,6 +39,12 @@ Deploys run from a developer machine, not from GitHub. (The AWS Organization thi
    sam() { "/c/Program Files/Amazon/AWSSAMCLI/bin/sam.cmd" "$@"; }; export -f sam
    AWS_PROFILE=ptapp AWS_REGION=us-east-2 STAGE=dev COGNITO_DOMAIN_PREFIX=ptapp-online ADMIN_EMAILS=you@example.com ./scripts/deploy.sh
    ```
+4. **If Windows Smart App Control is on**, Windows blocks the small programs Rust builds and runs while compiling ("An Application Control policy has blocked this file", os error 4551, and Windows Security notifications). Build the Lambdas inside WSL Ubuntu instead: set up once inside Ubuntu (Rust from rustup already installed)
+   ```bash
+   rustup target add aarch64-unknown-linux-gnu
+   python3 -m venv ~/.local/share/cargo-lambda && ~/.local/share/cargo-lambda/bin/pip install cargo-lambda   # brings zig
+   ```
+   then add `LAMBDA_BUILD=wsl` to the deploy command. `scripts/build-lambda-wsl.sh` builds in Ubuntu (its cache is `~/.cache/ptapp-target`) and copies the two `bootstrap` files into `target/lambda/`; the rest of the deploy runs on Windows as usual.
 
 ## After the first deploy
 

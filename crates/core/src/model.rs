@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::bodycomp::{BodyCompResult, DensityEquation, SkinfoldMethod};
+use crate::bodycomp::{BodyCompResult, BodyFatReading, DensityEquation, SkinfoldMethod};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -156,6 +156,12 @@ pub struct Intake {
     pub sex: Option<Sex>,
     pub birth_date: Option<NaiveDate>,
     pub height_cm: Option<f64>,
+    /// The coach's own intake questions (ON-5), as answered: the questions
+    /// are kept with the answers, so editing them later doesn't garble these.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extra_questions: Vec<crate::checkin::Question>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extra_answers: BTreeMap<String, serde_json::Value>,
     pub updated_at: Option<DateTime<Utc>>,
 }
 
@@ -637,6 +643,9 @@ pub enum MetricKind {
     Weight,
     Tape,
     Skinfold,
+    /// A body-fat % from tape (US Navy) or a scan or scale (BM-6).
+    #[serde(rename = "bodyFat")]
+    BodyFat,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -663,6 +672,8 @@ pub struct Metric {
     pub weight_kg: Option<f64>,
     pub tape_cm: Option<BTreeMap<String, f64>>,
     pub skinfold: Option<SkinfoldRecord>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body_fat: Option<BodyFatReading>,
     #[serde(default)]
     pub notes: String,
     pub created_at: DateTime<Utc>,

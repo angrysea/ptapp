@@ -36,13 +36,13 @@ Phase 2 of `docs/ROADMAP.md`: make a coach fast enough to handle 30+ clients. It
 - [x] C3 BZ-3 habits with streaks on Today
 
 ### Slice D: video review
-- [ ] D1 VR-4 remaining drawing tools (angle with live degrees, circle, arrow, timer)
-- [ ] D2 VR-5 compare with an earlier clip or the exercise demo (side by side, synced)
+- [x] D1 VR-4 drawing tools (angle with live degrees, circle, arrow, timer)
+- [x] D2 VR-5 compare with an earlier clip or the exercise demo (side by side, synced)
 
 ### Slice E: business and records
-- [ ] E1 BZ-2 scheduling: coach availability, sessions, per-user `.ics` feed
-- [ ] E2 BZ-6 PDF progress report
-- [ ] E3 ON-5 coach intake templates; BM-6 Navy body-fat and external readings
+- [x] E1 BZ-2 scheduling: coach availability, sessions, per-user `.ics` feed
+- [x] E2 BZ-6 PDF progress report
+- [x] E3 ON-5 coach intake templates; BM-6 Navy body-fat and external readings
 
 ## Risks and mitigations
 
@@ -54,4 +54,4 @@ Phase 2 of `docs/ROADMAP.md`: make a coach fast enough to handle 30+ clients. It
 | Scheduler sweep grows with users | Low | One query per coach partition; fine well past 30 clients/coach |
 
 ## Open questions
-- Slice E's scheduling: is a calendar feed enough, or is two-way Google Calendar sync needed?
+- Scheduling: decided a calendar feed (works with Google, Apple, Outlook) rather than two-way Google sync (2026-10-29).

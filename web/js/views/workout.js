@@ -19,6 +19,7 @@ import { celebrate } from './records.js';
 import { commentOn } from './comments.js';
 import { checkinCard } from './checkins.js';
 import { habitTiles } from './habits.js';
+import { nextSessionCard } from './sessions.js';
 
 // A finished workout the server refused for good (not a 409, which means a
 // newer copy is already saved) goes back to being a draft, so it is neither
@@ -128,6 +129,8 @@ export async function renderToday() {
 
   const checkinSlot = h('div');
   checkinCard(checkinSlot, me); // FB-3: fills in once it has loaded (online only)
+  const sessionSlot = h('div');
+  nextSessionCard(sessionSlot); // BZ-2 (online only)
   const habitSlot = h('div');
   habitTiles(habitSlot, me); // BZ-3: works offline from the cached list
   mount($app(),
@@ -138,6 +141,7 @@ export async function renderToday() {
       !detail.waiver && h('a', { href: '#/waiver?onboarding=1' }, 'health screening & waiver')),
     h('h1', {}, `Hi ${me.name.split(' ')[0]}`),
     checkinSlot,
+    sessionSlot,
     h('h2', {}, 'Today'),
     todays.length ? todays.map((s) => card(s, true)) : h('div', { class: 'card muted' }, 'Rest day. Nothing scheduled today.'),
     habitSlot,

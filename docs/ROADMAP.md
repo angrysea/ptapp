@@ -20,16 +20,16 @@ Status legend: ✅ done in MVP · 🟡 partial · ⬜ not started
 
 | Area | Must (MVP) | Should / Could |
 |---|---|---|
-| Onboarding | ON-1 ✅ (emailed with SES, bound to the invited verified email) · ON-2 ✅ · ON-3 ✅ · coach profiles + public coach directory ✅ (`tasks/coaches`; tax IDs left to Stripe in BZ-1) | ON-4 ⬜ · ON-5 ⬜ |
-| Builder | WB-1 ✅ · WB-2 ✅ · WB-3 ✅ · WB-4 ✅ | WB-5 ⬜ · WB-6 ⬜ · WB-7 ⬜ |
-| Logging | LG-1 ✅ · LG-2 ✅ · LG-3 ✅ · LG-4 ✅ · LG-6 ✅ | LG-5 🟡 (e1RM trend; no PR events) · LG-7 🟡 (roster flags; no alerts) · LG-8 ⬜ |
-| Video submission | VS-1 ✅ · VS-2 ✅ · VS-3 ✅ · VS-4 ✅ (real-device checks pending, see `tasks/todo.md`) | VS-5 ⬜ |
-| Video reply | VR-1 ✅ · VR-2 ✅ · VR-3 ✅ (recorded in the browser, `tasks/reply`) | VR-4…VR-7 ⬜ |
-| Feedback | FB-1 ✅ · FB-2 ✅ | FB-3 ⬜ · FB-4 ⬜ |
+| Onboarding | ON-1 ✅ (emailed with SES, bound to the invited verified email) · ON-2 ✅ · ON-3 ✅ · coach profiles + public coach directory ✅ (`tasks/coaches`; tax IDs left to Stripe in BZ-1) | ON-4 🟡 (test-lift maxes; no baseline flag) · ON-5 ✅ (coach's extra questions after the standard intake) |
+| Builder | WB-1 ✅ · WB-2 ✅ · WB-3 ✅ · WB-4 ✅ | WB-5 ✅ (%1RM resolved from client maxes) · WB-6 ✅ (rules → coach-approved suggestions) · WB-7 ⬜ |
+| Logging | LG-1 ✅ · LG-2 ✅ · LG-3 ✅ · LG-4 ✅ · LG-6 ✅ | LG-5 ✅ (rep-max and e1RM records, celebrated) · LG-7 ✅ (alert inbox: pain at once, missed runs hourly, pushed) · LG-8 ⬜ |
+| Video submission | VS-1 ✅ · VS-2 ✅ · VS-3 ✅ · VS-4 ✅ (real-device checks pending, see `tasks/todo.md`) | VS-5 ✅ (filming tips per exercise) |
+| Video reply | VR-1 ✅ · VR-2 ✅ · VR-3 ✅ (recorded in the browser, `tasks/reply`) | VR-4 ✅ (pen, line, arrow, circle, angle, timer) · VR-5 ✅ (side by side or overlay, synced) · VR-6 ⬜ · VR-7 ⬜ |
+| Feedback | FB-1 ✅ · FB-2 ✅ | FB-3 ✅ (weekly check-ins, editable questions, 4-week view) · FB-4 ✅ (snippets with a / shortcut) |
 | AI | AI-6/AI-7 (whenever AI ships) | AI-1…AI-5 ⬜ |
-| Body metrics | BM-1 ✅ · BM-2 ✅ · BM-3 ✅ · BM-4 ✅ · BM-7 ✅ · BM-8 ✅ | BM-5 ✅ · BM-6 ⬜ |
-| Messaging | MS-1 ✅ (live via AppSync Events, polling fallback; coach inbox; text only) · MS-2 ✅ (Web Push; iPhone needs the Home Screen app) | MS-3 🟡 (comments anchor to log/set) · MS-4 ⬜ · MS-5 ⬜ · MS-6 ⬜ |
-| Business | BZ-1 ⬜ | BZ-2 ⬜ · BZ-3 ⬜ · BZ-4 ⬜ · BZ-5 ⬜ · BZ-6 ⬜ |
+| Body metrics | BM-1 ✅ · BM-2 ✅ · BM-3 ✅ · BM-4 ✅ · BM-7 ✅ · BM-8 ✅ | BM-5 ✅ · BM-6 ✅ (US Navy tape estimate; DEXA/BIA/scale readings) |
+| Messaging | MS-1 ✅ (live via AppSync Events, polling fallback; coach inbox; text only) · MS-2 ✅ (Web Push; iPhone needs the Home Screen app) | MS-3 ✅ (messages link to the workout, set or video) · MS-4 ✅ (reminders and scheduled messages, hourly sweep) · MS-5 🟡 (availability shown when booking) · MS-6 ⬜ |
+| Business | BZ-1 ⬜ | BZ-2 ✅ (availability, booking, private calendar feed) · BZ-3 ✅ (habits with streaks) · BZ-4 ⬜ · BZ-5 ⬜ · BZ-6 ✅ (printable progress report; PDF via the browser) |
 | NFRs | privacy ✅ (private photos, tenant checks, per-user offline cache, data agreement at sign-up) · audit log ✅ · offline ✅ · upload size limits ✅ · CI ✅ (tests on every push; deploys run locally) · backups ✅ (PITR + daily AWS Backup, 35 days; restore tested 2026-10-28, see DEPLOY.md) · MFA ⏸ (deferred by decision, 2026-10-28) · alarms ✅ (email) · export/delete ✅ (clients, self-service; admins suspend or delete coaches) · video retention ✅ (lifecycle on reviewed videos and replies) | |
 
 ---

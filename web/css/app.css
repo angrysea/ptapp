@@ -373,3 +373,38 @@ table.checkins thead th { white-space: nowrap; }
 .dot { width: 14px; height: 14px; border-radius: 50%; background: var(--line); }
 .dot.part { background: var(--warn-soft); border: 1px solid var(--warn); }
 .dot.on { background: var(--good); }
+
+/* Drawing over the review video (views/draw.js). */
+.draw-bar { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; margin: 6px 0; }
+.draw-bar button { min-width: 40px; }
+.draw-bar button.on { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.draw-bar .swatch { width: 32px; min-width: 32px; padding: 0; border: 2px solid var(--line); }
+.draw-bar .swatch.on { outline: 3px solid var(--accent); outline-offset: 1px; }
+.draw-bar .sep { width: 1px; height: 24px; background: var(--line); margin: 0 4px; }
+.review-canvas.drawing { touch-action: none; cursor: crosshair; }
+
+/* Scheduling (views/sessions.js). */
+.session-row { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.session-row:last-child { border-bottom: 0; }
+.session-row.cancelled strong { text-decoration: line-through; color: var(--muted); }
+.slot-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 6px; }
+.avail-row { flex-wrap: nowrap; align-items: center; margin-bottom: 6px; }
+.avail-row select { flex: 1 1 auto; min-width: 0; }
+.avail-row input { flex: 0 1 110px; min-width: 0; }
+.next-session { display: flex; justify-content: space-between; align-items: center; text-decoration: none; color: inherit; }
+
+/* The progress report (views/report.js), on screen and printed. */
+.report-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 12px; text-align: center; }
+.report table { width: 100%; border-collapse: collapse; font-size: 0.9rem; margin-top: 8px; }
+.report th, .report td { text-align: left; padding: 6px 4px; border-bottom: 1px solid var(--line); }
+.report-notes { min-height: 90px; padding: 8px; border: 1px dashed var(--line); border-radius: 8px; white-space: pre-wrap; }
+.report-notes:empty::before { content: attr(data-placeholder); color: var(--muted); }
+@media print {
+  :root { color-scheme: light; }
+  body { background: #fff !important; color: #000; }
+  #top, #tabs, .no-print, .toast, .sheet-backdrop { display: none !important; }
+  #app { padding: 0 !important; max-width: none !important; }
+  .card { box-shadow: none !important; border: 1px solid #ccc; break-inside: avoid; }
+  .report-notes { border: 0; }
+  .report-notes:empty { display: none; }
+}

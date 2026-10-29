@@ -69,6 +69,6 @@ async fn main() {
     }
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:9000").await.expect("bind :9000");
-    println!("API listening on http://localhost:9000 (DEV_AUTH on: send x-dev-user)");
+    println!("Local API listening on http://localhost:9000 (DEV_AUTH on: send x-dev-user)");
     axum::serve(listener, api::router(state)).await.unwrap();
 }

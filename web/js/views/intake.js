@@ -5,6 +5,7 @@ import { get, put, post } from '../api.js';
 import { go, query } from '../router.js';
 import { session } from '../session.js';
 import { $app, busy, field, fmtDateTime, h, mount, num, round, select, toast, units } from '../ui.js';
+import { answerAsText, missingAnswer, questionFields } from './checkins.js';
 
 export const WAIVER_VERSION = '2026-10';
 
@@ -27,7 +28,12 @@ const EQUIPMENT = ['barbell', 'dumbbells', 'kettlebells', 'machines', 'cables', 
 export async function renderIntake() {
   const me = session.profile;
   const onboarding = query().get('onboarding') === '1';
-  const intake = (await get(`/clients/${me.userId}/intake`, { cache: true })) || {};
+  const [stored, template] = await Promise.all([
+    get(`/clients/${me.userId}/intake`, { cache: true }),
+    get('/intake-template', { cache: true }).catch(() => ({ questions: [] })),
+  ]);
+  const intake = stored || {};
+  const extraAnswers = { ...(intake.extraAnswers || {}) };
   const u = units(me);
   const f = {
     goals: h('textarea', { value: intake.goals || '', placeholder: 'What do you want to achieve, and by when?' }),
@@ -53,10 +59,14 @@ export async function renderIntake() {
         field('Sex (for body-fat equations)', f.sex),
         field('Birth date', f.birth),
         field(`Height (${u.l})`, f.height)),
+      template.questions.length > 0 && [h('h3', {}, 'From your coach'), questionFields(template.questions, extraAnswers)],
       h('button', {
         class: 'primary block',
         onclick: (e) => busy(e.currentTarget, async () => {
+          const missing = missingAnswer(template.questions, extraAnswers);
+          if (missing) return toast(`“${missing.label}” needs an answer`, 'error');
           await put(`/clients/${me.userId}/intake`, {
+            extraAnswers,
             goals: f.goals.value, trainingHistory: f.history.value, schedule: f.schedule.value, injuries: f.injuries.value,
             equipment: equip.filter((c) => c.checked).map((c) => c.value),
             sex: f.sex.value || null, birthDate: f.birth.value || null, heightCm: u.fromL(f.height.value),
@@ -133,5 +143,6 @@ export function intakeSummary(intake, profile) {
     row('Equipment', (intake.equipment || []).join(', ')),
     row('Schedule', intake.schedule),
     row('Injuries / limitations', intake.injuries),
-    row('Details', [intake.sex, age != null && `${age} y`, num(intake.heightCm) && `${round(u.toL(intake.heightCm), 1)} ${u.l}`].filter(Boolean).join(' · ')));
+    row('Details', [intake.sex, age != null && `${age} y`, num(intake.heightCm) && `${round(u.toL(intake.heightCm), 1)} ${u.l}`].filter(Boolean).join(' · ')),
+    (intake.extraQuestions || []).map((q) => row(q.label, answerAsText(q, intake.extraAnswers?.[q.id]))));
 }

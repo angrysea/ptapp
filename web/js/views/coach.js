@@ -32,7 +32,8 @@ export async function renderRoster() {
   const alerts = await alertsCard(); // after the roster, which files new missed-workout alerts
   rows.sort((a, b) => (b.painFlag - a.painFlag) || ((a.adherence.pct ?? 101) - (b.adherence.pct ?? 101)));
   mount($app(),
-    h('div', { class: 'spread page-head' }, h('h1', {}, 'Clients'), h('button', { class: 'primary', onclick: inviteSheet }, '+ Invite')),
+    h('div', { class: 'spread page-head' }, h('h1', {}, 'Clients'),
+      h('div', { class: 'row' }, h('a', { class: 'btn', href: '#/schedule' }, '📅 Schedule'), h('button', { class: 'primary', onclick: inviteSheet }, '+ Invite'))),
     rows.length === 0 && h('div', { class: 'card muted' }, 'No clients yet. Invite your first client to get started.'),
     alerts,
     suggestions,
@@ -132,6 +133,7 @@ async function overview(el, client) {
   const d = await get(`/clients/${client.userId}/dashboard?weeks=8`);
   const a = d.adherence;
   mount(el,
+    h('a', { class: 'btn block', href: `#/c/${client.userId}/report`, style: 'margin-bottom:10px' }, '📄 Progress report (print or PDF)'),
     h('div', { class: 'card grid2' },
       stat(a.pct != null ? `${Math.round(a.pct)}%` : '—', 'Adherence (8 wks)'),
       stat(d.last28.pct != null ? `${Math.round(d.last28.pct)}%` : '—', 'Last 28 days'),

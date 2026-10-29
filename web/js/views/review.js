@@ -3,16 +3,19 @@
 // frame steps, scrubbing), marks the segments worth talking about, and
 // records a reply: the clip exactly as they play, pause, slow and step
 // through it, drawn on a canvas, with their voice over it and the clip's own
-// sound lowered underneath. Or they write a reply instead. Sending marks the
+// sound lowered underneath, and whatever they draw over it (draw.js, VR-4).
+// Or they write a reply instead. Sending marks the
 // video reviewed (routes/replies.rs); recordings upload through uploads.js,
 // so they survive a lost connection. Decisions: tasks/reply/plan.md.
 
 import { get, post } from '../api.js';
 import { go } from '../router.js';
-import { $app, busy, fmtDateTime, h, mount, toast } from '../ui.js';
+import { session } from '../session.js';
+import { $app, busy, fmtDate, fmtDateTime, h, mount, toast } from '../ui.js';
 import { queueReply } from '../uploads.js';
 import { askBeforeCellular } from '../videos.js';
 import { snippetTools } from './snippets.js';
+import { drawingTools } from './draw.js';
 
 const MAX_REPLY_S = 300;
 const FRAME = 1 / 30; // the clip's frame rate isn't exposed; 30 fps is the phones' default
@@ -45,6 +48,7 @@ export async function renderReview(cid, vid) {
   const video = h('video', { crossorigin: 'anonymous', playsinline: true, preload: 'auto', src: v.url, class: 'review-src' });
   const canvas = h('canvas', { class: 'review-canvas', 'aria-label': `${clientName}’s ${v.exerciseName}, set ${v.setIndex + 1}` });
   const ctx2d = canvas.getContext('2d');
+  const marks = drawingTools(canvas, () => video.currentTime); // VR-4
   const time = h('span', { class: 'small muted review-time' }, '0:00.0');
   const scrub = h('input', { type: 'range', min: 0, max: 1, step: 0.01, value: 0, 'aria-label': 'Position' });
   const playBtn = h('button', { class: 'primary', 'aria-label': 'Play', onclick: () => toggle() }, '▶');
@@ -92,10 +96,12 @@ export async function renderReview(cid, vid) {
   function seek(t) { playlist = null; video.currentTime = clamp(t); }
   video.addEventListener('play', () => { playBtn.textContent = '❚❚'; playBtn.setAttribute('aria-label', 'Pause'); });
   video.addEventListener('pause', () => { playBtn.textContent = '▶'; playBtn.setAttribute('aria-label', 'Play'); });
+  let mainW = 0, mainH = 0; // the clip's drawn size; the canvas widens beside it to compare
   video.addEventListener('loadedmetadata', () => {
     const scale = Math.min(1, 1280 / Math.max(video.videoWidth, video.videoHeight));
-    canvas.width = Math.round(video.videoWidth * scale);
-    canvas.height = Math.round(video.videoHeight * scale);
+    mainW = Math.round(video.videoWidth * scale);
+    mainH = Math.round(video.videoHeight * scale);
+    sizeCanvas();
     hi = Math.min(hi, video.duration);
     scrub.min = lo; scrub.max = hi;
     video.currentTime = lo;
@@ -159,10 +165,68 @@ export async function renderReview(cid, vid) {
   }
   drawSegs();
 
+  // ---- compare (VR-5): an earlier clip of the same exercise, or its demo, in step with this one
+  const ref = h('video', { crossorigin: 'anonymous', playsinline: true, muted: true, preload: 'auto', class: 'review-src' });
+  ref.muted = true;
+  let refOn = null; // { lo, mode: 'side' | 'overlay' }
+  const earlier = videos
+    .filter((x) => x.exerciseId === v.exerciseId && x.id !== v.id && x.url)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  const demoUrl = session.exercises?.[v.exerciseId]?.demoVideoUrl;
+  const sources = [
+    ...(demoUrl ? [{ key: 'demo', label: `${v.exerciseName} demo`, url: demoUrl, lo: 0 }] : []),
+    ...earlier.map((x) => ({ key: x.id, label: `${fmtDate(x.createdAt.slice(0, 10))} · set ${x.setIndex + 1}`, url: x.url, lo: x.trimStart ?? 0 })),
+  ];
+  function sizeCanvas() {
+    if (!mainW) return;
+    const side = refOn?.mode === 'side' && ref.videoWidth;
+    canvas.width = side ? mainW + Math.round((ref.videoWidth * mainH) / ref.videoHeight) : mainW;
+    canvas.height = mainH;
+  }
+  ref.addEventListener('loadedmetadata', sizeCanvas);
+  function syncRef() {
+    if (!refOn || ref.readyState < 1) return;
+    const want = refOn.lo + (video.currentTime - lo);
+    if (want > (ref.duration || Infinity)) { if (!ref.paused) ref.pause(); return; }
+    // Paused (stepping frames): match exactly. Playing: only correct real drift.
+    if (Math.abs(ref.currentTime - want) > (video.paused ? 0.02 : 0.15)) ref.currentTime = Math.max(0, want);
+    if (ref.playbackRate !== video.playbackRate) ref.playbackRate = video.playbackRate;
+    if (video.paused !== ref.paused) { if (video.paused) ref.pause(); else ref.play().catch(() => {}); }
+  }
+  const compareSel = h('select', { 'aria-label': 'Compare with', onchange: () => setRef() },
+    h('option', { value: '' }, 'Nothing'), sources.map((x) => h('option', { value: x.key }, x.label)));
+  const modeBtns = [['side', 'Side by side'], ['overlay', 'Overlay']].map(([m, label]) => h('button', {
+    class: `small ${m === 'side' ? 'primary' : ''}`, 'aria-pressed': String(m === 'side'),
+    onclick: () => {
+      if (refOn) refOn.mode = m;
+      modeBtns.forEach((b) => { const on = b.textContent === label; b.classList.toggle('primary', on); b.setAttribute('aria-pressed', String(on)); });
+      sizeCanvas();
+    },
+  }, label));
+  function setRef() {
+    if (recorder?.state === 'recording') { compareSel.value = refOn?.key || ''; return toast('Stop recording to change the comparison'); }
+    const src = sources.find((x) => x.key === compareSel.value);
+    const mode = modeBtns.find((b) => b.classList.contains('primary'))?.textContent === 'Overlay' ? 'overlay' : 'side';
+    refOn = src ? { key: src.key, lo: src.lo, mode } : null;
+    if (src) { ref.src = src.url; ref.currentTime = src.lo; } else { ref.removeAttribute('src'); ref.load(); }
+    sizeCanvas();
+  }
+  function drawFrame() {
+    ctx2d.drawImage(video, 0, 0, mainW, mainH);
+    if (refOn && ref.readyState >= 2) {
+      if (refOn.mode === 'side') ctx2d.drawImage(ref, mainW, 0, canvas.width - mainW, mainH);
+      else { ctx2d.globalAlpha = 0.5; ctx2d.drawImage(ref, 0, 0, mainW, mainH); ctx2d.globalAlpha = 1; }
+    }
+  }
+
   // ---- draw every animation frame, playing or not, so a recording runs at a steady rate
   function frame() {
     if (!canvas.isConnected) return cleanup();
-    if (video.readyState >= 2 && canvas.width) ctx2d.drawImage(video, 0, 0, canvas.width, canvas.height);
+    if (video.readyState >= 2 && canvas.width) {
+      syncRef();
+      drawFrame();
+      marks.paint(ctx2d);
+    }
     time.textContent = `${fmt(Math.max(0, video.currentTime - lo))} / ${fmt(Math.max(0, (Number.isFinite(hi) ? hi : video.duration || 0) - lo))}`;
     if (document.activeElement !== scrub) scrub.value = video.currentTime;
     requestAnimationFrame(frame);
@@ -265,6 +329,7 @@ export async function renderReview(cid, vid) {
     const acts = {
       ' ': toggle, ',': () => step(-1), '.': () => step(1), 1: () => setRate(0.25), 2: () => setRate(0.5), 3: () => setRate(1),
       ArrowLeft: () => seek(video.currentTime - 1), ArrowRight: () => seek(video.currentTime + 1), i: markInAt, o: markOutAt,
+      Escape: () => marks.setTool('none'),
     };
     if (acts[k]) { e.preventDefault(); acts[k](); }
   }
@@ -275,6 +340,7 @@ export async function renderReview(cid, vid) {
     if (recorder?.state === 'recording') recorder.stop();
     clearInterval(tick);
     video.pause();
+    ref.pause();
     mic?.getTracks().forEach((t) => t.stop());
     ac?.close().catch(() => {});
   }
@@ -284,7 +350,9 @@ export async function renderReview(cid, vid) {
     h('h1', {}, clientName),
     h('p', { class: 'muted' }, `${v.exerciseName} · set ${v.setIndex + 1} · ${fmtDateTime(v.createdAt)}`),
     video,
+    ref, // hidden, like the clip: both are drawn into the canvas
     canvas,
+    marks.toolbar,
     h('div', { class: 'review-controls' },
       h('div', { class: 'row' },
         h('button', { 'aria-label': 'Back one frame', onclick: () => step(-1) }, '⏮'),
@@ -293,10 +361,16 @@ export async function renderReview(cid, vid) {
         h('span', { class: 'speeds row' }, speedBtns),
         time),
       scrub,
-      h('p', { class: 'small muted keys' }, 'Keys: space play/pause · , and . step a frame · 1 2 3 speed · ← → one second · i and o mark a segment')),
+      h('p', { class: 'small muted keys' }, 'Keys: space play/pause · , and . step a frame · 1 2 3 speed · ← → one second · i and o mark a segment · Esc stops drawing')),
     h('div', { class: 'card' },
       h('div', { class: 'spread' }, h('h3', {}, 'Segments'), h('span', { class: 'row' }, inBtn, outBtn)),
       segList),
+    h('div', { class: 'card' },
+      h('h3', {}, 'Compare'),
+      sources.length === 0
+        ? h('p', { class: 'small muted' }, `Nothing to compare with yet: no earlier ${v.exerciseName} videos from ${clientName}, and no demo video for it.`)
+        : [h('p', { class: 'small muted' }, 'Plays in step with this set; shows in your recording too.'),
+          h('div', { class: 'row' }, h('div', { class: 'grow' }, compareSel), modeBtns)]),
     h('div', { class: 'card' },
       h('h3', {}, 'Video reply'),
       canRecord

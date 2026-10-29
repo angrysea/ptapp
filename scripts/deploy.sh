@@ -26,12 +26,19 @@ APP_DOMAIN="${APP_DOMAIN:-}"
 APP_CERT_ARN="${APP_CERT_ARN:-}"
 # ALARM_EMAIL gets an email when the API's errors spike (confirm AWS's first email).
 ALARM_EMAIL="${ALARM_EMAIL:-}"
+# LAMBDA_BUILD=wsl: build the Lambdas inside WSL Ubuntu (Windows with Smart App Control).
 # "false" if INVITE_FROM's domain is already an SES identity made outside this stack.
 CREATE_SENDER_IDENTITY="${CREATE_SENDER_IDENTITY:-true}"
 
 echo "==> building Lambdas (arm64): the API and the hourly sweep"
-cargo lambda build --release --arm64 --bin api
-cargo lambda build --release --arm64 --bin sweep
+# LAMBDA_BUILD=wsl builds inside WSL Ubuntu (scripts/build-lambda-wsl.sh), for
+# Windows machines where Smart App Control blocks Rust's build scripts.
+if [ "${LAMBDA_BUILD:-}" = "wsl" ]; then
+  MSYS_NO_PATHCONV=1 wsl.exe -d "${WSL_DISTRO:-Ubuntu}" --cd "$(pwd -W 2>/dev/null || pwd)" -- bash scripts/build-lambda-wsl.sh
+else
+  cargo lambda build --release --arm64 --bin api
+  cargo lambda build --release --arm64 --bin sweep
+fi
 
 # Web Push key (push.rs): made once per stage, kept in SSM, never printed.
 # MSYS_NO_PATHCONV stops Git Bash turning the /ptapp/... name into a Windows path.

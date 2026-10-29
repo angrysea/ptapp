@@ -389,6 +389,48 @@ with sync_playwright() as p:
     expect(client.locator("#sync")).to_be_hidden(timeout=15000)  # the queued values have synced
     coach.goto(coach.url.split("#")[0] + "#/c/client" + RUN + "/overview")
     expect(coach.locator(".habit-row", has_text="Water")).to_contain_text("🔥 1")
+    # the printable progress report (BZ-6), from the client's Overview
+    coach.get_by_role("link", name="📄 Progress report (print or PDF)").click()
+    expect(coach.get_by_role("heading", name="Progress report")).to_be_visible()
+    expect(coach.locator(".report")).to_contain_text("Strength: estimated 1RM")
+    expect(coach.locator(".report")).to_contain_text("Weekly check-ins")
+    expect(coach.locator(".report")).to_contain_text("1 of 1 (100%)")  # the habit counts from the day it was added
+    coach.get_by_label("Notes for the report").fill("Great first weeks. Next: push the squat to 245.")
+    coach.emulate_media(media="print")
+    expect(coach.get_by_role("button", name="Print / Save as PDF")).to_be_hidden()
+    shot(coach, "10e-report-print")
+    coach.emulate_media(media="screen")
+    coach.get_by_role("link", name="‹ Back").click()
+
+    # ---------------- body fat from tape (BM-6): the US Navy estimate
+    client.get_by_role("link", name="Progress").click()
+    client.get_by_role("button", name="Body fat").click()
+    client.get_by_role("button", name="Tape (US Navy)").click()
+    client.get_by_label("Neck (in)").fill("15")
+    client.get_by_label("Waist (in)").fill("33.5")
+    if not client.get_by_label("Height (in)").input_value():
+        client.get_by_label("Height (in)").fill("71")
+    client.get_by_role("button", name="Calculate & save").click()
+    expect(client.get_by_text(re.compile(r"Saved: \d+(\.\d)?% body fat"))).to_be_visible()
+    expect(client.locator("table").last).to_contain_text("Tape (US Navy)")
+
+    # ---------------- the coach's own intake questions (ON-5)
+    coach.get_by_role("link", name="Profile").click()
+    coach.get_by_role("button", name="Edit intake questions").click()
+    coach.get_by_role("button", name="+ Add a question").click()
+    coach.locator(".sheet").get_by_label("Question").fill("Your main sport")
+    coach.locator(".sheet").get_by_label("Answer").select_option("text")
+    coach.locator(".sheet").get_by_label("Required").check()
+    coach.locator(".sheet").get_by_role("button", name="Save", exact=True).click()
+    expect(coach.get_by_text("Intake questions saved")).to_be_visible()
+    client.get_by_role("link", name="Profile").click()
+    client.get_by_role("link", name="Intake questionnaire").click()
+    expect(client.get_by_role("heading", name="From your coach")).to_be_visible()
+    client.get_by_label("Your main sport").fill("Powerlifting")
+    client.get_by_role("button", name="Save", exact=True).click()
+    expect(client.get_by_text("Saved")).to_be_visible()
+    coach.goto(coach.url.split("#")[0] + "#/c/client" + RUN + "/intake")
+    expect(coach.get_by_text("Powerlifting")).to_be_visible()
 
     # ---------------- coach dashboard + feedback
     coach.get_by_role("button", name="Overview").click()
@@ -478,7 +520,7 @@ with sync_playwright() as p:
     coach.locator(".alert-row.pain").first.get_by_role("button", name="✓ Done").click()
     expect(coach.locator(".alert-row.pain")).to_have_count(0)
 
-    client.get_by_role("link", name="Coach").click()
+    client.locator('#tabs a[data-path="/coach"]').click()
     expect(client.get_by_text(re.compile("Keep the chest up"))).to_be_visible()
     shot(client, "14-client-messages")
     # the coach's set comment links to that workout (MS-3)
@@ -487,7 +529,7 @@ with sync_playwright() as p:
     about.click()
     expect(client).to_have_url(re.compile(r"#/workout/"))
     expect(client.get_by_role("button", name="💬 Ask your coach about this workout")).to_be_visible()
-    client.get_by_role("link", name="Coach").click()
+    client.locator('#tabs a[data-path="/coach"]').click()
 
     # ---------------- the coach replies to a set video, voice over the clip (VR-1..VR-3)
     coach.locator('#tabs a[data-path="/videos"]').click()
@@ -502,6 +544,37 @@ with sync_playwright() as p:
     assert 0.15 < before < 0.25, before  # six frames at 1/30 s
     coach.get_by_role("button", name="Out", exact=True).click()
     expect(coach.get_by_text(re.compile(r"^1\. 0:00\.0 – 0:00\.2"))).to_be_visible()
+    # drawing over the clip (VR-4): an angle (three taps), an arrow, the timer; drawn into the recording
+    assert coach.evaluate("import('./js/views/draw.js').then((m) => Math.round(m.angleAt({x:0,y:0},{x:0,y:10},{x:10,y:10})))") == 90
+    canvas = coach.locator("canvas.review-canvas")
+    box = canvas.bounding_box()
+    blank = coach.evaluate("document.querySelector('canvas.review-canvas').toDataURL()")
+    coach.get_by_role("button", name="Angle (tap three points)").click()
+    for fx, fy in [(0.3, 0.3), (0.3, 0.7), (0.7, 0.7)]:
+        coach.mouse.click(box["x"] + box["width"] * fx, box["y"] + box["height"] * fy)
+    coach.get_by_role("button", name="Arrow").click()
+    coach.mouse.move(box["x"] + box["width"] * 0.6, box["y"] + box["height"] * 0.2)
+    coach.mouse.down(); coach.mouse.move(box["x"] + box["width"] * 0.8, box["y"] + box["height"] * 0.4, steps=5); coach.mouse.up()
+    coach.get_by_role("button", name="Timer").click()
+    coach.wait_for_timeout(300)
+    assert coach.evaluate("document.querySelector('canvas.review-canvas').toDataURL()") != blank, "the marks are on the canvas"
+    shot(coach, "17-review-drawing")
+    coach.get_by_role("button", name="Undo the last mark").click()
+    coach.keyboard.press("Escape")  # back to no tool, so the canvas scrolls again
+    expect(coach.get_by_role("button", name="No tool (scroll and tap)")).to_have_attribute("aria-pressed", "true")
+    # compare (VR-5): the client's other squat clip, side by side then overlaid, kept in step
+    narrow = coach.evaluate("document.querySelector('canvas.review-canvas').width")
+    compare = coach.get_by_label("Compare with")
+    compare.select_option(index=1)
+    coach.wait_for_function(f"document.querySelector('canvas.review-canvas').width > {narrow}", timeout=15000)
+    coach.get_by_role("button", name="Forward one frame").click()
+    coach.wait_for_timeout(300)
+    drift = coach.evaluate("""() => { const [a, b] = document.querySelectorAll('video.review-src'); return Math.abs(a.currentTime - b.currentTime); }""")
+    assert drift < 0.1, drift  # both clips start at 0 here
+    shot(coach, "18-review-compare")
+    coach.get_by_role("button", name="Overlay").click()
+    coach.wait_for_function(f"document.querySelector('canvas.review-canvas').width === {narrow}")
+    compare.select_option("")
     coach.get_by_role("button", name="● Record reply").click()
     coach.get_by_role("button", name="Play", exact=True).click()
     time.sleep(2.5)
@@ -559,6 +632,30 @@ with sync_playwright() as p:
     client.get_by_label("Notify me about new messages and video replies").check()
     # no VAPID key on the local server, so it says so rather than failing
     expect(client.get_by_text("Notifications aren’t set up on this server yet.")).to_be_visible()
+
+    # ---------------- scheduling (BZ-2): the coach's hours, a client booking, the calendar feed
+    coach.get_by_role("link", name="Clients").click()
+    coach.get_by_role("link", name="📅 Schedule").click()
+    expect(coach.get_by_role("heading", name="When clients can book")).to_be_visible()
+    for day in range(7):
+        coach.get_by_role("button", name="+ Add hours").click()
+        coach.locator(".avail-row").nth(day).get_by_label("Day").select_option(str(day))
+    coach.get_by_label("Booking notice (hours)").fill("0")
+    coach.get_by_label("Location").fill("Iron Gym")
+    coach.get_by_role("button", name="Save hours").click()
+    expect(coach.get_by_text("Saved")).to_be_visible()
+    client.get_by_role("link", name="Today").click()
+    client.get_by_role("link", name=re.compile("Book a session with your coach")).click()
+    expect(client.get_by_role("heading", name="Book a session")).to_be_visible()
+    client.locator(".slot-grid button").first.click()
+    client.get_by_role("button", name="Book", exact=True).click()
+    expect(client.get_by_text("Booked; your coach has been told")).to_be_visible()
+    expect(client.locator(".session-row")).to_have_count(1)
+    shot(client, "19-client-sessions")
+    coach.reload()
+    expect(coach.locator(".session-row", has_text="Sam Client")).to_be_visible()
+    client.get_by_role("link", name="Profile").click()
+    expect(client.get_by_label("Calendar feed link")).to_have_value(re.compile(r"/cal/[a-z0-9]+\.ics$"))
 
     # ---------------- reminders and automated messages (MS-4)
     coach.get_by_role("link", name="Profile").click()

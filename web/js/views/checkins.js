@@ -36,6 +36,30 @@ export async function renderCheckin() {
   const existing = checkins.find((c) => c.weekStart === thisWeek);
   const questions = existing?.questions || template.questions;
   const answers = { ...(existing?.answers || {}) };
+  mount($app(),
+    h('button', { class: 'ghost small', onclick: () => go('/') }, '‹ Today'),
+    h('h1', {}, 'Weekly check-in'),
+    h('p', { class: 'muted' }, `Week of ${fmtDate(thisWeek)}`),
+    h('div', { class: 'card' },
+      questionFields(questions, answers),
+      h('button', {
+        class: 'primary block', style: 'margin-top:12px',
+        onclick: (e) => busy(e.currentTarget, async () => {
+          const missing = missingAnswer(questions, answers);
+          if (missing) return toast(`“${missing.label}” needs an answer`, 'error');
+          await api('PUT', `/clients/${me.userId}/checkins/${thisWeek}`, { answers });
+          toast(existing ? 'Check-in updated' : 'Check-in sent to your coach');
+          go('/');
+        }),
+      }, existing ? 'Save changes' : 'Send check-in')),
+  );
+}
+
+/** The first required question without an answer, if any. */
+export const missingAnswer = (questions, answers) => questions.find((q) => q.required && (answers[q.id] == null || answers[q.id] === ''));
+
+/** A labelled control per question, writing into `answers` (check-ins and intake, ON-5). */
+export function questionFields(questions, answers) {
   const control = (q) => {
     const v = answers[q.id];
     if (q.kind === 'scale') {
@@ -62,26 +86,13 @@ export async function renderCheckin() {
     }
     return h('textarea', { value: v ?? '', maxlength: 2000, 'aria-label': q.label, oninput: (e) => { answers[q.id] = e.target.value; } });
   };
-  mount($app(),
-    h('button', { class: 'ghost small', onclick: () => go('/') }, '‹ Today'),
-    h('h1', {}, 'Weekly check-in'),
-    h('p', { class: 'muted' }, `Week of ${fmtDate(thisWeek)}`),
-    h('div', { class: 'card' },
-      questions.map((q) => h('div', { class: 'checkin-q' },
-        h('label', {}, q.label, q.required ? '' : h('span', { class: 'muted small' }, ' (optional)'), q.kind === 'number' && q.unit ? h('span', { class: 'muted small' }, ` · ${q.unit}`) : ''),
-        control(q))),
-      h('button', {
-        class: 'primary block', style: 'margin-top:12px',
-        onclick: (e) => busy(e.currentTarget, async () => {
-          const missing = questions.find((q) => q.required && (answers[q.id] == null || answers[q.id] === ''));
-          if (missing) return toast(`“${missing.label}” needs an answer`, 'error');
-          await api('PUT', `/clients/${me.userId}/checkins/${thisWeek}`, { answers });
-          toast(existing ? 'Check-in updated' : 'Check-in sent to your coach');
-          go('/');
-        }),
-      }, existing ? 'Save changes' : 'Send check-in')),
-  );
+  return questions.map((q) => h('div', { class: 'checkin-q' },
+    h('label', {}, q.label, q.required ? '' : h('span', { class: 'muted small' }, ' (optional)'), q.kind === 'number' && q.unit ? h('span', { class: 'muted small' }, ` · ${q.unit}`) : ''),
+    control(q)));
 }
+
+/** "8 hours", "Yes", "—": an answer as text, for summaries. */
+export const answerAsText = (q, v) => answerText(q, v);
 
 /** The coach's Check-ins tab: the last four weeks side by side. */
 export async function checkinsTab(el, client) {
@@ -107,14 +118,20 @@ export function checkinSettingsCard() {
   return h('div', { class: 'card' },
     h('h3', {}, 'Weekly check-in'),
     h('p', { class: 'muted small' }, 'Your clients answer these each week from their Today screen.'),
-    h('button', { class: 'block', onclick: () => editQuestions() }, 'Edit check-in questions'));
+    h('button', { class: 'block', onclick: () => editQuestions(CHECKIN) }, 'Edit check-in questions'),
+    h('h3', { style: 'margin-top:14px' }, 'Intake form'),
+    h('p', { class: 'muted small' }, 'New clients answer the standard intake (goals, history, injuries, sex, birth date, height). Add your own questions after it.'),
+    h('button', { class: 'block', onclick: () => editQuestions(INTAKE) }, 'Edit intake questions'));
 }
 
-async function editQuestions() {
-  const t = await get('/checkin-template');
+const CHECKIN = { path: '/checkin-template', title: 'Check-in questions', help: 'Changes apply from the next check-in; past weeks keep the questions they answered.', saved: 'Check-in questions saved' };
+const INTAKE = { path: '/intake-template', title: 'Extra intake questions', help: 'Shown after the standard intake. Clients who already filled it in see them next time they open it; answers keep the questions they answered.', saved: 'Intake questions saved', allowEmpty: true };
+
+async function editQuestions(kind) {
+  const t = await get(kind.path);
   const qs = t.questions.map((q) => ({ ...q }));
   const list = h('div');
-  const draw = () => mount(list, qs.map((q, i) => h('div', { class: 'item-card' },
+  const draw = () => mount(list, qs.length === 0 && h('p', { class: 'muted small' }, 'No questions yet.'), qs.map((q, i) => h('div', { class: 'item-card' },
     field('Question', h('input', { value: q.label, maxlength: 120, oninput: (e) => { q.label = e.target.value; } })),
     h('div', { class: 'grid2' },
       field('Answer', h('select', { onchange: (e) => { q.kind = e.target.value; draw(); } },
@@ -127,8 +144,8 @@ async function editQuestions() {
         h('button', { class: 'small ghost', 'aria-label': `Remove “${q.label}”`, onclick: () => { qs.splice(i, 1); draw(); } }, '✕'))))));
   draw();
   const sh = sheet(
-    h('h2', {}, 'Check-in questions'),
-    h('p', { class: 'muted small' }, 'Changes apply from the next check-in; past weeks keep the questions they answered.'),
+    h('h2', {}, kind.title),
+    h('p', { class: 'muted small' }, kind.help),
     list,
     h('button', { class: 'block', onclick: () => { qs.push({ id: `q${Date.now().toString(36)}`, kind: 'scale', label: '', required: false }); draw(); } }, '+ Add a question'),
     h('div', { class: 'row', style: 'margin-top:8px' },
@@ -136,8 +153,9 @@ async function editQuestions() {
       h('button', {
         class: 'primary grow',
         onclick: (e) => busy(e.currentTarget, async () => {
-          await api('PUT', '/checkin-template', { questions: qs.map((q) => ({ ...q, unit: q.kind === 'number' ? q.unit || null : null })) });
-          toast('Check-in questions saved');
+          if (!qs.length && !kind.allowEmpty) throw new Error('A check-in needs at least one question');
+          await api('PUT', kind.path, { questions: qs.map((q) => ({ ...q, unit: q.kind === 'number' ? q.unit || null : null })) });
+          toast(kind.saved);
           sh.close();
         }),
       }, 'Save')),

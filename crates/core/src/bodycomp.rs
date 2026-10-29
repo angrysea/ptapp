@@ -168,6 +168,71 @@ fn round(v: f64, places: i32) -> f64 {
     (v * f).round() / f
 }
 
+// ---------------------------------------------------------------- other estimates (BM-6)
+
+/// Where a body-fat reading came from.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum BodyFatSource {
+    /// Worked out from tape measurements (US Navy formula).
+    Navy,
+    Dexa,
+    /// Bioimpedance (BIA) device.
+    Bia,
+    /// A smart scale.
+    Scale,
+    Other,
+}
+
+/// The tape measurements behind a Navy estimate, in cm.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct NavyTape {
+    pub height_cm: f64,
+    pub neck_cm: f64,
+    pub waist_cm: f64,
+    /// Needed for women.
+    #[serde(default)]
+    pub hip_cm: Option<f64>,
+}
+
+/// A body-fat percentage that isn't from calipers (those are SkinfoldRecord).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct BodyFatReading {
+    pub source: BodyFatSource,
+    pub pct: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub navy: Option<NavyTape>,
+}
+
+/// US Navy circumference estimate (Hodgdon & Beckett), metric form, to 0.1%.
+/// Men: waist at the navel; women: waist at its narrowest, plus hips.
+pub fn navy_body_fat(sex: Sex, t: &NavyTape) -> Result<f64, String> {
+    let ok = |v: f64| (10.0..=300.0).contains(&v);
+    if !(100.0..=250.0).contains(&t.height_cm) || !ok(t.neck_cm) || !ok(t.waist_cm) {
+        return Err("height must be 100-250 cm and the tape measurements 10-300 cm".into());
+    }
+    let pct = match sex {
+        Sex::Male => {
+            let d = t.waist_cm - t.neck_cm;
+            if d <= 0.0 {
+                return Err("the waist must measure more than the neck".into());
+            }
+            495.0 / (1.0324 - 0.19077 * d.log10() + 0.15456 * t.height_cm.log10()) - 450.0
+        }
+        Sex::Female => {
+            let hip = t.hip_cm.filter(|h| ok(*h)).ok_or("women's estimates need a hip measurement")?;
+            let d = t.waist_cm + hip - t.neck_cm;
+            495.0 / (1.29579 - 0.35004 * d.log10() + 0.22100 * t.height_cm.log10()) - 450.0
+        }
+    };
+    if !(2.0..=70.0).contains(&pct) {
+        return Err("those measurements don't give a believable body-fat percentage; check them".into());
+    }
+    Ok((pct * 10.0).round() / 10.0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -245,6 +310,18 @@ mod tests {
         let r = run(SkinfoldMethod::DurninWomersley4, DensityEquation::Siri, Sex::Female, 35.0, &s);
         assert!((r.body_density - 1.03493).abs() < 1e-5);
         assert_eq!(r.body_fat_pct, 28.3); // 495/1.034927 - 450 = 28.29
+    }
+
+    #[test]
+    fn navy_estimates() {
+        // 180 cm man, neck 38, waist 85: 16.1% (checked against the published formula)
+        let man = NavyTape { height_cm: 180.0, neck_cm: 38.0, waist_cm: 85.0, hip_cm: None };
+        assert_eq!(navy_body_fat(Sex::Male, &man), Ok(16.1));
+        // 165 cm woman, neck 32, waist 70, hips 95: 24.9%
+        let woman = NavyTape { height_cm: 165.0, neck_cm: 32.0, waist_cm: 70.0, hip_cm: Some(95.0) };
+        assert_eq!(navy_body_fat(Sex::Female, &woman), Ok(24.9));
+        assert!(navy_body_fat(Sex::Female, &NavyTape { hip_cm: None, ..woman }).is_err());
+        assert!(navy_body_fat(Sex::Male, &NavyTape { waist_cm: 30.0, ..man }).is_err(), "waist under neck");
     }
 
     #[test]

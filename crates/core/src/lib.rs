@@ -10,6 +10,7 @@ pub mod library;
 pub mod model;
 pub mod progression;
 pub mod schedule;
+pub mod sessions;
 pub mod records;
 pub mod stats;
 pub mod strength;

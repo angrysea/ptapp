@@ -109,6 +109,10 @@ pub async fn put_intake(
     if scope.by_coach {
         return Err(ApiError::Forbidden("the client fills in their own intake"));
     }
+    // The coach's own questions (ON-5): answered against their current list.
+    let template = super::checkins::intake_template_of(&st, &scope.client.coach_id).await?;
+    intake.extra_answers = template.clean_answers(std::mem::take(&mut intake.extra_answers)).map_err(bad_request)?;
+    intake.extra_questions = template.questions;
     intake.updated_at = Some(Utc::now());
     st.store.put(&scope.pk(), "INTAKE", &intake).await?;
     // Sex and birth date drive the skinfold equations, so mirror them onto the profile.

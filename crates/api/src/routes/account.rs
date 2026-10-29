@@ -109,6 +109,7 @@ async fn delete_push(st: &AppState, user_id: &str) -> ApiResult<()> {
 /// The user's records (profile, push subscriptions) and their sign-in.
 async fn delete_user(st: &AppState, user_id: &str) -> ApiResult<()> {
     delete_push(st, user_id).await?;
+    super::sessions::forget_calendar(st, user_id).await?;
     delete_partition(st, &format!("USER#{user_id}")).await?;
     if let Some(cog) = &st.cognito {
         cog.client

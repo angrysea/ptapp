@@ -163,7 +163,80 @@ async function tape(el, client) {
 
 // ------------------------------------------------------------ skinfold (BM-3, BM-4, BM-5)
 
-async function skinfold(el, client) {
+/** The Body fat tab: calipers, the US Navy tape estimate, or a scan or scale reading (BM-6). */
+async function skinfold(el, client, mode = 'calipers') {
+  const body = h('div');
+  mount(el, subtabs([['calipers', 'Calipers'], ['navy', 'Tape (US Navy)'], ['reading', 'Scan or scale']], mode, (m) => skinfold(el, client, m)), body);
+  return mode === 'calipers' ? calipers(body, client) : otherBodyFat(body, client, mode);
+}
+
+const SOURCES = [['dexa', 'DEXA scan'], ['bia', 'Bioimpedance (BIA)'], ['scale', 'Smart scale'], ['other', 'Other']];
+const sourceLabel = (s) => (s === 'navy' ? 'Tape (US Navy)' : SOURCES.find(([k]) => k === s)?.[1] || s);
+
+async function otherBodyFat(el, client, mode) {
+  const u = units(session.profile);
+  const [list, intake] = await Promise.all([
+    get(metricsPath(client, 'bodyFat'), { cache: true }),
+    get(`/clients/${client.userId}/intake`).catch(() => null),
+  ]);
+  const date = h('input', { type: 'date', value: todayIso() });
+  const numIn = (value) => h('input', { type: 'number', inputmode: 'decimal', step: '0.1', value: value ?? '' });
+  const result = h('div');
+  const redraw = () => skinfold(el.parentElement, client, mode);
+  const save = (body) => async (e) => busy(e.currentTarget, async () => {
+    const m = await post(`/clients/${client.userId}/metrics`, { date: date.value, kind: 'bodyFat', bodyFat: body() });
+    toast(`Saved: ${m.bodyFat.pct}% body fat`);
+    redraw();
+  });
+
+  let form;
+  if (mode === 'navy') {
+    if (!client.sex) {
+      form = h('div', { class: 'banner' }, 'The Navy estimate needs sex. ', session.isCoach ? 'Ask the client to complete their intake.' : h('a', { href: '#/intake' }, 'Complete your intake.'));
+    } else {
+      const female = client.sex === 'female';
+      const height = numIn(intake?.heightCm != null ? u.toL(intake.heightCm) : '');
+      const neck = numIn(), waist = numIn(), hip = numIn();
+      form = h('div', { class: 'card' },
+        h('p', { class: 'muted small' }, female
+          ? 'Measure the neck just below the larynx, the waist at its narrowest, and the hips at their widest. Relaxed, tape snug but not tight.'
+          : 'Measure the neck just below the larynx and the waist level with the navel. Relaxed, tape snug but not tight.'),
+        h('div', { class: 'grid2' },
+          field('Date', date), field(`Height (${u.l})`, height),
+          field(`Neck (${u.l})`, neck), field(`Waist (${u.l})`, waist),
+          female && field(`Hips (${u.l})`, hip)),
+        h('button', {
+          class: 'primary block',
+          onclick: save(() => ({ source: 'navy', navy: { heightCm: u.fromL(height.value), neckCm: u.fromL(neck.value), waistCm: u.fromL(waist.value), hipCm: female ? u.fromL(hip.value) : null } })),
+        }, 'Calculate & save'));
+    }
+  } else {
+    const source = select(SOURCES, 'dexa');
+    const pct = numIn();
+    form = h('div', { class: 'card' },
+      h('p', { class: 'muted small' }, 'Record a body-fat percentage measured elsewhere. Different methods read differently, so compare like with like.'),
+      h('div', { class: 'grid2' }, field('Date', date), field('Measured by', source), field('Body fat (%)', pct)),
+      h('button', { class: 'primary block', onclick: save(() => ({ source: source.value, pct: num(pct.value) })) }, 'Save'));
+  }
+
+  const sorted = [...list].sort((a, b) => a.date.localeCompare(b.date));
+  const bySource = {};
+  for (const m of sorted) (bySource[m.bodyFat.source] ||= []).push({ x: m.date, y: m.bodyFat.pct });
+  mount(el,
+    form,
+    result,
+    sorted.length > 0 && h('div', { class: 'card' }, h('h3', {}, 'Body fat % (tape, scans and scales)'),
+      lineChart(Object.entries(bySource).map(([s, points]) => ({ label: sourceLabel(s), points })))),
+    sorted.length > 0 && h('div', { class: 'card' }, h('h3', {}, 'History'),
+      h('table', {}, h('tr', {}, h('th', {}, 'Date'), h('th', {}, 'BF%'), h('th', {}, 'How'), h('th', {})),
+        [...sorted].reverse().map((m) => h('tr', {},
+          h('td', {}, fmtDate(m.date)), h('td', {}, m.bodyFat.pct),
+          h('td', { class: 'small muted' }, `${sourceLabel(m.bodyFat.source)} · by ${m.takenBy}`),
+          h('td', {}, canDeleteMetric(m) && h('button', { class: 'small ghost', onclick: () => deleteMetric(client, m, redraw) }, '✕')))))),
+  );
+}
+
+async function calipers(el, client) {
   const u = units(session.profile);
   const [list, weights] = await Promise.all([
     get(metricsPath(client, 'skinfold'), { cache: true }),
@@ -242,7 +315,7 @@ async function skinfold(el, client) {
           h('td', {}, fmtDate(m.date)), h('td', {}, m.skinfold.result.bodyFatPct),
           h('td', {}, m.skinfold.result.leanMassKg != null ? u.toW(m.skinfold.result.leanMassKg) : '—'),
           h('td', { class: 'small muted' }, `${METHODS.find(([k]) => k === m.skinfold.method)[1]} / ${m.skinfold.equation} · by ${m.takenBy}`),
-          h('td', {}, canDeleteMetric(m) && h('button', { class: 'small ghost', onclick: () => deleteMetric(client, m, () => skinfold(el, client)) }, '✕')))))),
+          h('td', {}, canDeleteMetric(m) && h('button', { class: 'small ghost', onclick: () => deleteMetric(client, m, () => calipers(el, client)) }, '✕')))))),
   );
 }
 

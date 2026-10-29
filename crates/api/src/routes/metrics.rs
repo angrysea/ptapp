@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use axum::extract::{Path, Query, State};
 use axum::Json;
 use chrono::{Duration, NaiveDate, Utc};
-use ptcore::bodycomp::{compute, DensityEquation, SkinfoldInput, SkinfoldMethod};
+use ptcore::bodycomp::{compute, navy_body_fat, BodyFatReading, BodyFatSource, DensityEquation, NavyTape, SkinfoldInput, SkinfoldMethod};
 use ptcore::model::{Metric, MetricKind, Photo, PhotoPose, Role, SkinfoldRecord, TAPE_SITES};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -49,8 +49,19 @@ pub struct MetricIn {
     weight_kg: Option<f64>,
     tape_cm: Option<BTreeMap<String, f64>>,
     skinfold: Option<SkinfoldIn>,
+    body_fat: Option<BodyFatIn>,
     #[serde(default)]
     notes: String,
+}
+
+/// A body-fat reading: tape measurements for the Navy formula, or a
+/// percentage from a scan or scale.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BodyFatIn {
+    source: BodyFatSource,
+    pct: Option<f64>,
+    navy: Option<NavyTape>,
 }
 
 pub async fn create(
@@ -68,6 +79,7 @@ pub async fn create(
         weight_kg: None,
         tape_cm: None,
         skinfold: None,
+        body_fat: None,
         notes: body.notes,
         created_at: Utc::now(),
     };
@@ -119,6 +131,21 @@ pub async fn create(
                 age_years: (age * 10.0).round() / 10.0,
                 body_weight_kg: sf.body_weight_kg,
                 result,
+            });
+        }
+        MetricKind::BodyFat => {
+            let bf = body.body_fat.ok_or_else(|| bad_request("a body-fat reading is required"))?;
+            m.body_fat = Some(match bf.source {
+                BodyFatSource::Navy => {
+                    let tape = bf.navy.ok_or_else(|| bad_request("the Navy estimate needs height, neck and waist (and hips for women)"))?;
+                    let sex = scope.client.sex.ok_or_else(|| bad_request("set sex in the intake form first"))?;
+                    let pct = navy_body_fat(sex, &tape).map_err(bad_request)?;
+                    BodyFatReading { source: bf.source, pct, navy: Some(tape) }
+                }
+                _ => {
+                    let pct = bf.pct.filter(|p| (2.0..=70.0).contains(p)).ok_or_else(|| bad_request("body fat must be 2-70%"))?;
+                    BodyFatReading { source: bf.source, pct: (pct * 10.0).round() / 10.0, navy: None }
+                }
             });
         }
     }

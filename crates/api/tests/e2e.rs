@@ -28,6 +28,16 @@ impl T {
         let bytes = axum::body::to_bytes(res.into_body(), 10 << 20).await.unwrap();
         (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
     }
+
+    /// A GET whose body isn't JSON (the calendar feed).
+    async fn text(&self, path: &str) -> (StatusCode, String, String) {
+        let req = Request::builder().method("GET").uri(path).body(Body::empty()).unwrap();
+        let res = self.app.clone().oneshot(req).await.unwrap();
+        let status = res.status();
+        let kind = res.headers().get("content-type").and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
+        let bytes = axum::body::to_bytes(res.into_body(), 10 << 20).await.unwrap();
+        (status, kind, String::from_utf8_lossy(&bytes).into_owned())
+    }
 }
 
 #[tokio::test]
@@ -1195,4 +1205,83 @@ async fn full_client_journey() {
     let (_, hs) = t.call("GET", "/clients/client1/habits", Some("client1"), None).await;
     assert!(hs["streaks"].get(&wid).is_none());
     assert!(hs["habits"].as_array().unwrap().iter().any(|h| h["id"] == wid.as_str() && h["active"] == false));
+
+    // --- scheduling (BZ-2): availability, open slots, booking, cancelling, the calendar feed
+    let every_day = (0..7).map(|d| json!({ "day": d, "start": "08:00:00", "end": "10:00:00" })).collect::<Vec<_>>();
+    assert_eq!(t.call("PUT", "/availability", Some("coach1"), Some(json!({ "windows": [{ "day": 0, "start": "10:00:00", "end": "09:00:00" }], "minutes": 60 }))).await.0, StatusCode::BAD_REQUEST);
+    assert_eq!(t.call("PUT", "/availability", Some("client1"), Some(json!({ "windows": every_day, "minutes": 60 }))).await.0, StatusCode::FORBIDDEN);
+    let (s, av) = t.call("PUT", "/availability", Some("coach1"), Some(json!({ "windows": every_day, "minutes": 60, "noticeHours": 0, "location": " Gym floor " }))).await;
+    assert_eq!(s, StatusCode::OK, "{av}");
+    let (_, open) = t.call("GET", "/clients/client1/slots?days=3", Some("client1"), None).await;
+    assert_eq!(open["timeZone"], "America/Chicago", "slots are in the coach's zone");
+    let slots = open["slots"].as_array().unwrap().clone();
+    assert!(slots.len() >= 4, "{open}");
+    let first = slots[0].clone();
+    let (s, booked) = t.call("POST", "/clients/client1/sessions", Some("client1"), Some(json!({ "start": first, "notes": "Deadlift technique" }))).await;
+    assert_eq!(s, StatusCode::OK, "{booked}");
+    assert_eq!((booked["minutes"].as_u64(), booked["location"].as_str()), (Some(60), Some("Gym floor")));
+    assert_eq!(t.call("POST", "/clients/client1/sessions", Some("client1"), Some(json!({ "start": first }))).await.0, StatusCode::CONFLICT, "taken");
+    let (_, open2) = t.call("GET", "/clients/client1/slots?days=3", Some("client1"), None).await;
+    assert!(!open2["slots"].as_array().unwrap().contains(&first));
+    assert_eq!(t.call("POST", "/clients/client1/sessions", Some("client1"), Some(json!({ "start": "2030-01-01T03:17:00Z" }))).await.0, StatusCode::BAD_REQUEST, "not a slot, and too far ahead");
+    // the coach books outside their hours, but not over another session
+    assert_eq!(t.call("POST", "/clients/client1/sessions", Some("coach1"), Some(json!({ "start": first, "minutes": 30 }))).await.0, StatusCode::BAD_REQUEST);
+    let late = (chrono::Utc::now() + chrono::Duration::days(2)).format("%Y-%m-%dT22:00:00Z").to_string();
+    let (s, extra) = t.call("POST", "/clients/client1/sessions", Some("coach1"), Some(json!({ "start": late, "minutes": 45 }))).await;
+    assert_eq!(s, StatusCode::OK, "{extra}");
+    let (_, mine) = t.call("GET", "/sessions", Some("client1"), None).await;
+    assert_eq!(mine.as_array().unwrap().len(), 2);
+    let (_, theirs) = t.call("GET", "/sessions", Some("coach1"), None).await;
+    assert!(theirs.as_array().unwrap().iter().any(|x| x["id"] == booked["id"]));
+    // the client cancels; the slot opens again
+    let cancel = format!("/clients/client1/sessions/{}/cancel", booked["id"].as_str().unwrap());
+    let (s, c) = t.call("POST", &cancel, Some("client1"), None).await;
+    assert_eq!((s, c["status"].as_str()), (StatusCode::OK, Some("cancelled")));
+    let (_, open3) = t.call("GET", "/clients/client1/slots?days=3", Some("client1"), None).await;
+    assert!(open3["slots"].as_array().unwrap().contains(&first));
+    // the private calendar feed: no sign-in; a reset turns the old link off
+    let (_, cal) = t.call("GET", "/me/calendar", Some("client1"), None).await;
+    let path = cal["path"].as_str().unwrap().to_string();
+    assert!(path.starts_with("/cal/") && path.ends_with(".ics"));
+    assert_eq!(t.call("GET", "/me/calendar", Some("client1"), None).await.1["path"], path.as_str(), "the same link each time");
+    let (s, kind, body) = t.text(&path).await;
+    assert_eq!(s, StatusCode::OK);
+    assert!(kind.starts_with("text/calendar"), "{kind}");
+    assert!(body.starts_with("BEGIN:VCALENDAR") && body.contains("Training session with") && body.contains("STATUS:CANCELLED"), "{body}");
+    assert!(body.contains("SUMMARY:Workout: "), "a client's feed has their workouts");
+    let (_, fresh) = t.call("POST", "/me/calendar/reset", Some("client1"), None).await;
+    assert_ne!(fresh["path"], path.as_str());
+    assert_eq!(t.text(&path).await.0, StatusCode::NOT_FOUND, "the old link is off");
+    assert_eq!(t.text("/cal/not-a-token.ics").await.0, StatusCode::NOT_FOUND);
+
+    // --- other body-fat estimates (BM-6): the US Navy tape formula, and readings from elsewhere
+    let navy = |waist: f64| json!({ "date": today.to_string(), "kind": "bodyFat", "bodyFat": { "source": "navy", "navy": { "heightCm": 180, "neckCm": 38, "waistCm": waist } } });
+    let (s, m) = t.call("POST", "/clients/client1/metrics", Some("client1"), Some(navy(85.0))).await;
+    assert_eq!(s, StatusCode::OK, "{m}");
+    assert_eq!(m["bodyFat"]["pct"], 16.1, "client1 is male: neck 38, waist 85, 180 cm");
+    assert_eq!(t.call("POST", "/clients/client1/metrics", Some("client1"), Some(navy(30.0))).await.0, StatusCode::BAD_REQUEST, "waist under neck");
+    let scan = |pct: f64| json!({ "date": today.to_string(), "kind": "bodyFat", "bodyFat": { "source": "dexa", "pct": pct } });
+    assert_eq!(t.call("POST", "/clients/client1/metrics", Some("coach1"), Some(scan(90.0))).await.0, StatusCode::BAD_REQUEST);
+    let (s, d) = t.call("POST", "/clients/client1/metrics", Some("coach1"), Some(scan(17.25))).await;
+    assert_eq!((s, d["bodyFat"]["pct"].as_f64()), (StatusCode::OK, Some(17.3)));
+    let (_, bf) = t.call("GET", "/clients/client1/metrics?kind=bodyFat", Some("coach1"), None).await;
+    assert_eq!(bf.as_array().unwrap().len(), 2);
+
+    // --- the coach's own intake questions (ON-5)
+    assert_eq!(t.call("GET", "/intake-template", Some("client1"), None).await.1["questions"], json!([]), "none until the coach adds some");
+    let extra = json!({ "questions": [
+        { "id": "sport", "kind": "text", "label": " Your main sport ", "required": true },
+        { "id": "days", "kind": "number", "label": "Days a week you can train", "unit": "days" }
+    ] });
+    assert_eq!(t.call("PUT", "/intake-template", Some("client1"), Some(extra.clone())).await.0, StatusCode::FORBIDDEN);
+    let (s, saved) = t.call("PUT", "/intake-template", Some("coach1"), Some(extra)).await;
+    assert_eq!((s, saved["questions"][0]["label"].as_str()), (StatusCode::OK, Some("Your main sport")));
+    let intake = |answers: Value| json!({ "goals": "Squat 140", "equipment": ["barbell"], "sex": "male", "birthDate": "1996-01-15", "heightCm": 180, "extraAnswers": answers });
+    assert_eq!(t.call("PUT", "/clients/client1/intake", Some("client1"), Some(intake(json!({ "days": 4 })))).await.0, StatusCode::BAD_REQUEST, "the required one is missing");
+    let (s, saved) = t.call("PUT", "/clients/client1/intake", Some("client1"), Some(intake(json!({ "sport": "Powerlifting", "days": 4 })))).await;
+    assert_eq!(s, StatusCode::OK, "{saved}");
+    let (_, got) = t.call("GET", "/clients/client1/intake", Some("coach1"), None).await;
+    assert_eq!(got["extraAnswers"]["sport"], "Powerlifting");
+    assert_eq!(got["extraQuestions"][1]["unit"], "days", "kept with the answers");
+    assert_eq!(t.call("PUT", "/intake-template", Some("coach1"), Some(json!({ "questions": [] }))).await.0, StatusCode::OK, "removable");
 }

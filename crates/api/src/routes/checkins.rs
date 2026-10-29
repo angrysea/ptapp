@@ -24,6 +24,33 @@ pub async fn template_of(st: &AppState, coach: &str) -> ApiResult<Template> {
     Ok(st.store.get(&format!("COACH#{coach}"), "CHECKIN_TEMPLATE").await?.unwrap_or_else(default_template))
 }
 
+/// A coach's extra intake questions (ON-5); none until they add some.
+pub async fn intake_template_of(st: &AppState, coach: &str) -> ApiResult<Template> {
+    Ok(st.store.get(&format!("COACH#{coach}"), "INTAKE_TEMPLATE").await?.unwrap_or(Template { questions: Vec::new() }))
+}
+
+/// `GET /intake-template`: the coach's extra intake questions, or a client's coach's.
+pub async fn get_intake_template(State(st): State<AppState>, ctx: Ctx) -> ApiResult<Json<Template>> {
+    if ctx.profile.role == Role::Admin {
+        return Err(ApiError::Forbidden("coaches and clients only"));
+    }
+    Ok(Json(intake_template_of(&st, &ctx.profile.coach_id).await?))
+}
+
+/// `PUT /intake-template`: an empty list removes the extra questions.
+pub async fn put_intake_template(State(st): State<AppState>, ctx: Ctx, Json(mut t): Json<Template>) -> ApiResult<Json<Template>> {
+    let coach = ctx.require_coach()?;
+    for q in &mut t.questions {
+        q.label = q.label.trim().to_string();
+        q.unit = q.unit.take().map(|u| u.trim().to_string()).filter(|u| !u.is_empty());
+    }
+    if !t.questions.is_empty() {
+        t.validate().map_err(bad_request)?;
+    }
+    st.store.put(&format!("COACH#{coach}"), "INTAKE_TEMPLATE", &t).await?;
+    Ok(Json(t))
+}
+
 /// `GET /checkin-template`: the coach's own questions, or a client's coach's.
 pub async fn get_template(State(st): State<AppState>, ctx: Ctx) -> ApiResult<Json<Template>> {
     let coach = match ctx.profile.role {
