@@ -4,14 +4,14 @@
 //! invitation an admin makes by hand (routes/admin.rs, routes/invites.rs).
 //! The anonymous POST is the only door in: it carries an email and a name,
 //! holds one record per email (the sk is the email), and its records expire
-//! through DynamoDB `ttl` after 30 days, so a spammer can age the queue
-//! out; a public rate-limiter belongs once the club outgrows this MVP.
+//! through DynamoDB `ttl` after 30 days. How it is guarded is in
+//! ptcore::requests; API Gateway also throttles the route (template.yaml).
 
 use axum::extract::{Path, State};
 use axum::Json;
 use chrono::Utc;
 use ptcore::model::{Invite, InviteKind};
-use ptcore::requests::{Request, Settings, Status, MAX_EMAIL, MAX_NAME};
+use ptcore::requests::{valid_email, Request, Settings, Status, MAX_NAME, MAX_PENDING, MIN_FILL_MS};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -39,6 +39,12 @@ pub struct RequestIn {
     email: String,
     #[serde(default)]
     name: String,
+    /// The hidden field: people never see it, form-filling scripts fill it.
+    #[serde(default)]
+    website: String,
+    /// Milliseconds from the page showing the form to sending it.
+    #[serde(default)]
+    elapsed_ms: Option<u64>,
 }
 
 /// Approves one record: create and email the invitation, mark the queue
@@ -58,50 +64,63 @@ async fn approve(st: &AppState, req: Request) -> ApiResult<(Request, Value)> {
 }
 
 /// `POST /public/coach-requests` (no sign-in): the landing page's form.
-/// Answers only about the email the visitor just typed; the queue itself
-/// reads stay behind `require_admin`.
+/// Whatever happens to the request, a well-formed one gets the same answer,
+/// so the form can't be used to find out who asked or was invited. Only a
+/// malformed email or an over-long name is refused, which says nothing about
+/// anyone else.
 pub async fn request(State(st): State<AppState>, Json(body): Json<RequestIn>) -> ApiResult<Json<Value>> {
     let email = body.email.trim().to_lowercase();
-    if !email.contains('@') || email.chars().count() > MAX_EMAIL {
+    if !valid_email(&email) {
         return Err(bad_request("a valid email is required (up to 80 characters)"));
     }
-    if body.name.trim().chars().count() > MAX_NAME {
+    let name = body.name.trim().to_string();
+    if name.chars().count() > MAX_NAME {
         return Err(bad_request("a name is at most 100 characters"));
     }
-    let found: Option<Request> = st.store.get(ADMIN_PK, &email_sk(&email)).await?;
-    // An invitation already went to this email: say so rather than queue or
-    // send another.
-    if found.as_ref().is_some_and(|r| r.status == Status::Invited) {
-        return Ok(Json(json!({ "email": email, "status": "invited" })));
+    let received = Json(json!({ "status": "received" }));
+    // Scripts: the hidden field is filled, or the form came back too fast (or
+    // without the page's timing at all). Answer as usual and keep nothing.
+    if !body.website.is_empty() || body.elapsed_ms.is_none_or(|ms| ms < MIN_FILL_MS) {
+        tracing::info!("coach request dropped: looks automated");
+        return Ok(received);
     }
     let now = Utc::now();
-    let had_one = found.is_some();
-    let fresh = Request {
+    let found: Option<Request> = st.store.get(ADMIN_PK, &email_sk(&email)).await?;
+    match &found {
+        // Invited already, or already waiting: nothing changes.
+        Some(r) if r.status != Status::Denied => return Ok(received),
+        // Denied recently: the answer stands for now.
+        Some(r) if !r.may_ask_again(now) => return Ok(received),
+        _ => {}
+    }
+    let all: Vec<Request> = st.store.query_prefix(ADMIN_PK, "REQUEST#").await?;
+    if all.iter().filter(|r| r.status == Status::Pending).count() >= MAX_PENDING {
+        tracing::warn!("coach request dropped: {MAX_PENDING} already pending");
+        return Ok(received);
+    }
+    let mut r = found.unwrap_or(Request {
         email: email.clone(),
-        name: body.name.trim().to_string(),
+        name: name.clone(),
         status: Status::Pending,
         requested_at: now,
         updated_at: now,
         invite_code: None,
         ttl: ttl(),
-    };
-    let mut r = found.unwrap_or(fresh);
-    if had_one && r.status == Status::Pending {
-        return Ok(Json(json!({ "email": email, "status": r.status })));
-    }
-    // A denied email asking again goes back on the queue with any new name.
+    });
+    // A denial that has run its course goes back on the queue with any new name.
     r.re_request();
-    r.name = body.name.trim().to_string();
+    r.name = name;
+    r.updated_at = now;
     r.ttl = ttl();
     let settings: Option<Settings> = st.store.get(ADMIN_PK, "SETTINGS#AUTO").await?;
-    if let Some(_auto) = settings.filter(|s| s.auto_approve) {
-        let (invited, out) = approve(&st, r).await?;
-        // Don't hand the invitation's code back to an anonymous visitor:
-        // they get the email instead, like every other invitation.
-        return Ok(Json(json!({ "email": email, "status": invited.status, "emailed": out["emailed"] })));
+    if settings.is_some_and(|s| s.auto_approve) {
+        // The invitation goes to the address by email; the visitor learns
+        // nothing more than anyone else does.
+        approve(&st, r).await?;
+    } else {
+        st.store.put(ADMIN_PK, &email_sk(&email), &r).await?;
     }
-    st.store.put(ADMIN_PK, &email_sk(&email), &r).await?;
-    Ok(Json(json!({ "email": email, "status": r.status })))
+    Ok(received)
 }
 
 /// `GET /admin/coach-requests`: newest first, with each one's status.

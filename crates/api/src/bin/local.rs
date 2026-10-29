@@ -68,7 +68,9 @@ async fn main() {
             .await;
     }
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:9000").await.expect("bind :9000");
-    println!("Local API listening on http://localhost:9000 (DEV_AUTH on: send x-dev-user)");
+    // PORT runs a second copy beside one already on :9000.
+    let port = std::env::var("PORT").unwrap_or_else(|_| "9000".into());
+    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}")).await.unwrap_or_else(|e| panic!("bind :{port}: {e}"));
+    println!("Local API listening on http://localhost:{port} (DEV_AUTH on: send x-dev-user)");
     axum::serve(listener, api::router(state)).await.unwrap();
 }

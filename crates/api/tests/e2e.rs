@@ -142,31 +142,49 @@ async fn full_client_journey() {
     let names: Vec<&str> = coaches.as_array().unwrap().iter().map(|c| c["name"].as_str().unwrap()).collect();
     assert_eq!(names, ["Coach One", "Coach Two"]);
     // --- coach request queue: anonymous ask-to-join, admin approves or denies
-    assert_eq!(t.call("POST", "/public/coach-requests", None, Some(json!({ "email": "nope" }))).await.0, StatusCode::BAD_REQUEST, "a request needs a real email");
-    let (s, w) = t.call("POST", "/public/coach-requests", None, Some(json!({ "email": " Wannabe@Dev.Local ", "name": " Coach Wanna " }))).await;
+    // (a person takes a few seconds on the form; the page sends how long)
+    let ask = |email: &str, name: &str| json!({ "email": email, "name": name, "elapsedMs": 8000 });
+    async fn queue(t: &T) -> Vec<Value> {
+        let (_, rq) = t.call("GET", "/admin/coach-requests", Some("admin1"), None).await;
+        rq.as_array().unwrap().clone()
+    }
+    let status_of = |rq: &[Value], email: &str| rq.iter().find(|r| r["email"] == email).map(|r| r["status"].clone());
+    for bad in ["nope", "a@b", "two words@x.co"] {
+        assert_eq!(t.call("POST", "/public/coach-requests", None, Some(ask(bad, ""))).await.0, StatusCode::BAD_REQUEST, "{bad}");
+    }
+    let (s, w) = t.call("POST", "/public/coach-requests", None, Some(ask(" Wannabe@Dev.Local ", " Coach Wanna "))).await;
     assert_eq!(s, StatusCode::OK, "{w}");
-    assert_eq!(w["email"], "wannabe@dev.local", "cleaned and echoed back");
-    assert_eq!(w["status"], "pending", "with auto-approve off the request just waits");
+    assert_eq!(w, json!({ "status": "received" }), "the same answer whatever happens");
     assert_eq!(t.call("GET", "/admin/coach-requests", Some("coach1"), None).await.0, StatusCode::FORBIDDEN, "only the admin reads the queue");
-    let (_, again) = t.call("POST", "/public/coach-requests", None, Some(json!({ "email": "wannabe@dev.local", "name": "other name" }))).await;
-    assert_eq!(again["status"], "pending", "re-asking is idempotent");
-    let (_, rq) = t.call("GET", "/admin/coach-requests", Some("admin1"), None).await;
-    assert_eq!(rq.as_array().unwrap().len(), 1, "one record per email");
+    let (_, again) = t.call("POST", "/public/coach-requests", None, Some(ask("wannabe@dev.local", "other name"))).await;
+    assert_eq!(again, w, "re-asking looks the same");
+    let rq = queue(&t).await;
+    assert_eq!(rq.len(), 1, "one record per email");
+    assert_eq!(rq[0]["email"], "wannabe@dev.local", "cleaned");
     assert_eq!(rq[0]["name"], "Coach Wanna", "the first ask won");
+    assert_eq!(rq[0]["status"], "pending", "with auto-approve off the request just waits");
+    // scripts get the same answer and leave nothing behind
+    let (s, bot) = t.call("POST", "/public/coach-requests", None, Some(json!({ "email": "bot1@dev.local", "website": "http://spam.example", "elapsedMs": 8000 }))).await;
+    assert_eq!((s, bot), (StatusCode::OK, w.clone()), "the hidden field was filled");
+    assert_eq!(t.call("POST", "/public/coach-requests", None, Some(json!({ "email": "bot2@dev.local", "elapsedMs": 400 }))).await.1, w, "too fast");
+    assert_eq!(t.call("POST", "/public/coach-requests", None, Some(json!({ "email": "bot3@dev.local" }))).await.1, w, "no timing at all");
+    assert_eq!(queue(&t).await.len(), 1, "no bot made it into the queue");
     assert_eq!(t.call("POST", "/admin/coach-requests/wannabe@dev.local/deny", Some("coach1"), None).await.0, StatusCode::FORBIDDEN);
     // approving sends the same invitation an admin makes by hand
     let (s, ap) = t.call("POST", "/admin/coach-requests/wannabe@dev.local/invite", Some("admin1"), None).await;
     assert_eq!(s, StatusCode::OK, "{ap}");
     assert_eq!(ap["invite"]["kind"], "coach");
+    assert_eq!(ap["invite"]["clientName"], "", "the visitor's typed name stays out of the email");
     assert_eq!(ap["invite"]["emailed"], false, "no SES locally; the admin page shares the link instead");
     let ap_code = ap["invite"]["code"].as_str().unwrap().to_string();
     assert_eq!(t.call("POST", "/admin/coach-requests/wannabe@dev.local/invite", Some("admin1"), None).await.0, StatusCode::BAD_REQUEST, "one invitation per email");
     assert_eq!(t.call("POST", "/admin/coach-requests/wannabe@dev.local/deny", Some("admin1"), None).await.0, StatusCode::BAD_REQUEST, "invited emails revoke the invite, not the queue row");
-    // a request the admin says no to, and its return to the queue
-    assert_eq!(t.call("POST", "/public/coach-requests", None, Some(json!({ "email": "nosuch@email.example", "name": "Nope" }))).await.0, StatusCode::OK, "first ask");
+    assert_eq!(t.call("POST", "/public/coach-requests", None, Some(ask("wannabe@dev.local", ""))).await.1, w, "an invited email can't tell it was invited");
+    // a request the admin says no to stays a no for now
+    assert_eq!(t.call("POST", "/public/coach-requests", None, Some(ask("nosuch@email.example", "Nope"))).await.0, StatusCode::OK, "first ask");
     assert_eq!(t.call("POST", "/admin/coach-requests/nosuch@email.example/deny", Some("admin1"), None).await.0, StatusCode::OK);
-    let (_, back) = t.call("POST", "/public/coach-requests", None, Some(json!({ "email": "nosuch@email.example" }))).await;
-    assert_eq!(back["status"], "pending", "denied emails can ask again");
+    assert_eq!(t.call("POST", "/public/coach-requests", None, Some(ask("nosuch@email.example", "Nope again"))).await.1, w);
+    assert_eq!(status_of(&queue(&t).await, "nosuch@email.example"), Some(json!("denied")), "asking again right away changes nothing");
     // the approved invitation sits on the admin's invites list like any other
     let (_, invs) = t.call("GET", "/admin/invites", Some("admin1"), None).await;
     assert!(invs.as_array().unwrap().iter().any(|i| i["code"] == ap_code.as_str()));
@@ -177,14 +195,14 @@ async fn full_client_journey() {
     assert_eq!(t.call("PUT", "/admin/coach-requests/settings", Some("coach1"), Some(json!({ "autoApprove": true }))).await.0, StatusCode::FORBIDDEN);
     let (_, on) = t.call("PUT", "/admin/coach-requests/settings", Some("admin1"), Some(json!({ "autoApprove": true }))).await;
     assert_eq!(on["autoApprove"], true);
-    let (s, quick) = t.call("POST", "/public/coach-requests", None, Some(json!({ "email": "quick@dev.local", "name": " Quick Coach " }))).await;
-    assert_eq!(s, StatusCode::OK, "{quick}");
-    assert_eq!(quick["status"], "invited", "auto-approved on arrival");
-    assert_eq!(quick["emailed"], false, "same email path; the admin's email just isn't wired up here");
-    let (_, rq2) = t.call("GET", "/admin/coach-requests", Some("admin1"), None).await;
-    assert_eq!(rq2.as_array().unwrap().len(), 3, "quick coach, nosuch pending again, wannabe invited");
+    let (s, quick) = t.call("POST", "/public/coach-requests", None, Some(ask("quick@dev.local", " Quick Coach "))).await;
+    assert_eq!((s, quick), (StatusCode::OK, w.clone()), "no hint that it was approved");
+    let rq2 = queue(&t).await;
+    assert_eq!(rq2.len(), 3, "quick coach, nosuch denied, wannabe invited");
     assert_eq!(rq2[0]["email"], "quick@dev.local", "newest first");
-    assert_eq!(rq2[0]["status"], "invited");
+    assert_eq!(rq2[0]["status"], "invited", "auto-approved on arrival");
+    let (_, off) = t.call("PUT", "/admin/coach-requests/settings", Some("admin1"), Some(json!({ "autoApprove": false }))).await;
+    assert_eq!(off["autoApprove"], false);
     // admins see no coach or client data
     assert_eq!(t.call("GET", "/clients", Some("admin1"), None).await.0, StatusCode::FORBIDDEN);
 

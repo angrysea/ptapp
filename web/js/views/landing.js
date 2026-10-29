@@ -73,12 +73,16 @@ export function landing() {
 
 /** The "ask to join" box: one record per email lands in the admin's queue. */
 function requestForm() {
+  const shownAt = Date.now(); // the server drops sends faster than a person types
   const email = h('input', { type: 'email', autocomplete: 'off', placeholder: 'you@gym.com' });
   const name = h('input', { autocomplete: 'off', placeholder: 'gym or coach name' });
+  // Hidden from people (and screen readers); form-filling scripts fill it.
+  const website = h('input', { name: 'website', tabindex: '-1', autocomplete: 'off' });
   const problem = h('p', { class: 'small', 'aria-live': 'polite' });
   return [
     field('Email', email),
     field('Coach or gym name', name),
+    h('div', { class: 'hp', 'aria-hidden': 'true' }, h('label', {}, 'Leave this empty', website)),
     problem,
     h('button', {
       class: 'grow',
@@ -86,16 +90,11 @@ function requestForm() {
         const value = email.value.trim();
         if (!value.includes('@')) { problem.textContent = 'Type the email you want to be invited with.'; return; }
         problem.textContent = '';
-        const r = await pubPost('/coach-requests', { email: value, name: name.value });
+        const r = await pubPost('/coach-requests', { email: value, name: name.value, website: website.value, elapsedMs: Date.now() - shownAt });
         if (!r) { problem.textContent = 'Couldn’t reach the club right now; try again in a bit.'; return; }
         if (r.problem) { problem.textContent = r.problem.charAt(0).toUpperCase() + r.problem.slice(1); return; }
-        if (r.status === 'invited') {
-          toast(r.emailed === false
-            ? 'Approved — but the club’s email isn’t wired up yet, so ask them to invite you by hand'
-            : 'Your invitation is on its way to that email — follow the sign-up link in it');
-        } else {
-          toast('You’re on the club’s list; when it approves you, an invitation email arrives');
-        }
+        // The same answer for everyone: the form never says who was invited.
+        toast('Thanks. If the club approves you, an invitation arrives at that email.');
       }),
     }, 'Request an invitation'),
   ];

@@ -6,12 +6,41 @@
 //! setting) approves each request on arrival instead. A request carries no
 //! more than an email and a name: everything else belongs to the coach's
 //! profile after they sign up.
+//!
+//! The form is the one anonymous way in, so it is guarded (routes/requests.rs):
+//! a hidden field only bots fill, a minimum time on the page, the same answer
+//! for every email (it never says who was invited), denials that stick for a
+//! while, and a cap on the pending queue. API Gateway throttles the route.
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 
-/// One request per email; a denied email may ask again.
+/// One request per email; a denied email may ask again after `DENY_DAYS`.
 pub const MAX_EMAIL: usize = 80;
+/// A denied email can't go back on the queue for this long.
+pub const DENY_DAYS: i64 = 30;
+/// Pending requests beyond this are dropped (silently), so a flood can't
+/// bury the admin's queue.
+pub const MAX_PENDING: usize = 500;
+/// Faster than this from opening the page to sending is a script.
+pub const MIN_FILL_MS: u64 = 3000;
+
+/// A plausible address: one `@`, a local part, and a dotted domain of
+/// letters, digits, dots and hyphens; no spaces or control characters.
+pub fn valid_email(email: &str) -> bool {
+    let Some((local, domain)) = email.split_once('@') else { return false };
+    let label_ok = |l: &str| !l.is_empty() && !l.starts_with('-') && !l.ends_with('-') && l.chars().all(|c| c.is_ascii_alphanumeric() || c == '-');
+    email.chars().count() <= MAX_EMAIL
+        && !local.is_empty()
+        && local.len() <= 64
+        && local.chars().all(|c| c.is_ascii_graphic() && !"@\"(),:;<>[]".contains(c))
+        && !local.starts_with('.')
+        && !local.ends_with('.')
+        && !local.contains("..")
+        && domain.contains('.')
+        && domain.split('.').all(label_ok)
+        && domain.rsplit('.').next().is_some_and(|tld| tld.len() >= 2 && tld.chars().all(|c| c.is_ascii_alphabetic()))
+}
 /// Like admin's clean_name, so approval can't fail on the name.
 pub const MAX_NAME: usize = 100;
 
@@ -61,7 +90,7 @@ pub struct Request {
 impl Request {
     pub fn validate(&mut self) -> Result<(), String> {
         self.email = self.email.trim().to_lowercase();
-        if !self.email.contains('@') || self.email.chars().count() > MAX_EMAIL {
+        if !valid_email(&self.email) {
             return Err("an email is required, at most 80 characters".into());
         }
         self.name = self.name.trim().to_string();
@@ -82,6 +111,11 @@ impl Request {
         self.status = Status::Denied;
     }
 
+    /// A denied email may ask again once the denial is `DENY_DAYS` old.
+    pub fn may_ask_again(&self, now: DateTime<Utc>) -> bool {
+        self.status == Status::Denied && now - self.updated_at >= Duration::days(DENY_DAYS)
+    }
+
     /// A denied email re-reading the form goes back on the queue.
     pub fn re_request(&mut self) {
         self.status = Status::Pending;
@@ -100,6 +134,27 @@ mod tests {
         assert_eq!(r.name, "Coach Wanna");
         let mut bad = Request { email: "no-at-sign".into(), name: "".into(), status: Status::Pending, requested_at: Utc::now(), updated_at: Utc::now(), invite_code: None, ttl: 0 };
         assert_eq!(bad.validate(), Err("an email is required, at most 80 characters".into()));
+    }
+
+    #[test]
+    fn emails_must_look_real() {
+        for ok in ["a@b.co", "first.last+tag@gym-club.example.com", "x_y@sub.domain.io"] {
+            assert!(valid_email(ok), "{ok}");
+        }
+        for bad in ["nope", "@b.co", "a@", "a@b", "a@b.c", "a b@c.co", "a@b..co", "a@-b.co", "a@b.co\n", ".a@b.co", "a..b@c.co", "a@b.c0m", "<a>@b.co"] {
+            assert!(!valid_email(bad), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn denials_stick_for_a_while() {
+        let now = Utc::now();
+        let mut r = Request { email: "a@b.co".into(), name: "".into(), status: Status::Denied, requested_at: now, updated_at: now - Duration::days(DENY_DAYS - 1), invite_code: None, ttl: 0 };
+        assert!(!r.may_ask_again(now));
+        r.updated_at = now - Duration::days(DENY_DAYS);
+        assert!(r.may_ask_again(now));
+        r.status = Status::Pending;
+        assert!(!r.may_ask_again(now), "only denials");
     }
 
     #[test]

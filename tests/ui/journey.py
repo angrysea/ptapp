@@ -113,6 +113,7 @@ with sync_playwright() as p:
     anon.goto(BASE)
     anon.get_by_label("Email", exact=True).fill(f"wannabe{RUN}@dev.local")
     anon.get_by_label("Coach or gym name", exact=True).fill("Coach Wanna")
+    anon.wait_for_timeout(3200)  # the API drops sends faster than a person fills the form
     anon.get_by_role("button", name="Request an invitation").click()
     expect(anon.locator("#toast")).to_contain_text("club")
     anon_ctx.close()
@@ -167,6 +168,15 @@ with sync_playwright() as p:
     expect(squat_card.get_by_text("Progression: +5 lb, at RPE ≤ 8")).to_be_visible()
     add_block(coach, "emom")
     coach.locator(".block-card").nth(1).locator("select").nth(1).select_option(label="Burpee")
+    # a warm-up and post-workout cardio every workout gets when the program is assigned
+    every = coach.locator(".card", has=coach.get_by_role("heading", name="Warm-up and cardio for every workout"))
+    every.get_by_role("button", name="+ Warm-up").click()
+    every.locator(".block-card").nth(0).locator("select").nth(1).select_option(label="Rowing (erg)")
+    every.get_by_role("button", name="+ Post-workout cardio").click()
+    walk = every.locator(".block-card").nth(1)
+    walk.locator("select").nth(1).select_option(label="Incline Walk")
+    expect(walk.get_by_label("Minutes")).to_have_value("20")  # cardio exercises start as 20 min
+    walk.get_by_label("Zone", exact=True).select_option("2")
     shot(coach, "02-program-builder")
     coach.locator("button.primary", has_text="Save").first.click()
     expect(coach.get_by_text("Program saved")).to_be_visible()
@@ -220,6 +230,10 @@ with sync_playwright() as p:
     shot(client, "06b-rpe-info")
     client.locator(".sheet").get_by_role("button", name="Got it").click()
     client_ctx.set_offline(True)
+    # the program's warm-up comes first and is ticked off as a whole
+    expect(client.locator(".card.phase-warmup")).to_contain_text("Rowing (erg)")
+    client.get_by_role("button", name="Mark warm-up done").click()
+    expect(client.get_by_role("button", name="✓ Warm-up done")).to_be_visible()
     done = client.locator(".setrow .done")
     print("set rows", done.count())
     done.nth(0).click()
@@ -228,11 +242,19 @@ with sync_playwright() as p:
     client.locator(".setrow").nth(2).locator("input").first.fill("4")
     client.locator(".setrow").nth(2).locator("input").first.press("Tab")
     done.nth(2).click(); client.get_by_role("button", name="Skip", exact=True).click()
-    client.get_by_role("button", name="⏱ Timer").click()
+    client.locator(".card", has=client.get_by_role("heading", name=re.compile("^EMOM"))).get_by_role("button", name="⏱ Timer").click()
     time.sleep(1.2)
     shot(client, "06-emom-timer")
     client.locator(".sheet").get_by_role("button", name="Close").click()
     shot(client, "07-logger")
+    # the cardio after the workout: prefilled with the prescription, plus a heart rate
+    walk_card = client.locator(".card.phase-post")
+    expect(walk_card).to_contain_text("Zone 2 (")  # shown in bpm from the client's age
+    expect(walk_card.get_by_label("minutes")).to_have_value("20")
+    walk_card.get_by_label("average heart rate").fill("128")
+    walk_card.get_by_label("average heart rate").press("Tab")
+    walk_card.locator(".setrow .done").click()
+    shot(client, "07a-cardio")
     # a note on the squats for the coach, and a rating for the whole workout
     client.get_by_label("Note on Back Squat").fill("Left hip a bit tight on the way down")
     client.get_by_role("radio", name="4 Good").click()
@@ -413,11 +435,13 @@ with sync_playwright() as p:
     expect(client.locator("#sync")).to_be_hidden(timeout=15000)  # the queued values have synced
     coach.goto(coach.url.split("#")[0] + "#/c/client" + RUN + "/overview")
     expect(coach.locator(".habit-row", has_text="Water")).to_contain_text("🔥 1")
+    expect(coach.get_by_role("heading", name="Weekly cardio (minutes)")).to_be_visible()  # the 20 min walk, not the warm-up
     # the printable progress report (BZ-6), from the client's Overview
     coach.get_by_role("link", name="📄 Progress report (print or PDF)").click()
     expect(coach.get_by_role("heading", name="Progress report")).to_be_visible()
     expect(coach.locator(".report")).to_contain_text("Strength: estimated 1RM")
     expect(coach.locator(".report")).to_contain_text("Weekly check-ins")
+    expect(coach.locator(".report")).to_contain_text("20 minutes in total")
     expect(coach.locator(".report")).to_contain_text("1 of 1 (100%)")  # the habit counts from the day it was added
     coach.get_by_label("Notes for the report").fill("Great first weeks. Next: push the squat to 245.")
     coach.emulate_media(media="print")
@@ -465,7 +489,7 @@ with sync_playwright() as p:
     coach.get_by_role("button", name="Logs").click()
     expect(coach.get_by_text("Left hip a bit tight on the way down")).to_be_visible()
     expect(coach.get_by_text("Rated 4/5 · Good")).to_be_visible()
-    coach.locator(".exercise .row button").nth(2).click()  # set 3 of the first exercise
+    coach.locator(".exercise", has_text="Back Squat").locator(".row button").nth(2).click()  # set 3 of the squats
     expect(coach.get_by_role("heading", name="Comment on set 3")).to_be_visible()
     # save a snippet (it starts from what's typed), then insert it with the / shortcut
     comment = coach.get_by_label("Comment", exact=True)

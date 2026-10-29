@@ -422,3 +422,5 @@ table.checkins thead th { white-space: nowrap; }
 /* Public landing page (views/landing.js). */
 .landing-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; margin-top: 12px; }
 .landing-split { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 8px 16px; margin-top: 8px; }
+/* Honeypot on the coach-request form: off screen, never shown to people. */
+.hp { position: absolute; left: -10000px; width: 1px; height: 1px; overflow: hidden; }

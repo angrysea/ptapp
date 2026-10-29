@@ -14,6 +14,6 @@ Plan and decisions: `tasks/cardio/plan.md`.
 
 ## Open
 
-- [ ] Journey test: program with a default warm-up and post-workout cardio → assign → client ticks the warm-up, logs cardio → coach sees weekly cardio minutes
+- [x] Journey test: the program's warm-up (rowing) and post-workout cardio (incline walk, zone 2) → assign → client ticks the warm-up, logs the walk with a heart rate → coach sees weekly cardio on Overview and in the report (2026-10-29)
 - [ ] e2e: assigning a program with `defaultBlocks` puts them into each scheduled workout; a log with out-of-range cardio numbers is refused
 - [ ] Manual: builder and logger at phone width

@@ -217,6 +217,13 @@ Resources:
       DefaultRouteSettings:
         ThrottlingBurstLimit: 100
         ThrottlingRateLimit: 50
+      # The anonymous coach-request form (routes/requests.rs): a person sends
+      # it once, so a low ceiling only slows scripts. HTTP APIs throttle per
+      # route, not per caller; the form's own checks handle single senders.
+      RouteSettings:
+        "POST /public/coach-requests":
+          ThrottlingBurstLimit: 5
+          ThrottlingRateLimit: 1
       CorsConfiguration:
         AllowOrigins: [!Sub "https://${Distribution.DomainName}", !Ref LocalDevOrigin, !If [HasAppDomain, !Sub "https://${AppDomain}", !Ref AWS::NoValue]]
         AllowHeaders: [authorization, content-type]
