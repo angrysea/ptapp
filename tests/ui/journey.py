@@ -145,6 +145,32 @@ with sync_playwright() as p:
     shot(coach, "01-coach-invite")
     coach.get_by_role("button", name="Done").click()
 
+    # ---------------- a would-be client asks from the coach's own sign-up link (their website's)
+    asker_ctx = browser.new_context(**mobile)
+    asker = asker_ctx.new_page(); watch(asker, "asker")
+    asker.goto(BASE + "#/request/coach" + RUN)
+    expect(asker.get_by_role("heading", name=re.compile("^Train with "))).to_be_visible()
+    asker.get_by_label("Email", exact=True).fill(f"asker{RUN}@dev.local")
+    asker.get_by_label("Your name", exact=True).fill("Alex Asker")
+    asker.wait_for_timeout(3200)  # the API drops sends faster than a person fills the form
+    shot(asker, "01b-client-request")
+    asker.get_by_role("button", name="Request an invitation").click()
+    expect(asker.locator("#toast")).to_contain_text("approves you")
+    asker_ctx.close()
+    coach.reload()
+    expect(coach.get_by_text("1 waiting")).to_be_visible()
+    asked = coach.locator(".request-row", has_text="Alex Asker")
+    expect(asked).to_contain_text("Waiting")
+    shot(coach, "01c-join-requests")
+    asked.get_by_role("button", name="Invite").click()
+    expect(coach.get_by_role("heading", name="Invite link")).to_be_visible()  # no email locally: share the link
+    coach.get_by_role("button", name="Done").click()
+    expect(coach.locator(".request-row", has_text="Alex Asker")).to_contain_text("Invited")
+    coach.get_by_role("button", name="🔗 Your sign-up link").click()
+    expect(coach.get_by_label("Sign-up link")).to_have_value(re.compile(f"#/request/coach{RUN}$"))
+    expect(coach.get_by_label("Button HTML")).to_have_value(re.compile("^<a href="))
+    coach.locator(".sheet").get_by_role("button", name="Done").click()
+
     # ---------------- program builder
     coach.get_by_role("link", name="Programs").click()
     coach.get_by_role("button", name="+ New").click()

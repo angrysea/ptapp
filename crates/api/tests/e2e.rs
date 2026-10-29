@@ -357,6 +357,69 @@ async fn full_client_journey() {
     assert_eq!(t.call("GET", &format!("/invites/{code2}"), Some("client2"), None).await.0, StatusCode::NOT_FOUND);
     assert_eq!(t.call("GET", "/invites", Some("coach1"), None).await.1.as_array().unwrap().len(), 0);
 
+    // --- client requests: a coach's own sign-up link (#/request/{coachId})
+    let (s, page) = t.call("GET", "/public/join/coach1", None, None).await;
+    assert_eq!(s, StatusCode::OK, "{page}");
+    assert_eq!(page["coachName"], "Coach One");
+    assert_eq!(t.call("GET", "/public/join/nosuchcoach", None, None).await.0, StatusCode::NOT_FOUND);
+    assert_eq!(t.call("GET", "/public/join/client1", None, None).await.0, StatusCode::NOT_FOUND, "clients have no sign-up link");
+    assert_eq!(t.call("POST", "/public/join/client1", None, Some(ask("x@dev.local", ""))).await.0, StatusCode::NOT_FOUND);
+    let (s, r) = t.call("POST", "/public/join/coach1", None, Some(ask(" Newbie@Dev.Local ", " New Bie "))).await;
+    assert_eq!((s, r), (StatusCode::OK, w.clone()), "the same answer as every request");
+    async fn coach_queue(t: &T, coach: &str) -> Vec<Value> {
+        let (s, rq) = t.call("GET", "/requests", Some(coach), None).await;
+        assert_eq!(s, StatusCode::OK, "{rq}");
+        rq.as_array().unwrap().clone()
+    }
+    let q1 = coach_queue(&t, "coach1").await;
+    assert_eq!(q1.len(), 1);
+    assert_eq!((q1[0]["email"].clone(), q1[0]["name"].clone(), q1[0]["status"].clone()), (json!("newbie@dev.local"), json!("New Bie"), json!("pending")));
+    assert!(coach_queue(&t, "coach2").await.is_empty(), "each coach sees only their own");
+    assert_eq!(t.call("GET", "/requests", Some("client1"), None).await.0, StatusCode::FORBIDDEN);
+    assert!(status_of(&queue(&t).await, "newbie@dev.local").is_none(), "not in the admin's coach queue");
+    // already a client, or already invited: quietly nothing
+    assert_eq!(t.call("POST", "/public/join/coach1", None, Some(ask("client1@dev.local", ""))).await.1, w);
+    assert_eq!(coach_queue(&t, "coach1").await.len(), 1, "client1 is already coach1's client");
+    // coach2 can't act on coach1's request
+    assert_eq!(t.call("POST", "/requests/newbie@dev.local/invite", Some("coach2"), None).await.0, StatusCode::NOT_FOUND);
+    // inviting sends the same client invitation as "+ Invite"
+    let (s, ok) = t.call("POST", "/requests/newbie@dev.local/invite", Some("coach1"), None).await;
+    assert_eq!(s, StatusCode::OK, "{ok}");
+    assert_eq!((ok["invite"]["kind"].clone(), ok["invite"]["coachId"].clone()), (json!("client"), json!("coach1")));
+    assert_eq!(ok["invite"]["clientName"], "", "the visitor's typed name stays out of the email");
+    let ncode = ok["invite"]["code"].as_str().unwrap().to_string();
+    let (_, open) = t.call("GET", "/invites", Some("coach1"), None).await;
+    assert!(open.as_array().unwrap().iter().any(|i| i["code"] == ncode.as_str()), "listed with the coach's pending invites");
+    assert_eq!(coach_queue(&t, "coach1").await[0]["status"], "invited");
+    assert_eq!(t.call("POST", "/requests/newbie@dev.local/invite", Some("coach1"), None).await.0, StatusCode::BAD_REQUEST, "once");
+    let (s, joined) = t.call("POST", &format!("/invites/{ncode}/accept"), Some("newbie"), Some(json!({ "consent": true, "name": "New Bie" }))).await;
+    assert_eq!(s, StatusCode::OK, "{joined}");
+    assert_eq!((joined["role"].clone(), joined["coachId"].clone()), (json!("client"), json!("coach1")));
+    // they leave again, so coach1's roster is as the rest of this test expects
+    assert_eq!(t.call("DELETE", "/me/account", Some("newbie"), Some(json!({ "confirm": "newbie@dev.local" }))).await.0, StatusCode::OK);
+    // a request the coach turns down stays down for now
+    t.call("POST", "/public/join/coach1", None, Some(ask("maybe@dev.local", ""))).await;
+    assert_eq!(t.call("POST", "/requests/maybe@dev.local/deny", Some("coach1"), None).await.0, StatusCode::OK);
+    t.call("POST", "/public/join/coach1", None, Some(ask("maybe@dev.local", "again"))).await;
+    assert_eq!(status_of(&coach_queue(&t, "coach1").await, "maybe@dev.local"), Some(json!("denied")));
+    // the coach's auto-approve: only with Turnstile, and only their own queue
+    let (_, cs) = t.call("GET", "/requests/settings", Some("coach1"), None).await;
+    assert_eq!((cs["autoApprove"].clone(), cs["humanCheck"].clone()), (json!(false), json!(false)));
+    assert_eq!(t.call("PUT", "/requests/settings", Some("coach1"), Some(json!({ "autoApprove": true }))).await.0, StatusCode::BAD_REQUEST, "not without Turnstile");
+    let tt = with_secret("1x0000000000000000000000000000000AA");
+    let (_, on) = tt.call("PUT", "/requests/settings", Some("coach1"), Some(json!({ "autoApprove": true }))).await;
+    assert_eq!(on["autoApprove"], true);
+    assert_eq!(tt.call("GET", "/requests/settings", Some("coach2"), None).await.1["autoApprove"], false, "coach2's queue is untouched");
+    let (s, r) = tt.call("POST", "/public/join/coach1", None, Some(json!({ "email": "quickclient@dev.local", "turnstile": "XXXX.DUMMY.TOKEN.XXXX" }))).await;
+    assert_eq!((s, r), (StatusCode::OK, w.clone()));
+    assert_eq!(status_of(&coach_queue(&t, "coach1").await, "quickclient@dev.local"), Some(json!("invited")), "auto-approved on arrival");
+    let (_, open) = t.call("GET", "/invites", Some("coach1"), None).await;
+    assert!(open.as_array().unwrap().iter().any(|i| i["email"] == "quickclient@dev.local"));
+    t.call("PUT", "/requests/settings", Some("coach1"), Some(json!({ "autoApprove": false }))).await;
+    // clean up the open invite so later counts of coach1's invites hold
+    let qcode = open.as_array().unwrap().iter().find(|i| i["email"] == "quickclient@dev.local").unwrap()["code"].as_str().unwrap().to_string();
+    assert_eq!(t.call("DELETE", &format!("/invites/{qcode}"), Some("coach1"), None).await.0, StatusCode::OK);
+
     // --- intake + waiver (ON-2, ON-3)
     let (s, _) = t
         .call("PUT", "/clients/client1/intake", Some("client1"), Some(json!({

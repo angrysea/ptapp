@@ -88,6 +88,13 @@ pub fn router(state: AppState) -> Router {
         .route("/admin/coach-requests/settings", get(requests::get_settings).put(requests::put_settings))
         .route("/admin/coach-requests/{email}/invite", post(requests::invite_route))
         .route("/admin/coach-requests/{email}/deny", post(requests::deny))
+        // client request queues: a coach's own sign-up link (#/request/{coachId},
+        // for their website) lands requests in that coach's queue
+        .route("/public/join/{coach}", get(requests::coach_page).post(requests::client_request))
+        .route("/requests", get(requests::coach_queue))
+        .route("/requests/settings", get(requests::coach_get_settings).put(requests::coach_put_settings))
+        .route("/requests/{email}/invite", post(requests::coach_invite))
+        .route("/requests/{email}/deny", post(requests::coach_deny))
         // coach profiles and the public directory (no sign-in for /public)
         .route("/me/coach-profile", get(coaches::get_mine).put(coaches::put_mine))
         .route("/me/coach-profile/photo", post(coaches::photo_upload))

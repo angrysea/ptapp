@@ -1,6 +1,7 @@
 //! A coach who finds PT Coach without an invitation link can leave a
-//! request (email + name) in the admin's queue; signup itself stays
-//! invitation-only. The admin approves each request — which creates the
+//! request (email + name) in the admin's queue, and a would-be client can
+//! leave one in a coach's queue from that coach's own sign-up link; signup
+//! itself stays invitation-only. The admin approves each request — which creates the
 //! same single-use emailed invitation as a hand-made coach invite
 //! (routes/invites.rs) — or denies it. The auto-approve switch (an admin
 //! setting) approves each request on arrival instead. A request carries no
@@ -24,6 +25,8 @@ pub const DENY_DAYS: i64 = 30;
 /// Pending requests beyond this are dropped (silently), so a flood can't
 /// bury the admin's queue.
 pub const MAX_PENDING: usize = 500;
+/// The same for each coach's own queue of client requests.
+pub const MAX_PENDING_PER_COACH: usize = 200;
 /// Faster than this from opening the page to sending is a script (the
 /// check used when Turnstile isn't set up; the page reports the time).
 pub const MIN_FILL_MS: u64 = 3000;

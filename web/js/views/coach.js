@@ -22,6 +22,7 @@ import { alertsCard } from './alerts.js';
 import { checkinsTab } from './checkins.js';
 import { habitsCard } from './habits.js';
 import { overviewCard } from './meals.js';
+import { requestsCard } from './joinrequests.js';
 
 /** The client's 1-5 rating of a workout; bad ones stand out. */
 function ratingChip(n) {
@@ -30,15 +31,17 @@ function ratingChip(n) {
 }
 
 export async function renderRoster() {
-  const [rows, invites, suggestions] = await Promise.all([get('/clients', { cache: true }), get('/invites').catch(() => []), suggestionsCard()]);
+  const [rows, invites, suggestions, requests] = await Promise.all([get('/clients', { cache: true }), get('/invites').catch(() => []), suggestionsCard(),
+    requestsCard({ onChange: renderRoster, emailResult })]);
   const alerts = await alertsCard(); // after the roster, which files new missed-workout alerts
   rows.sort((a, b) => (b.painFlag - a.painFlag) || ((a.adherence.pct ?? 101) - (b.adherence.pct ?? 101)));
   mount($app(),
     h('div', { class: 'spread page-head' }, h('h1', {}, 'Clients'),
       h('div', { class: 'row' }, h('a', { class: 'btn', href: '#/schedule' }, '📅 Schedule'), h('button', { class: 'primary', onclick: inviteSheet }, '+ Invite'))),
-    rows.length === 0 && h('div', { class: 'card muted' }, 'No clients yet. Invite your first client to get started.'),
+    rows.length === 0 && h('div', { class: 'card muted' }, 'No clients yet. Invite your first client, or share your sign-up link below.'),
     alerts,
     suggestions,
+    requests,
     rows.map((r) => {
       const a = r.adherence;
       const flags = [

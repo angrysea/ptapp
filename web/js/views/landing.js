@@ -5,25 +5,8 @@
 // journey (tests/ui/journey.py) clicks it.
 
 import { login } from '../auth.js';
-import cfg from '../config.js';
-import { $app, busy, field, h, mount, toast } from '../ui.js';
-
-// Public call, like the directory's plain fetch: the landing page works
-// signed out, so there is no token to attach. Returns the body, `{ problem }`
-// with the server's message for a refused request, or null when unreachable.
-async function pubPost(path, body) {
-  let res;
-  try {
-    res = await fetch(`${cfg.apiUrl}/public${path}`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-  } catch { return null; } // offline or the API is down
-  const out = await res.json().catch(() => null);
-  if (res.status === 400) return { problem: out?.error || 'Check what you typed and try again.' };
-  return res.ok ? out : null;
-}
+import { requestForm } from '../publicform.js';
+import { $app, h, mount } from '../ui.js';
 
 // One card per feature area the MVP actually ships (README table); roadmap
 // items stay out until they exist, and each line is one breath.
@@ -59,7 +42,10 @@ export function landing() {
         h('p', { class: 'small' },
           'Coaches don’t sign up on their own: someone who runs the club vouches for you and sends an invitation tied to your email — the link fills itself in. Then two things before anything else: finish your profile, and invite your first client.'),
         h('p', { class: 'small muted' }, 'No link yet? Ask below: your email lands in the club admin’s queue, and approving it sends you that invitation.'),
-        requestForm()),
+        requestForm('/coach-requests', {
+          nameLabel: 'Coach or gym name', namePlaceholder: 'gym or coach name', emailPlaceholder: 'you@gym.com',
+          thanks: 'Thanks. If the club approves you, an invitation arrives at that email.',
+        })),
       h('div', {},
         h('h3', {}, 'New client'),
         h('p', { class: 'small' },
@@ -69,69 +55,4 @@ export function landing() {
     h('button', { class: 'primary', onclick: () => login() }, 'Sign in'),
     h('p', {}, h('a', { class: 'btn', href: '#/coaches' }, 'Find a coach')),
     h('p', { class: 'small muted' }, 'New here? Accounts are by invitation: use the link in your invitation email.'));
-}
-
-/** Cloudflare Turnstile's "are you a person" widget, when the deploy set a
- * site key (scripts/deploy.sh); the API checks its token. Without one there
- * is nothing to show and the token is empty. */
-function humanCheck() {
-  const sitekey = cfg.turnstileSiteKey;
-  if (!sitekey) return { el: null, token: () => '', reset() {} };
-  const el = h('div', { class: 'turnstile' });
-  let token = '';
-  let id = null;
-  const render = () => {
-    if (id != null || !el.isConnected) return;
-    id = window.turnstile.render(el, {
-      sitekey,
-      callback: (t) => { token = t; },
-      'expired-callback': () => { token = ''; },
-      'error-callback': () => { token = ''; },
-    });
-  };
-  // Rendered once the form is on the page and the script has loaded.
-  const ready = () => requestAnimationFrame(render);
-  if (window.turnstile) ready();
-  else {
-    let s = document.getElementById('turnstile-js');
-    if (!s) {
-      s = h('script', { id: 'turnstile-js', src: 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit', async: true });
-      document.head.append(s);
-    }
-    s.addEventListener('load', ready);
-  }
-  return { el, token: () => token, reset: () => { token = ''; if (id != null) window.turnstile.reset(id); } };
-}
-
-/** The "ask to join" box: one record per email lands in the admin's queue. */
-function requestForm() {
-  const shownAt = Date.now(); // the server drops sends faster than a person types
-  const email = h('input', { type: 'email', autocomplete: 'off', placeholder: 'you@gym.com' });
-  const name = h('input', { autocomplete: 'off', placeholder: 'gym or coach name' });
-  // Hidden from people (and screen readers); form-filling scripts fill it.
-  const website = h('input', { name: 'website', tabindex: '-1', autocomplete: 'off' });
-  const problem = h('p', { class: 'small', 'aria-live': 'polite' });
-  const check = humanCheck();
-  return [
-    field('Email', email),
-    field('Coach or gym name', name),
-    h('div', { class: 'hp', 'aria-hidden': 'true' }, h('label', {}, 'Leave this empty', website)),
-    check.el,
-    problem,
-    h('button', {
-      class: 'grow',
-      onclick: (e) => busy(e.currentTarget, async () => {
-        const value = email.value.trim();
-        if (!value.includes('@')) { problem.textContent = 'Type the email you want to be invited with.'; return; }
-        if (check.el && !check.token()) { problem.textContent = 'One moment: the check above confirms you’re a person.'; return; }
-        problem.textContent = '';
-        const r = await pubPost('/coach-requests', { email: value, name: name.value, website: website.value, elapsedMs: Date.now() - shownAt, turnstile: check.token() });
-        check.reset(); // each token works once
-        if (!r) { problem.textContent = 'Couldn’t reach the club right now; try again in a bit.'; return; }
-        if (r.problem) { problem.textContent = r.problem.charAt(0).toUpperCase() + r.problem.slice(1); return; }
-        // The same answer for everyone: the form never says who was invited.
-        toast('Thanks. If the club approves you, an invitation arrives at that email.');
-      }),
-    }, 'Request an invitation'),
-  ];
 }

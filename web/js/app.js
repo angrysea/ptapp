@@ -12,6 +12,7 @@ import { renderClient, renderRoster } from './views/coach.js';
 import { renderCoachSetup } from './views/coachprofile.js';
 import { renderConsent, renderSuspended } from './views/consent.js';
 import { renderCoachPage, renderDirectory } from './views/directory.js';
+import { renderRequest } from './views/request.js';
 import { refreshMessageBadge, renderInbox } from './views/messages.js';
 import { renderReview } from './views/review.js';
 import { onLive, startLive } from './realtime.js';
@@ -58,10 +59,12 @@ async function boot() {
     // An invitation link opens the sign-up page, with the invited email filled in.
     const invite = location.hash.match(/^#\/join\/([A-Za-z0-9]+)/);
     if (invite) return renderInviteSignUp(invite[1].toUpperCase());
-    // Signed out: the landing page and the public coach directory.
+    // Signed out: the landing page, the public coach directory, and a
+    // coach's own sign-up page (the link on their website).
     route('/', landing);
     route('/coaches', renderDirectory);
     route('/coaches/:id', renderCoachPage);
+    route('/request/:id', renderRequest);
     return start({ home: '/' });
   }
 
@@ -169,6 +172,7 @@ async function boot() {
   route('/me', renderProfile);
   route('/coaches', renderDirectory);
   route('/coaches/:id', renderCoachPage);
+  route('/request/:id', renderRequest);
   if (session.isCoach) route('/coach-profile', () => renderCoachSetup());
   start({ home: '/', afterRender: highlight });
 }

@@ -213,11 +213,14 @@ Resources:
       DefaultRouteSettings:
         ThrottlingBurstLimit: 100
         ThrottlingRateLimit: 50
-      # The anonymous coach-request form (routes/requests.rs). HTTP APIs
+      # The anonymous request forms (routes/requests.rs). HTTP APIs
       # throttle per route, not per caller, so this only caps the total; the
       # API limits each sender (IP) to a few an hour and checks for a person.
       RouteSettings:
         "POST /public/coach-requests":
+          ThrottlingBurstLimit: 20
+          ThrottlingRateLimit: 10
+        "POST /public/join/{coach}":
           ThrottlingBurstLimit: 20
           ThrottlingRateLimit: 10
       CorsConfiguration:
@@ -359,6 +362,15 @@ Resources:
           Properties:
             ApiId: !Ref HttpApi
             Path: /public/coach-requests
+            Method: POST
+            Auth: { Authorizer: NONE }
+        # A coach's own sign-up link (routes/requests.rs): a would-be client's
+        # request lands in that coach's queue; approval emails a client invite.
+        PublicClientRequest:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /public/join/{coach}
             Method: POST
             Auth: { Authorizer: NONE }
 
