@@ -44,7 +44,9 @@ pub struct RequestIn {
 /// Approves one record: create and email the invitation, mark the queue
 /// entry. Used by the admin's approve route and by auto-approve.
 async fn approve(st: &AppState, req: Request) -> ApiResult<(Request, Value)> {
-    let inv: Invite = new_invite(InviteKind::Coach, "", APP_NAME, &req.email, &req.name)?;
+    // The name was typed by an anonymous visitor: it stays in the queue for
+    // the admin but never goes into an email we send to someone else.
+    let inv: Invite = new_invite(InviteKind::Coach, "", APP_NAME, &req.email, "")?;
     issue(st, &inv).await?;
     let out = with_email_status(st, &inv).await?;
     let mut r = req;

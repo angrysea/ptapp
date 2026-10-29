@@ -353,7 +353,9 @@ pub async fn move_client(State(st): State<AppState>, ctx: Ctx, Path(cid): Path<S
     let resuming = client.coach_id == to.user_id;
     let from = if resuming {
         let mut stale = None;
-        for c in client.former_coach_ids.iter().rev() {
+        // A client moved back to an earlier coach has them in this list too;
+        // that coach's roster is the live one, not something to clean up.
+        for c in client.former_coach_ids.iter().rev().filter(|c| **c != to.user_id) {
             if st.store.get::<RosterEntry>(&format!("COACH#{c}"), &format!("CLIENT#{cid}")).await?.is_some() {
                 stale = Some(c.clone());
                 break;
@@ -363,6 +365,10 @@ pub async fn move_client(State(st): State<AppState>, ctx: Ctx, Path(cid): Path<S
     } else {
         client.coach_id.clone()
     };
+    // Never clean up the coach the client is moving to.
+    if from == to.user_id {
+        return Err(bad_request("the client already trains with that coach"));
+    }
     let (old_pk, new_pk) = (format!("COACH#{from}"), format!("COACH#{}", to.user_id));
     let now = Utc::now();
 

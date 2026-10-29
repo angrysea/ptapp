@@ -1457,4 +1457,12 @@ async fn full_client_journey() {
     let (_, mine) = t.call("GET", "/sessions", Some("client4"), None).await;
     assert_eq!(mine[0]["status"], "cancelled", "the session with the old coach is off");
     assert!(!t.call("GET", "/sessions", Some("coach1"), None).await.1.as_array().unwrap().iter().any(|x| x["clientId"] == "client4"));
+
+    // back to coach1, who is now both the coach and a former coach: moving
+    // there again finds nothing to finish and leaves coach1's roster alone
+    let (s, back) = t.call("POST", "/admin/clients/client4/move", Some("admin1"), Some(json!({ "coachId": "coach1" }))).await;
+    assert_eq!(s, StatusCode::OK, "{back}");
+    assert_eq!(t.call("POST", "/admin/clients/client4/move", Some("admin1"), Some(json!({ "coachId": "coach1" }))).await.0, StatusCode::BAD_REQUEST);
+    let (_, r1) = t.call("GET", "/clients", Some("coach1"), None).await;
+    assert!(r1.as_array().unwrap().iter().any(|r| r["client"]["clientId"] == "client4"), "coach1 keeps the client");
 }
