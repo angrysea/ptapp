@@ -14,5 +14,6 @@ pub mod progression;
 pub mod schedule;
 pub mod sessions;
 pub mod records;
+pub mod requests;
 pub mod stats;
 pub mod strength;

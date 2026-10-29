@@ -47,6 +47,8 @@ When a coach reads intake, waiver, metrics or photos, an `AUDIT#` item is writte
 | `INVITE#{code}` | `INVITE` | invite lookup (client or coach invite), `ttl` 14 days |
 | `ADMIN` | `INVITE#{code}` | pending coach invite from an admin (deleted on accept) |
 | `ADMIN` | `COACH#{coach}` | coach list entry, written when a coach joins |
+| `ADMIN` | `REQUEST#{email}` | public "request an invitation" queue entry (the landing form's anonymous POST); one per email, `ttl` 30 days so a spammed queue ages out |
+| `ADMIN` | `SETTINGS#AUTO` | admin auto-approve switch: when on, a landing request is approved (invited+emailed) on arrival |
 | `USER#{coach}` | `COACHPROFILE` | coach profile: private business details (legal name, phone, address, certification numbers, CPR, insurance) and the public profile; read only by the coach and admins |
 | `DIRECTORY` | `COACH#{coach}` | public copy of a complete, listed profile (no private fields); the only item the unauthenticated `/public/coaches` routes read |
 | `COACH#{coach}` | `EXERCISE#{id}` | custom exercise (built-ins are compiled into the binary) |
@@ -88,6 +90,8 @@ All routes need `Authorization: Bearer <Cognito ID token>` except `GET /health`,
 GET  /me                         PUT /me
 POST /admin/register             GET /admin/coaches          GET|POST /admin/invites   DELETE /admin/invites/{code}
 POST /admin/invites/{code}/resend
+GET  /admin/coach-requests  GET|PUT /admin/coach-requests/settings  POST /admin/coach-requests/{email}/invite|deny
+POST /public/coach-requests  # the landing page's anonymous ask-to-join form (queue only; signup stays invite-only)
 GET  /invites  POST /invites     GET|DELETE /invites/{code}  POST /invites/{code}/accept
 GET  /invites/{code}/public      (no sign-in: the sign-up page reads the invited email)
 GET  /exercises POST /exercises  PUT|DELETE /exercises/{id}  POST /exercises/{id}/demo-upload  POST /exercises/{id}/demo-confirm

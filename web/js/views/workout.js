@@ -9,6 +9,7 @@ import { go } from '../router.js';
 import { session } from '../session.js';
 import { blockTimer, restTimer } from '../timer.js';
 import { RATINGS, rpeLogInfo, sessionRpeInfo } from '../effort.js';
+import { byPhase, cardioText, distUnits, phaseOf, zoneInfo } from '../cardio.js';
 import { $app, addDays, busy, confirmSheet, field, fmtDate, h, mount, num, select, sheet, toast, todayIso, uid, units } from '../ui.js';
 import { CannotEncode, canEncode, encodeClip } from '../encode.js';
 import { onUploads, pendingUploads, queueVideo, removeUpload, retryUpload } from '../uploads.js';
@@ -163,10 +164,15 @@ function firstInt(reps) {
 function freshLog(s) {
   const sets = [];
   for (const b of s.workout.blocks) {
+    const phase = phaseOf(b);
     for (const it of b.items) {
+      // Cardio starts at what was prescribed, like reps and load do; warm-ups
+      // are only ticked off, so they log no amounts.
+      const c = phase !== 'warmup' && it.cardio;
       for (let i = 0; i < it.sets; i++) {
         sets.push({ itemId: it.id, exerciseId: it.exerciseId, exerciseName: it.exerciseName, setIndex: i,
-          reps: firstInt(it.reps), loadKg: it.loadKg ?? null, rpe: null, done: false });
+          reps: it.cardio ? null : firstInt(it.reps), loadKg: it.cardio ? null : it.loadKg ?? null, rpe: null, done: false, phase,
+          durationSec: c ? c.durationSec ?? null : null, distanceM: c ? c.distanceM ?? null : null, avgHr: null });
       }
     }
   }
@@ -389,7 +395,38 @@ export async function renderWorkout(date, schedId) {
     return row;
   }
 
+  /** A set done for time or distance: minutes, distance, average heart rate, RPE. */
+  function cardioRow(set, item) {
+    const d = distUnits(u);
+    const mins = h('input', { type: 'number', inputmode: 'decimal', step: 'any', min: 0, value: set.durationSec != null ? Math.round((set.durationSec / 60) * 100) / 100 : '', 'aria-label': 'minutes' });
+    const dist = h('input', { type: 'number', inputmode: 'decimal', step: 'any', min: 0, value: d.to(set.distanceM) ?? '', 'aria-label': d.unit });
+    const hr = h('input', { type: 'number', inputmode: 'numeric', min: 30, max: 250, value: set.avgHr ?? '', 'aria-label': 'average heart rate' });
+    const rpe = h('input', { type: 'number', inputmode: 'decimal', step: '0.5', min: 1, max: 10, value: set.rpe ?? '', 'aria-label': 'RPE' });
+    const row = h('div', { class: `setrow cardio ${set.done ? 'is-done' : ''}` });
+    const sync = () => {
+      set.durationSec = num(mins.value) != null ? Math.round(num(mins.value) * 60) : null;
+      set.distanceM = d.from(dist.value);
+      set.avgHr = num(hr.value) != null ? Math.round(num(hr.value)) : null;
+      set.rpe = num(rpe.value);
+      saveDraft();
+    };
+    for (const i of [mins, dist, hr, rpe]) i.addEventListener('change', sync);
+    const done = h('button', {
+      class: 'done', 'aria-label': 'done',
+      onclick: () => {
+        sync();
+        set.done = !set.done;
+        row.classList.toggle('is-done', set.done);
+        saveDraft();
+        if (set.done && item.restSec && set.setIndex < item.sets - 1) restTimer(item.restSec);
+      },
+    }, '✓');
+    row.append(h('div', { class: 'n' }, set.setIndex + 1), mins, dist, hr, rpe, done);
+    return row;
+  }
+
   function prescription(it) {
+    if (it.cardio) return cardioText(it, u, me.birthDate);
     const parts = [`${it.sets} × ${it.reps}`];
     if (it.loadKg != null) parts.push(`@ ${u.toW(it.loadKg)} ${u.w}${it.loadPct != null ? ` (${it.loadPct}%)` : ''}`);
     else if (it.loadPct != null) parts.push(`@ ${it.loadPct}% of your 1RM`);
@@ -400,7 +437,37 @@ export async function renderWorkout(date, schedId) {
     return parts.join(' · ');
   }
 
+  /** Warm-up blocks: what to do, ticked off as a whole. */
+  function warmupCard(b) {
+    const sets = log.sets.filter((x) => b.items.some((it) => it.id === x.itemId));
+    const isDone = () => sets.length > 0 && sets.every((x) => x.done);
+    const btn = h('button', {
+      class: `block ${isDone() ? 'primary' : ''}`, 'aria-pressed': String(isDone()),
+      onclick: () => {
+        const to = !isDone();
+        for (const x of sets) x.done = to;
+        saveDraft();
+        btn.classList.toggle('primary', to);
+        btn.setAttribute('aria-pressed', String(to));
+        btn.textContent = to ? '✓ Warm-up done' : 'Mark warm-up done';
+      },
+    }, isDone() ? '✓ Warm-up done' : 'Mark warm-up done');
+    const label = KIND_LABEL[b.kind];
+    return h('div', { class: 'card phase-warmup' },
+      h('div', { class: 'spread' }, h('h3', {}, 'Warm-up', label ? ` · ${label}` : ''),
+        label && h('button', { class: 'small', onclick: () => blockTimer(b) }, '⏱ Timer')),
+      b.notes && h('p', { class: 'muted small' }, b.notes),
+      h('ul', { class: 'warmup-list' }, b.items.map((it) => {
+        const info = exerciseInfo(it.exerciseId);
+        return h('li', {}, h('strong', {}, it.exerciseName), ' ', h('span', { class: 'muted small' }, prescription(it)),
+          it.notes && h('div', { class: 'small' }, it.notes),
+          info && (info.cues?.length || info.demoUrl || info.demoVideoUrl) && h('button', { class: 'small ghost', onclick: () => showExercise(info) }, 'How to'));
+      })),
+      btn);
+  }
+
   function blockCard(b) {
+    if (phaseOf(b) === 'warmup') return warmupCard(b);
     const head = [];
     const label = KIND_LABEL[b.kind];
     if (label) {
@@ -411,18 +478,23 @@ export async function renderWorkout(date, schedId) {
         h('h3', {}, `${label} ${detail ? '· ' + detail : ''}`),
         h('button', { class: 'small primary', onclick: () => blockTimer(b) }, '⏱ Timer')));
     }
-    return h('div', { class: 'card' }, head, b.notes && h('p', { class: 'muted small' }, b.notes),
+    const post = phaseOf(b) === 'post';
+    return h('div', { class: `card ${post ? 'phase-post' : ''}` }, post && h('h3', {}, 'Post-workout cardio'), head, b.notes && h('p', { class: 'muted small' }, b.notes),
       b.items.map((it) => {
         const info = exerciseInfo(it.exerciseId);
         return h('div', { class: 'exercise' },
           h('div', { class: 'spread' }, h('strong', {}, it.exerciseName),
-            info && (info.cues?.length || info.demoUrl || info.demoVideoUrl) &&
-              h('button', { class: 'small ghost', onclick: () => showExercise(info) }, 'How to')),
-          h('div', { class: 'prescription' }, prescription(it)),
+            h('div', { class: 'row', style: 'flex-wrap:nowrap' },
+              it.cardio?.durationSec && h('button', { class: 'small', onclick: () => restTimer(it.cardio.durationSec, it.exerciseName, 'work') }, '⏱ Timer'),
+              info && (info.cues?.length || info.demoUrl || info.demoVideoUrl) &&
+                h('button', { class: 'small ghost', onclick: () => showExercise(info) }, 'How to'))),
+          h('div', { class: 'prescription' }, prescription(it), it.cardio?.zone && zoneInfo(me.birthDate)),
           it.notes && h('div', { class: 'small' }, it.notes),
-          h('div', { class: 'sethead' }, h('span', {}, 'Set'), h('span', {}, 'Reps'), h('span', {}, u.w), h('span', {}, 'RPE', rpeLogInfo()), h('span', {})),
-          setsFor(it.id).map((set) => setRow(set, it, b)),
-          videoBar(it),
+          it.cardio
+            ? h('div', { class: 'sethead cardio' }, h('span', {}, it.sets > 1 ? 'Rep' : ''), h('span', {}, 'Min'), h('span', {}, distUnits(u).unit), h('span', {}, 'Avg HR'), h('span', {}, 'RPE'), h('span', {}))
+            : h('div', { class: 'sethead' }, h('span', {}, 'Set'), h('span', {}, 'Reps'), h('span', {}, u.w), h('span', {}, 'RPE', rpeLogInfo()), h('span', {})),
+          setsFor(it.id).map((set) => (it.cardio ? cardioRow(set, it) : setRow(set, it, b))),
+          !it.cardio && videoBar(it),
           exerciseNote(it));
       }));
   }
@@ -432,7 +504,7 @@ export async function renderWorkout(date, schedId) {
     h('h1', {}, s.workout.name),
     h('p', { class: 'muted' }, `${fmtDate(s.date)} · ${s.programName}`, ' ', statusChip(bySched[schedId], s.date)),
     s.workout.notes && h('div', { class: 'card small' }, s.workout.notes),
-    s.workout.blocks.map(blockCard),
+    byPhase(s.workout.blocks).map(blockCard),
     ratingCard(),
     h('div', { class: 'row' },
       h('button', { class: 'grow', onclick: () => finish('skipped') }, 'Skip workout'),
@@ -470,7 +542,8 @@ export async function renderWorkout(date, schedId) {
   }
 
   function finish(preset) {
-    const allDone = log.sets.every((x) => x.done);
+    // Warm-ups and post-workout cardio don't decide the status (cardio.js).
+    const allDone = log.sets.filter((x) => (x.phase || 'main') === 'main').every((x) => x.done);
     const status = select([['completed', 'Completed as written'], ['modified', 'Completed with changes'], ['skipped', 'Skipped']],
       preset || (allDone ? 'completed' : 'modified'));
     const comment = h('textarea', { value: log.comment || '', placeholder: 'How did it go? Anything your coach should know?' });

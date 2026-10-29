@@ -1,7 +1,8 @@
 // Admin: onboard coaches by emailed invitation, and see who is coaching.
 // There is no open coach signup: an invitation is tied to one email address,
 // its link opens the sign-up page with that address filled in, and it stops
-// working once used.
+// working once used. The public "request an invitation" form (views/landing.js)
+// only queues people here: approving a request sends that same invitation.
 
 import { api, del, get, post, put } from '../api.js';
 import { $app, busy, confirmSheet, field, fmtDate, h, mount, select, sheet, toast } from '../ui.js';
@@ -9,9 +10,14 @@ import { $app, busy, confirmSheet, field, fmtDate, h, mount, select, sheet, toas
 const appLink = (path) => `${location.origin}${location.pathname}#${path}`;
 
 export async function renderAdmin() {
-  const [coaches, invites] = await Promise.all([get('/admin/coaches', { cache: true }), get('/admin/invites')]);
+  const [coaches, invites, requests, auto] = await Promise.all([
+    get('/admin/coaches', { cache: true }), get('/admin/invites'),
+    get('/admin/coach-requests').catch(() => []), get('/admin/coach-requests/settings').catch(() => ({ autoApprove: false })),
+  ]);
+  const waiting = requests.filter((r) => r.status !== 'invited');
   mount($app(),
     h('div', { class: 'spread page-head' }, h('h1', {}, 'Coaches'), h('button', { class: 'primary', onclick: inviteSheet }, '+ Invite coach')),
+    autoApproveControls(auto),
 
     coaches.length === 0 && h('div', { class: 'card muted' }, 'No coaches yet. Invite one by email.'),
     coaches.map((c) => h('div', { class: 'card link', role: 'button', tabindex: 0, onclick: () => coachSheet(c.coachId), onkeydown: (e) => e.key === 'Enter' && coachSheet(c.coachId) },
@@ -27,7 +33,43 @@ export async function renderAdmin() {
         }, 'Resend email'),
         h('button', { class: 'small', onclick: () => shareInvite(i) }, 'Link'),
         h('button', { class: 'small danger', onclick: async () => { await del(`/admin/invites/${i.code}`); renderAdmin(); } }, 'Revoke'))))],
+
+    // who the landing page has asked in, and what to do about them
+    requests.length > 0 && [h('h2', {}, 'Coach requests'), requests.map((r) => h('div', { class: 'card spread' },
+      h('div', {}, h('strong', {}, r.name || r.email),
+        h('div', { class: 'muted small' }, `${r.email} · asked ${fmtDate(r.requestedAt.slice(0, 10))} · ${r.status}`)),
+      h('div', { class: 'row' },
+        r.status !== 'invited' && h('button', {
+          class: 'small',
+          onclick: (e) => busy(e.currentTarget, async () => {
+            const out = await post(`/admin/coach-requests/${encodeURIComponent(r.email)}/invite`);
+            emailResult(out.invite);
+            renderAdmin();
+          }),
+        }, 'Invite'),
+        r.status !== 'invited' && r.status !== 'denied' && h('button', {
+          class: 'small',
+          onclick: (e) => busy(e.currentTarget, async () => {
+            await post(`/admin/coach-requests/${encodeURIComponent(r.email)}/deny`);
+            toast(`${r.email} denied — they can ask again from the landing page`);
+            renderAdmin();
+          }),
+        }, 'Deny'))))],
   );
+}
+
+/** The auto-approve switch, kept near the top so its state is never hidden. */
+function autoApproveControls(auto) {
+  return h('div', { class: 'row' },
+    h('span', { class: `chip ${auto.autoApprove ? 'warn' : 'gray'}` }, auto.autoApprove ? 'Auto-approve on' : 'Reviewed by hand'),
+    h('button', {
+      class: 'small',
+      onclick: (e) => busy(e.currentTarget, async () => {
+        const s = await put('/admin/coach-requests/settings', { autoApprove: !auto.autoApprove });
+        toast(s.autoApprove ? 'New requests get an invitation email right away' : 'New requests wait for you in the queue');
+        renderAdmin();
+      }),
+    }, auto.autoApprove ? 'Review requests by hand' : 'Auto-approve requests'));
 }
 
 /** A coach's full profile, private details included, and the directory switch. */

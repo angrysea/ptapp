@@ -340,6 +340,15 @@ Resources:
             Path: /invites/{code}/public
             Method: GET
             Auth: { Authorizer: NONE }
+        # The landing page's "request an invitation" form (routes/requests.rs):
+        # anonymous, one record per email; approval emails a normal invitation.
+        PublicCoachRequest:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /public/coach-requests
+            Method: POST
+            Auth: { Authorizer: NONE }
 
   # ------------------------------------------------------------------ chat
   # Live delivery to open apps (MS-1, tasks/chat/plan.md decision 3). Each

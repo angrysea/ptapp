@@ -1,10 +1,11 @@
 // The progress report (BZ-6): a printable summary of a client's last few
-// weeks (adherence, strength, records, bodyweight, check-ins, habits) with a
+// weeks (adherence, strength, records, cardio, bodyweight, check-ins, habits) with a
 // note from the coach. "Print / Save as PDF" uses the browser's own PDF
 // export (the share sheet on a phone), so nothing is generated on the server.
 // Coaches open it from a client's Overview; clients from Progress.
 
 import { get } from '../api.js';
+import { distUnits } from '../cardio.js';
 import { session } from '../session.js';
 import { $app, addDays, barChart, fmtDate, h, lineChart, mount, round, select, todayIso, units } from '../ui.js';
 
@@ -56,6 +57,10 @@ export async function renderReport(cid, weeks = 8) {
     points: s.points,
   }));
 
+  // cardio: minutes and distance logged each week (not warm-ups)
+  const cardioMin = Math.round(dash.weeklyVolume.reduce((t, v) => t + v.cardioSec, 0) / 60);
+  const cardioDist = distUnits(u).to(dash.weeklyVolume.reduce((t, v) => t + v.cardioM, 0));
+
   const pick = select(WEEKS.map(([k, l]) => [String(k), l]), String(weeks), { 'aria-label': 'Report period', onchange: (e) => renderReport(cid, Number(e.target.value)) });
   const stat = (value, label) => h('div', { class: 'report-stat' }, h('div', { class: 'stat' }, value), h('div', { class: 'stat-label' }, label));
 
@@ -89,6 +94,11 @@ export async function renderReport(cid, weeks = 8) {
       dash.weeklyVolume.length > 0 && h('div', { class: 'card' },
         h('h2', {}, `Weekly training volume (${u.w} × reps)`),
         barChart(dash.weeklyVolume.map((v) => ({ x: fmtDate(v.weekStart, { month: 'short', day: 'numeric' }), y: u.toW(v.volumeKg) })))),
+
+      cardioMin > 0 && h('div', { class: 'card' },
+        h('h2', {}, 'Cardio (minutes per week)'),
+        barChart(dash.weeklyVolume.map((v) => ({ x: fmtDate(v.weekStart, { month: 'short', day: 'numeric' }), y: Math.round(v.cardioSec / 60) }))),
+        h('p', { class: 'small' }, `${cardioMin} minutes in total`, cardioDist > 0 ? `, ${round(cardioDist, 1)} ${distUnits(u).unit}` : '', '.')),
 
       w.length > 0 && h('div', { class: 'card' },
         h('h2', {}, `Bodyweight (${u.w})`),

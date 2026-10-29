@@ -18,6 +18,7 @@ pub mod nutrition;
 pub mod notify;
 pub mod programs;
 pub mod records;
+pub mod requests;
 pub mod replies;
 pub mod sessions;
 pub mod snippets;

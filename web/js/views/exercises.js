@@ -33,6 +33,7 @@ export async function renderExercises() {
   draw();
 }
 
+const MODALITIES = [['strength', 'Strength'], ['cardio', 'Cardio'], ['mobility', 'Mobility']];
 const csv = (a) => (a || []).join(', ');
 const splitCsv = (s) => s.split(',').map((x) => x.trim()).filter(Boolean);
 
@@ -42,6 +43,7 @@ function editSheet(ex) {
   const muscles = h('input', { value: csv(ex?.muscleGroups), placeholder: 'quads, glutes', disabled: readOnly });
   const equipment = h('input', { value: csv(ex?.equipment), placeholder: 'barbell, rack', disabled: readOnly });
   const cues = h('textarea', { value: (ex?.cues || []).join('\n'), placeholder: 'One cue per line', disabled: readOnly });
+  const modality = select(MODALITIES, ex?.modality || 'strength', { disabled: readOnly });
   const demoUrl = h('input', { type: 'url', value: ex?.demoUrl || '', placeholder: 'https://… (optional link)', disabled: readOnly });
   const video = h('input', { type: 'file', accept: 'video/mp4,video/quicktime,video/webm' });
   // Filming guidance (VS-5), shown to clients before they film a set.
@@ -53,12 +55,12 @@ function editSheet(ex) {
   const filmNotes = h('input', { value: f?.notes || '', maxlength: 300, placeholder: 'e.g. Phone at hip height', disabled: readOnly });
   const meters = () => (num(distance.value) == null ? null : Math.round((imperial ? num(distance.value) / 3.281 : num(distance.value)) * 10) / 10);
   const filming = () => (angle.value ? { angle: angle.value, distanceM: meters(), notes: filmNotes.value } : null);
-  const body = () => ({ name: name.value, muscleGroups: splitCsv(muscles.value), equipment: splitCsv(equipment.value), cues: cues.value.split('\n'), demoUrl: demoUrl.value || null, filming: filming() });
+  const body = () => ({ name: name.value, muscleGroups: splitCsv(muscles.value), equipment: splitCsv(equipment.value), cues: cues.value.split('\n'), demoUrl: demoUrl.value || null, filming: filming(), modality: modality.value });
   const sh = sheet(
     h('h2', {}, ex ? ex.name : 'New exercise'),
     readOnly && h('p', { class: 'muted small' }, 'Built-in exercises are read-only. Create a custom exercise to change cues or add your own demo.'),
     ex?.demoVideoUrl && h('video', { src: ex.demoVideoUrl, controls: true, playsinline: true, style: 'width:100%;border-radius:10px' }),
-    field('Name', name), field('Muscle groups', muscles), field('Equipment', equipment), field('Coaching cues', cues), field('Demo link', demoUrl),
+    field('Name', name), field('Type', modality, 'Cardio is programmed for time or distance.'), field('Muscle groups', muscles), field('Equipment', equipment), field('Coaching cues', cues), field('Demo link', demoUrl),
     h('h3', {}, 'Filming a set'),
     h('div', { class: 'grid2' }, field('Camera angle', angle), field(`Distance (${imperial ? 'ft' : 'm'})`, distance)),
     field('Filming notes', filmNotes),

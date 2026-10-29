@@ -188,6 +188,12 @@ input[readonly] { color: var(--muted); }
 .videobar { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 video.player { width: 100%; max-height: 70vh; border-radius: 10px; background: #000; }
 .sethead { display: grid; grid-template-columns: 34px 1fr 1fr 1fr 56px; gap: 6px; font-size: 0.75rem; color: var(--muted); text-align: center; margin-top: 8px; }
+.setrow.cardio, .sethead.cardio { grid-template-columns: 34px 1fr 1fr 1fr 1fr 56px; }
+.card.phase-warmup, .card.phase-post { border-left: 4px solid var(--accent); }
+.warmup-list { margin: 6px 0 10px; padding-left: 18px; }
+.warmup-list li { margin: 4px 0; }
+.block-card.phase-warmup, .block-card.phase-post { border-style: dashed; }
+.phase-pick { margin-bottom: 6px; gap: 4px; }
 
 /* overlays */
 .sheet-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: 20; display: flex; align-items: flex-end; justify-content: center; }

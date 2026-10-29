@@ -5,7 +5,22 @@
 // journey (tests/ui/journey.py) clicks it.
 
 import { login } from '../auth.js';
-import { $app, h, mount } from '../ui.js';
+import cfg from '../config.js';
+import { $app, busy, field, h, mount, toast } from '../ui.js';
+
+// Public call, like the directory's plain fetch: the landing page works
+// signed out, so there is no token to attach.
+async function pubPost(path, body) {
+  try {
+    const res = await fetch(`${cfg.apiUrl}/public${path}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch { return null; } // signed out and offline: no message to show
+}
 
 // One card per feature area the MVP actually ships (README table); roadmap
 // items stay out until they exist, and each line is one breath.
@@ -39,7 +54,9 @@ export function landing() {
       h('div', {},
         h('h3', {}, 'New coach'),
         h('p', { class: 'small' },
-          'Coaches don’t sign up on their own: someone who runs the club vouches for you and sends an invitation tied to your email — the link fills itself in. Then two things before anything else: finish your profile, and invite your first client.')),
+          'Coaches don’t sign up on their own: someone who runs the club vouches for you and sends an invitation tied to your email — the link fills itself in. Then two things before anything else: finish your profile, and invite your first client.'),
+        h('p', { class: 'small muted' }, 'No link yet? Ask below: your email lands in the club admin’s queue, and approving it sends you that invitation.'),
+        requestForm()),
       h('div', {},
         h('h3', {}, 'New client'),
         h('p', { class: 'small' },
@@ -49,4 +66,33 @@ export function landing() {
     h('button', { class: 'primary', onclick: () => login() }, 'Sign in'),
     h('p', {}, h('a', { class: 'btn', href: '#/coaches' }, 'Find a coach')),
     h('p', { class: 'small muted' }, 'New here? Accounts are by invitation: use the link in your invitation email.'));
+}
+
+/** The "ask to join" box: one record per email lands in the admin's queue. */
+function requestForm() {
+  const email = h('input', { type: 'email', autocomplete: 'off', placeholder: 'you@gym.com' });
+  const name = h('input', { autocomplete: 'off', placeholder: 'gym or coach name' });
+  const problem = h('p', { class: 'small', 'aria-live': 'polite' });
+  return [
+    field('Email', email),
+    field('Coach or gym name', name),
+    problem,
+    h('button', {
+      class: 'grow',
+      onclick: (e) => busy(e.currentTarget, async () => {
+        const value = email.value.trim();
+        if (!value.includes('@')) { problem.textContent = 'Type the email you want to be invited with.'; return; }
+        problem.textContent = '';
+        const r = await pubPost('/coach-requests', { email: value, name: name.value });
+        if (!r) { problem.textContent = 'Couldn’t reach the club right now; try again in a bit.'; return; }
+        if (r.status === 'invited') {
+          toast(r.emailed === false
+            ? 'Approved — but the club’s email isn’t wired up yet, so ask them to invite you by hand'
+            : 'Your invitation is on its way to that email — follow the sign-up link in it');
+        } else {
+          toast('You’re on the club’s list; when it approves you, an invitation email arrives');
+        }
+      }),
+    }, 'Request an invitation'),
+  ];
 }

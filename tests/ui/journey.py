@@ -108,9 +108,22 @@ with sync_playwright() as p:
     anon.get_by_role("button", name="Show email").click()
     expect(anon.get_by_role("link", name=f"Email Coach {RUN}")).to_have_attribute("href", re.compile(f"^mailto:coach{RUN}@dev.local"))
     shot(anon, "00c-coach-public-page")
+
+    # the landing page's ask-to-join form lands in the admin's queue (the admin will deny it below)
+    anon.goto(BASE)
+    anon.get_by_label("Email", exact=True).fill(f"wannabe{RUN}@dev.local")
+    anon.get_by_label("Coach or gym name", exact=True).fill("Coach Wanna")
+    anon.get_by_role("button", name="Request an invitation").click()
+    expect(anon.locator("#toast")).to_contain_text("club")
     anon_ctx.close()
 
     # ---------------- the admin sees the coach's private details
+    admin.reload()
+    expect(admin.get_by_role("heading", name="Coach requests")).to_be_visible()
+    expect(admin.get_by_text("Reviewed by hand")).to_be_visible()
+    req_row = admin.locator("div.card.spread", has_text=f"wannabe{RUN}@dev.local").first
+    req_row.get_by_role("button", name="Deny").click()
+    expect(admin.locator("#toast")).to_contain_text("denied")
     admin.reload()
     admin.locator(".card.link", has_text=f"coach{RUN}@dev.local").click()
     expect(admin.locator(".sheet").get_by_text("Jordan Q. Coach")).to_be_visible()
@@ -440,7 +453,7 @@ with sync_playwright() as p:
     expect(client.get_by_role("heading", name="From your coach")).to_be_visible()
     client.get_by_label("Your main sport").fill("Powerlifting")
     client.get_by_role("button", name="Save", exact=True).click()
-    expect(client.get_by_text("Saved")).to_be_visible()
+    expect(client.locator("#toast")).to_contain_text("Saved")
     coach.goto(coach.url.split("#")[0] + "#/c/client" + RUN + "/intake")
     expect(coach.get_by_text("Powerlifting")).to_be_visible()
 

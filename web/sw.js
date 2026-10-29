@@ -7,7 +7,7 @@ const VERSION = 'dev';
 const CACHE = `ptapp-${VERSION}`;
 const SHELL = [
   './', 'index.html', 'manifest.webmanifest', 'icon.svg', 'css/app.css',
-  'js/app.js', 'js/api.js', 'js/auth.js', 'js/config.js', 'js/push.js', 'js/realtime.js', 'js/effort.js', 'js/encode.js', 'js/idb.js', 'js/router.js', 'js/session.js', 'js/timer.js', 'js/ui.js', 'js/uploads.js', 'js/usage.js', 'js/videos.js',
+  'js/app.js', 'js/api.js', 'js/auth.js', 'js/cardio.js', 'js/config.js', 'js/push.js', 'js/realtime.js', 'js/effort.js', 'js/encode.js', 'js/idb.js', 'js/router.js', 'js/session.js', 'js/timer.js', 'js/ui.js', 'js/uploads.js', 'js/usage.js', 'js/videos.js',
   'js/views/admin.js', 'js/views/coach.js', 'js/views/coachprofile.js', 'js/views/consent.js', 'js/views/maxes.js', 'js/views/records.js', 'js/views/progression.js', 'js/views/snippets.js', 'js/views/alerts.js', 'js/views/checkins.js', 'js/views/automation.js', 'js/views/habits.js', 'js/views/meals.js', 'js/views/landing.js', 'js/views/draw.js', 'js/views/sessions.js', 'js/views/report.js', 'js/views/directory.js', 'js/views/comments.js', 'js/views/exercises.js', 'js/views/intake.js', 'js/views/messages.js', 'js/views/metrics.js',
   'js/views/onboarding.js', 'js/views/profile.js', 'js/views/programs.js', 'js/views/review.js', 'js/views/recorder.js', 'js/views/signup.js', 'js/views/trim.js', 'js/views/videos.js', 'js/views/workout.js',
   // set-video conversion (encode.js); precached so it works offline

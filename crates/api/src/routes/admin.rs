@@ -1,9 +1,11 @@
-//! Admins onboard coaches; there is no open coach signup. An admin invites a
-//! coach by email: the invitation is stored with that address and emailed
-//! (see mail.rs), the link opens the app's own sign-up page with the email
-//! filled in from the invitation, and accepting it creates the coach account
-//! (routes/invites.rs). An accepted or expired invitation's link stops
-//! working.
+//! Admins onboard coaches; there is no open coach signup — even the public
+//! "request an invitation" form (routes/requests.rs) only queues a request,
+//! and approving one creates and emails exactly the invitation described
+//! here. An admin invites a coach by email: the invitation is stored with
+//! that address and emailed (see mail.rs), the link opens the app's own
+//! sign-up page with the email filled in from the invitation, and accepting
+//! it creates the coach account (routes/invites.rs). An accepted or expired
+//! invitation's link stops working.
 //!
 //! The first admin bootstraps through ADMIN_EMAILS: a verified email on
 //! that list may set up an admin account.
@@ -22,7 +24,7 @@ use crate::routes::invites::{issue, new_invite, open_invites, revoke_where, ADMI
 use crate::AppState;
 
 /// Shown on the join screen of coach invites.
-const APP_NAME: &str = "PT Coach";
+pub const APP_NAME: &str = "PT Coach";
 
 fn clean_name(name: &str) -> ApiResult<String> {
     let name = name.trim();

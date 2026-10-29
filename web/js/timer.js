@@ -37,8 +37,9 @@ function keepAwake() {
   return c;
 }
 
-/** Countdown rest timer shown as a bottom sheet. */
-export function restTimer(seconds) {
+/** Countdown timer shown as a bottom sheet: rest between sets, or a timed
+ * piece of cardio (`kind` 'work', labelled with the exercise). */
+export function restTimer(seconds, label = 'Rest', kind = 'rest') {
   let end = Date.now() + seconds * 1000;
   const big = h('div', { class: 'timer-big' }, mmss(seconds));
   const lock = keepAwake();
@@ -49,12 +50,12 @@ export function restTimer(seconds) {
     if (left <= 0) { beep(990, 400); close(); }
   }, 250);
   const s = sheet(
-    h('div', { class: 'timer-phase rest' }, 'Rest'),
+    h('div', { class: `timer-phase ${kind}` }, label),
     big,
     h('div', { class: 'row', style: 'justify-content:center' },
       h('button', { onclick: () => { end -= 15000; } }, '−15s'),
       h('button', { onclick: () => { end += 15000; } }, '+15s'),
-      h('button', { class: 'primary', onclick: () => close() }, 'Skip')),
+      h('button', { class: 'primary', onclick: () => close() }, kind === 'rest' ? 'Skip' : 'Stop')),
   );
   function close() { clearInterval(tick); lock.stop(); s.close(); }
 }

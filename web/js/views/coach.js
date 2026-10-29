@@ -4,6 +4,7 @@
 
 import { del, get, post } from '../api.js';
 import { RATINGS } from '../effort.js';
+import { cardioLogText, isCardioSet } from '../cardio.js';
 import { go } from '../router.js';
 import { session } from '../session.js';
 import {
@@ -143,6 +144,8 @@ async function overview(el, client) {
     a.missedDates.length > 0 && h('div', { class: 'card small' }, h('strong', {}, 'Missed: '), a.missedDates.slice(-8).map((x) => fmtDate(x)).join(', ')),
     h('div', { class: 'card' }, h('h3', {}, `Weekly volume (${u.w} × reps)`),
       barChart(d.weeklyVolume.map((w) => ({ x: fmtDate(w.weekStart, { month: 'short', day: 'numeric' }), y: u.toW(w.volumeKg) })))),
+    d.weeklyVolume.some((w) => w.cardioSec > 0) && h('div', { class: 'card' }, h('h3', {}, 'Weekly cardio (minutes)'),
+      barChart(d.weeklyVolume.map((w) => ({ x: fmtDate(w.weekStart, { month: 'short', day: 'numeric' }), y: Math.round(w.cardioSec / 60) })))),
     h('div', { class: 'card' }, h('h3', {}, `Estimated 1RM (${u.w})`),
       d.strength.length === 0 ? h('p', { class: 'muted small' }, 'Appears once loaded sets are logged.')
         : lineChart(d.strength.slice(0, 4).map((s) => ({ label: `${s.exerciseName} (best ${u.toW(s.bestE1rmKg)})`, points: s.points.map((p) => ({ x: p.date, y: u.toW(p.e1rmKg) })) })))),
@@ -220,7 +223,7 @@ async function logs(el, client, focus = null) {
     list.length === 0 && h('p', { class: 'muted' }, 'No workouts logged in the last 60 days.'),
     [...list].reverse().map((l) => {
       const byEx = {};
-      for (const s of l.sets) (byEx[`${s.itemId}`] ||= { name: s.exerciseName, sets: [] }).sets.push(s);
+      for (const s of l.sets) (byEx[`${s.itemId}`] ||= { name: `${s.exerciseName}${s.phase === 'warmup' ? ' (warm-up)' : ''}`, sets: [] }).sets.push(s);
       const c = l.check;
       return h('div', { class: `card ${l.id === focus ? 'focus' : ''}`, 'data-log': l.id },
         h('div', { class: 'spread' }, h('strong', {}, l.workoutName), statusChip(l, l.date)),
@@ -252,7 +255,9 @@ async function logs(el, client, focus = null) {
           h('div', { class: 'row small' }, ex.sets.sort((a, b) => a.setIndex - b.setIndex).map((s) => h('button', {
             class: `small ${s.done ? '' : 'ghost'}`, title: 'Comment on this set',
             onclick: async () => { if (await commentOn(client.userId, l.id, s.setIndex, s.itemId)) refresh(); },
-          }, `${s.loadKg != null ? `${round(u.toW(s.loadKg), 1)}${u.w}` : 'BW'} × ${s.reps ?? '–'}${s.rpe ? ` @${s.rpe}` : ''}${s.done ? '' : ' (not done)'}`))))),
+          }, `${s.phase === 'warmup' ? (s.done ? 'Done' : 'Not done')
+            : isCardioSet(s) ? `${cardioLogText(s, u)}${s.done ? '' : ' (not done)'}`
+              : `${s.loadKg != null ? `${round(u.toW(s.loadKg), 1)}${u.w}` : 'BW'} × ${s.reps ?? '–'}${s.rpe ? ` @${s.rpe}` : ''}${s.done ? '' : ' (not done)'}`}`))))),
         (byLog[l.id] || []).map((cm) => h('div', { class: 'small', style: 'margin-top:6px' },
           h('strong', {}, `${cm.authorName}${cm.setIndex != null ? ` (set ${cm.setIndex + 1})` : ''}: `), cm.text)),
         h('button', { class: 'small', style: 'margin-top:8px', onclick: async () => { if (await commentOn(client.userId, l.id)) refresh(); } }, '💬 Comment on workout'));

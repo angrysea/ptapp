@@ -77,6 +77,13 @@ pub fn router(state: AppState) -> Router {
         .route("/admin/invites", get(admin::list_invites).post(admin::create_invite))
         .route("/admin/invites/{code}", delete(admin::revoke_invite))
         .route("/admin/invites/{code}/resend", post(admin::resend_invite))
+        // coach request queue: anonymous ask-to-join from the landing page,
+        // the admin's queue/approve/deny/auto-approve behind it
+        .route("/public/coach-requests", post(requests::request))
+        .route("/admin/coach-requests", get(requests::queue))
+        .route("/admin/coach-requests/settings", get(requests::get_settings).put(requests::put_settings))
+        .route("/admin/coach-requests/{email}/invite", post(requests::invite_route))
+        .route("/admin/coach-requests/{email}/deny", post(requests::deny))
         // coach profiles and the public directory (no sign-in for /public)
         .route("/me/coach-profile", get(coaches::get_mine).put(coaches::put_mine))
         .route("/me/coach-profile/photo", post(coaches::photo_upload))
