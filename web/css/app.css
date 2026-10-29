@@ -122,6 +122,7 @@ input[type="checkbox"], input[type="radio"] { width: 22px; min-height: 22px; hei
 
 .chip { display: inline-block; font-size: 0.75rem; font-weight: 600; padding: 2px 8px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); }
 .chip.warn { background: var(--warn-soft); color: var(--warn); }
+.card.warn { border-color: var(--warn); background: var(--warn-soft); }
 .chip.bad { background: var(--bad-soft); color: var(--bad); }
 .chip.good { background: var(--good-soft); color: var(--good); }
 .chip.gray { background: var(--line); color: var(--muted); }

@@ -58,6 +58,14 @@ Deploys run from a developer machine, not from GitHub. (The AWS Organization thi
   4. In DNS, point `gymtxcoach.com` and `www` at the `CloudFrontDomain` output with CNAMEs, **DNS only** (on Cloudflare, the grey cloud; Cloudflare flattens the bare-domain CNAME).
 
   The Cognito sign-in page keeps its `*.amazoncognito.com` address; giving it its own (e.g. `auth.gymtxcoach.com`) needs another us-east-1 certificate.
+* **Human check on the coach-request form (Cloudflare Turnstile).** The landing page's "Request an invitation" form is anonymous. With Turnstile the form shows Cloudflare's check, and the API verifies its token before keeping a request (`routes/requests.rs`). The admin can only turn on auto-approve when it's set up. Without it, the form falls back to a hidden field and a minimum time on the page.
+  1. In the Cloudflare dashboard, open **Turnstile → Add widget**, mode **Managed**, with the hostnames `gymtxcoach.com`, the `CloudFrontDomain` output and `localhost`.
+  2. Store both keys once per stage. The site key is public and the secret stays encrypted:
+     `aws ssm put-parameter --name /ptapp/<stage>/turnstile-site-key --type String --value <site key>`
+     `aws ssm put-parameter --name /ptapp/<stage>/turnstile-secret --type SecureString --value <secret>`
+     In Git Bash, prefix these with `MSYS_NO_PATHCONV=1`, and add `--overwrite` to replace a key.
+  3. Deploy as usual. `deploy.sh` reads the site key into the web app's config, and the API reads the secret when it starts. To turn Turnstile off, delete both parameters and deploy.
+* **Food search.** Pass `FDC_API_KEY` (a free USDA FoodData Central key from api.data.gov) on every deploy. Leaving it out turns the coach's food search off.
 * **Production stage.** Use `STAGE=prod`, a different domain prefix and a separate AWS account if you can. The table and media bucket have `DeletionPolicy: Retain`.
 * **Backups.** PITR gives 35 days of restore points (BRD reliability NFR), and an AWS Backup plan also takes a daily snapshot at 08:00 UTC into the `ptapp-{stage}` vault, kept 35 days; the vault is retained if the stack is deleted, so the snapshots outlive the table. Restore one from the AWS Backup console (Protected resources → the table → Restore). Restoring makes a *new* table, which the stack then has to point at (`TABLE_NAME`); the media bucket isn't covered (S3 versioning would be).
   * **Restore test (2026-10-28, dev):**

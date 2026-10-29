@@ -71,6 +71,38 @@ export function landing() {
     h('p', { class: 'small muted' }, 'New here? Accounts are by invitation: use the link in your invitation email.'));
 }
 
+/** Cloudflare Turnstile's "are you a person" widget, when the deploy set a
+ * site key (scripts/deploy.sh); the API checks its token. Without one there
+ * is nothing to show and the token is empty. */
+function humanCheck() {
+  const sitekey = cfg.turnstileSiteKey;
+  if (!sitekey) return { el: null, token: () => '', reset() {} };
+  const el = h('div', { class: 'turnstile' });
+  let token = '';
+  let id = null;
+  const render = () => {
+    if (id != null || !el.isConnected) return;
+    id = window.turnstile.render(el, {
+      sitekey,
+      callback: (t) => { token = t; },
+      'expired-callback': () => { token = ''; },
+      'error-callback': () => { token = ''; },
+    });
+  };
+  // Rendered once the form is on the page and the script has loaded.
+  const ready = () => requestAnimationFrame(render);
+  if (window.turnstile) ready();
+  else {
+    let s = document.getElementById('turnstile-js');
+    if (!s) {
+      s = h('script', { id: 'turnstile-js', src: 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit', async: true });
+      document.head.append(s);
+    }
+    s.addEventListener('load', ready);
+  }
+  return { el, token: () => token, reset: () => { token = ''; if (id != null) window.turnstile.reset(id); } };
+}
+
 /** The "ask to join" box: one record per email lands in the admin's queue. */
 function requestForm() {
   const shownAt = Date.now(); // the server drops sends faster than a person types
@@ -79,18 +111,22 @@ function requestForm() {
   // Hidden from people (and screen readers); form-filling scripts fill it.
   const website = h('input', { name: 'website', tabindex: '-1', autocomplete: 'off' });
   const problem = h('p', { class: 'small', 'aria-live': 'polite' });
+  const check = humanCheck();
   return [
     field('Email', email),
     field('Coach or gym name', name),
     h('div', { class: 'hp', 'aria-hidden': 'true' }, h('label', {}, 'Leave this empty', website)),
+    check.el,
     problem,
     h('button', {
       class: 'grow',
       onclick: (e) => busy(e.currentTarget, async () => {
         const value = email.value.trim();
         if (!value.includes('@')) { problem.textContent = 'Type the email you want to be invited with.'; return; }
+        if (check.el && !check.token()) { problem.textContent = 'One moment: the check above confirms you’re a person.'; return; }
         problem.textContent = '';
-        const r = await pubPost('/coach-requests', { email: value, name: name.value, website: website.value, elapsedMs: Date.now() - shownAt });
+        const r = await pubPost('/coach-requests', { email: value, name: name.value, website: website.value, elapsedMs: Date.now() - shownAt, turnstile: check.token() });
+        check.reset(); // each token works once
         if (!r) { problem.textContent = 'Couldn’t reach the club right now; try again in a bit.'; return; }
         if (r.problem) { problem.textContent = r.problem.charAt(0).toUpperCase() + r.problem.slice(1); return; }
         // The same answer for everyone: the form never says who was invited.

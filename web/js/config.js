@@ -6,5 +6,7 @@ export default {
   cognitoDomain: "",
   region: "",
   clientId: "",
+  // Cloudflare Turnstile on the coach-request form; empty leaves it off.
+  turnstileSiteKey: "",
   devUser: true,
 };

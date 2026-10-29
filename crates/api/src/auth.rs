@@ -53,6 +53,24 @@ impl<S: Send + Sync> FromRequestParts<S> for Caller {
     }
 }
 
+/// The caller's IP address, for routes that take no sign-in: API Gateway's,
+/// or locally (DEV_AUTH) an `x-dev-ip` header so tests can stand in for
+/// different senders. None when neither is there.
+#[derive(Debug, Clone)]
+pub struct SourceIp(pub Option<String>);
+
+impl<S: Send + Sync> FromRequestParts<S> for SourceIp {
+    type Rejection = std::convert::Infallible;
+
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        if let Some(RequestContext::ApiGatewayV2(ctx)) = parts.extensions.get::<RequestContext>() {
+            return Ok(SourceIp(ctx.http.source_ip.clone()));
+        }
+        let dev = std::env::var("DEV_AUTH").as_deref() == Ok("1");
+        Ok(SourceIp(dev.then(|| parts.headers.get("x-dev-ip").and_then(|v| v.to_str().ok()).map(str::to_owned)).flatten()))
+    }
+}
+
 /// A caller who has completed onboarding (has a Profile).
 #[derive(Debug, Clone)]
 pub struct Ctx {

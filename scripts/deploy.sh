@@ -29,6 +29,9 @@ ALARM_EMAIL="${ALARM_EMAIL:-}"
 # LAMBDA_BUILD=wsl: build the Lambdas inside WSL Ubuntu (Windows with Smart App Control).
 # "false" if INVITE_FROM's domain is already an SES identity made outside this stack.
 CREATE_SENDER_IDENTITY="${CREATE_SENDER_IDENTITY:-true}"
+# FDC_API_KEY (USDA FoodData Central, free at api.data.gov) turns on the coach's
+# food search. Pass it on every deploy: leaving it out turns the search off.
+FDC_API_KEY="${FDC_API_KEY:-}"
 
 echo "==> building Lambdas (arm64): the API and the hourly sweep"
 # LAMBDA_BUILD=wsl builds inside WSL Ubuntu (scripts/build-lambda-wsl.sh), for
@@ -49,6 +52,14 @@ if ! MSYS_NO_PATHCONV=1 aws ssm get-parameter --region "$REGION" --name "$VAPID_
     --value "$(cargo run -q --release -p api --bin vapid_keys)" >/dev/null
 fi
 
+# Cloudflare Turnstile, the human check on the coach-request form
+# (routes/requests.rs, docs/DEPLOY.md): both keys live in SSM, stored once by
+# hand. Without them the form has no human check and auto-approve stays off.
+TURNSTILE_SITE_KEY="${TURNSTILE_SITE_KEY:-$(MSYS_NO_PATHCONV=1 aws ssm get-parameter --region "$REGION"   --name "/ptapp/$STAGE/turnstile-site-key" --query Parameter.Value --output text 2>/dev/null || true)}"
+if [ -n "$TURNSTILE_SITE_KEY" ] && ! MSYS_NO_PATHCONV=1 aws ssm get-parameter --region "$REGION" --name "/ptapp/$STAGE/turnstile-secret" >/dev/null 2>&1; then
+  echo "!! a Turnstile site key but no /ptapp/$STAGE/turnstile-secret: the form will show the check but the API won't verify it" >&2
+fi
+
 echo "==> deploying stack $STACK to $REGION"
 sam deploy \
   --template-file template.yaml \
@@ -59,7 +70,7 @@ sam deploy \
   --no-confirm-changeset \
   --no-fail-on-empty-changeset \
   --parameter-overrides "Stage=$STAGE" "CognitoDomainPrefix=$COGNITO_DOMAIN_PREFIX" "AdminEmails=$ADMIN_EMAILS" "InviteFromAddress=$INVITE_FROM" "CreateSenderIdentity=$CREATE_SENDER_IDENTITY" \
-    "AppDomain=$APP_DOMAIN" "AppCertificateArn=$APP_CERT_ARN" "AlarmEmail=$ALARM_EMAIL"
+    "AppDomain=$APP_DOMAIN" "AppCertificateArn=$APP_CERT_ARN" "AlarmEmail=$ALARM_EMAIL" "FdcApiKey=$FDC_API_KEY"
 
 out() {
   aws cloudformation describe-stacks --region "$REGION" --stack-name "$STACK" \
@@ -90,6 +101,7 @@ export default {
   clientId: "$CLIENT_ID",
   eventsHttp: "$EVENTS_HTTP",
   eventsRealtime: "$EVENTS_REALTIME",
+  turnstileSiteKey: "$TURNSTILE_SITE_KEY",
   devUser: false,
 };
 EOF

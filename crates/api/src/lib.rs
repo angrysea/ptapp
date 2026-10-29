@@ -51,6 +51,10 @@ pub struct AppState {
     /// None turns /foods/search off. Never ship it in the web app: keys found
     /// in public code get deactivated.
     pub fdc_key: Option<String>,
+    /// Cloudflare Turnstile secret (TURNSTILE_PARAM, an SSM SecureString, or
+    /// TURNSTILE_SECRET in tests); None leaves the coach-request form without
+    /// a human check, and auto-approve off (routes/requests.rs).
+    pub turnstile_secret: Option<String>,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -197,6 +201,7 @@ impl AppState {
             app_url,
             http: http.clone(),
             fdc_key: std::env::var("FDC_API_KEY").ok().filter(|k| !k.trim().is_empty()),
+            turnstile_secret: routes::requests::turnstile_secret(&config).await,
             bucket: std::env::var("MEDIA_BUCKET").expect("MEDIA_BUCKET"),
             presign_ttl: Duration::from_secs(900),
             video_retention_days: std::env::var("VIDEO_RETENTION_DAYS").ok().and_then(|d| d.parse().ok()).unwrap_or(180),

@@ -8,9 +8,11 @@
 //! profile after they sign up.
 //!
 //! The form is the one anonymous way in, so it is guarded (routes/requests.rs):
-//! a hidden field only bots fill, a minimum time on the page, the same answer
-//! for every email (it never says who was invited), denials that stick for a
-//! while, and a cap on the pending queue. API Gateway throttles the route.
+//! a hidden field only bots fill; Cloudflare Turnstile's human check when it
+//! is set up (a minimum time on the page otherwise); a few requests an hour
+//! per sender; the same answer for every email (it never says who was
+//! invited); denials that stick for a while; and a cap on the pending queue.
+//! API Gateway also throttles the route. Auto-approve needs Turnstile.
 
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
@@ -22,8 +24,11 @@ pub const DENY_DAYS: i64 = 30;
 /// Pending requests beyond this are dropped (silently), so a flood can't
 /// bury the admin's queue.
 pub const MAX_PENDING: usize = 500;
-/// Faster than this from opening the page to sending is a script.
+/// Faster than this from opening the page to sending is a script (the
+/// check used when Turnstile isn't set up; the page reports the time).
 pub const MIN_FILL_MS: u64 = 3000;
+/// Requests one sender (IP address) may make in an hour.
+pub const MAX_PER_SENDER_HOUR: u32 = 5;
 
 /// A plausible address: one `@`, a local part, and a dotted domain of
 /// letters, digits, dots and hyphens; no spaces or control characters.

@@ -14,10 +14,13 @@ export async function renderAdmin() {
     get('/admin/coaches', { cache: true }), get('/admin/invites'),
     get('/admin/coach-requests').catch(() => []), get('/admin/coach-requests/settings').catch(() => ({ autoApprove: false })),
   ]);
-  const waiting = requests.filter((r) => r.status !== 'invited');
+  const pending = requests.filter((r) => r.status === 'pending').length;
   mount($app(),
     h('div', { class: 'spread page-head' }, h('h1', {}, 'Coaches'), h('button', { class: 'primary', onclick: inviteSheet }, '+ Invite coach')),
     autoApproveControls(auto),
+    auto.maxPending && pending >= auto.maxPending && h('div', { class: 'card warn' },
+      h('strong', {}, `The request queue is full (${pending} waiting). `),
+      'New requests from the landing page are dropped until you invite or deny some.'),
 
     coaches.length === 0 && h('div', { class: 'card muted' }, 'No coaches yet. Invite one by email.'),
     coaches.map((c) => h('div', { class: 'card link', role: 'button', tabindex: 0, onclick: () => coachSheet(c.coachId), onkeydown: (e) => e.key === 'Enter' && coachSheet(c.coachId) },
@@ -51,15 +54,21 @@ export async function renderAdmin() {
           class: 'small',
           onclick: (e) => busy(e.currentTarget, async () => {
             await post(`/admin/coach-requests/${encodeURIComponent(r.email)}/deny`);
-            toast(`${r.email} denied — they can ask again from the landing page`);
+            toast(`${r.email} denied. They can ask again in 30 days.`);
             renderAdmin();
           }),
         }, 'Deny'))))],
   );
 }
 
-/** The auto-approve switch, kept near the top so its state is never hidden. */
+/** The auto-approve switch, kept near the top so its state is never hidden.
+ * Offered only with the human check (Turnstile) set up: without it the form
+ * would be open signup. */
 function autoApproveControls(auto) {
+  if (!auto.humanCheck && !auto.autoApprove) {
+    return h('div', { class: 'row' }, h('span', { class: 'chip gray' }, 'Reviewed by hand'),
+      h('span', { class: 'small muted' }, 'Auto-approve needs the human check (Cloudflare Turnstile) set up.'));
+  }
   return h('div', { class: 'row' },
     h('span', { class: `chip ${auto.autoApprove ? 'warn' : 'gray'}` }, auto.autoApprove ? 'Auto-approve on' : 'Reviewed by hand'),
     h('button', {

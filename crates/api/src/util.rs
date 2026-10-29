@@ -232,6 +232,7 @@ mod tests {
             cognito: None,
             http: reqwest::Client::new(),
             fdc_key: None,
+            turnstile_secret: None,
         };
         let up = super::presign_put(&state, "k", "image/jpeg", 1234, Some(super::PENDING_TAG)).await.unwrap();
         assert!(up.url.contains("X-Amz-SignedHeaders=content-length%3B"), "{}", up.url);

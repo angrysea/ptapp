@@ -29,6 +29,15 @@ impl T {
         (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
     }
 
+    /// An anonymous POST from a given sender address (DEV_AUTH's x-dev-ip).
+    async fn post_from(&self, ip: &str, path: &str, body: Value) -> (StatusCode, Value) {
+        let req = Request::builder().method("POST").uri(path).header("content-type", "application/json").header("x-dev-ip", ip);
+        let res = self.app.clone().oneshot(req.body(Body::from(body.to_string())).unwrap()).await.unwrap();
+        let status = res.status();
+        let bytes = axum::body::to_bytes(res.into_body(), 10 << 20).await.unwrap();
+        (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
+    }
+
     /// A GET whose body isn't JSON (the calendar feed).
     async fn text(&self, path: &str) -> (StatusCode, String, String) {
         let req = Request::builder().method("GET").uri(path).body(Body::empty()).unwrap();
@@ -188,19 +197,40 @@ async fn full_client_journey() {
     // the approved invitation sits on the admin's invites list like any other
     let (_, invs) = t.call("GET", "/admin/invites", Some("admin1"), None).await;
     assert!(invs.as_array().unwrap().iter().any(|i| i["code"] == ap_code.as_str()));
-    // the auto-approve switch
+    // one sender gets a few an hour; the rest are answered the same and dropped
+    for i in 0..7 {
+        let (s, r) = t.post_from("203.0.113.9", "/public/coach-requests", ask(&format!("burst{i}@dev.local"), "")).await;
+        assert_eq!((s, r), (StatusCode::OK, w.clone()));
+    }
+    let burst = queue(&t).await.iter().filter(|r| r["email"].as_str().unwrap().starts_with("burst")).count();
+    assert_eq!(burst, 5, "MAX_PER_SENDER_HOUR from one address");
+    assert_eq!(t.post_from("198.51.100.4", "/public/coach-requests", ask("other-sender@dev.local", "")).await.1, w);
+    assert!(status_of(&queue(&t).await, "other-sender@dev.local").is_some(), "another address isn't held up");
+    // the auto-approve switch needs the human check (Cloudflare Turnstile)
     let (s, off) = t.call("GET", "/admin/coach-requests/settings", Some("admin1"), None).await;
     assert_eq!(s, StatusCode::OK, "{off}");
-    assert_eq!(off["autoApprove"], false, "review by hand is the default");
+    assert_eq!((off["autoApprove"].clone(), off["humanCheck"].clone()), (json!(false), json!(false)), "review by hand; no Turnstile here");
     assert_eq!(t.call("PUT", "/admin/coach-requests/settings", Some("coach1"), Some(json!({ "autoApprove": true }))).await.0, StatusCode::FORBIDDEN);
-    let (_, on) = t.call("PUT", "/admin/coach-requests/settings", Some("admin1"), Some(json!({ "autoApprove": true }))).await;
-    assert_eq!(on["autoApprove"], true);
-    let (s, quick) = t.call("POST", "/public/coach-requests", None, Some(ask("quick@dev.local", " Quick Coach "))).await;
+    assert_eq!(t.call("PUT", "/admin/coach-requests/settings", Some("admin1"), Some(json!({ "autoApprove": true }))).await.0, StatusCode::BAD_REQUEST, "not without Turnstile");
+    // with Turnstile (Cloudflare's published test secrets: 1x… always passes, 2x… always fails)
+    let with_secret = |secret: &str| T { app: api::router(api::AppState { turnstile_secret: Some(secret.into()), ..state.clone() }) };
+    let failing = with_secret("2x0000000000000000000000000000000AA");
+    let token = |email: &str| json!({ "email": email, "turnstile": "XXXX.DUMMY.TOKEN.XXXX" });
+    assert_eq!(failing.call("POST", "/public/coach-requests", None, Some(token("robot@dev.local"))).await.1, w, "failed the check: same answer");
+    assert!(status_of(&queue(&t).await, "robot@dev.local").is_none(), "and nothing kept");
+    let tt = with_secret("1x0000000000000000000000000000000AA");
+    assert_eq!(tt.call("POST", "/public/coach-requests", None, Some(json!({ "email": "notoken@dev.local", "elapsedMs": 8000 }))).await.1, w);
+    assert!(status_of(&queue(&t).await, "notoken@dev.local").is_none(), "with Turnstile on, the page's timing alone isn't enough");
+    let (_, on) = tt.call("PUT", "/admin/coach-requests/settings", Some("admin1"), Some(json!({ "autoApprove": true }))).await;
+    assert_eq!((on["autoApprove"].clone(), on["humanCheck"].clone()), (json!(true), json!(true)));
+    let (s, quick) = tt.call("POST", "/public/coach-requests", None, Some(json!({ "email": "quick@dev.local", "name": " Quick Coach ", "turnstile": "XXXX.DUMMY.TOKEN.XXXX" }))).await;
     assert_eq!((s, quick), (StatusCode::OK, w.clone()), "no hint that it was approved");
     let rq2 = queue(&t).await;
-    assert_eq!(rq2.len(), 3, "quick coach, nosuch denied, wannabe invited");
     assert_eq!(rq2[0]["email"], "quick@dev.local", "newest first");
     assert_eq!(rq2[0]["status"], "invited", "auto-approved on arrival");
+    // auto-approve left on but Turnstile gone (a deploy without the secret): requests wait
+    assert_eq!(t.call("POST", "/public/coach-requests", None, Some(ask("waits@dev.local", ""))).await.1, w);
+    assert_eq!(status_of(&queue(&t).await, "waits@dev.local"), Some(json!("pending")));
     let (_, off) = t.call("PUT", "/admin/coach-requests/settings", Some("admin1"), Some(json!({ "autoApprove": false }))).await;
     assert_eq!(off["autoApprove"], false);
     // admins see no coach or client data

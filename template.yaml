@@ -217,13 +217,13 @@ Resources:
       DefaultRouteSettings:
         ThrottlingBurstLimit: 100
         ThrottlingRateLimit: 50
-      # The anonymous coach-request form (routes/requests.rs): a person sends
-      # it once, so a low ceiling only slows scripts. HTTP APIs throttle per
-      # route, not per caller; the form's own checks handle single senders.
+      # The anonymous coach-request form (routes/requests.rs). HTTP APIs
+      # throttle per route, not per caller, so this only caps the total; the
+      # API limits each sender (IP) to a few an hour and checks for a person.
       RouteSettings:
         "POST /public/coach-requests":
-          ThrottlingBurstLimit: 5
-          ThrottlingRateLimit: 1
+          ThrottlingBurstLimit: 20
+          ThrottlingRateLimit: 10
       CorsConfiguration:
         AllowOrigins: [!Sub "https://${Distribution.DomainName}", !Ref LocalDevOrigin, !If [HasAppDomain, !Sub "https://${AppDomain}", !Ref AWS::NoValue]]
         AllowHeaders: [authorization, content-type]
@@ -259,6 +259,10 @@ Resources:
           FDC_API_KEY: !Ref FdcApiKey
           # Web Push key, an SSM SecureString made once by scripts/deploy.sh.
           VAPID_PARAM: !Sub /ptapp/${Stage}/vapid-private-key
+          # Cloudflare Turnstile secret for the coach-request form, an SSM
+          # SecureString you store once (docs/DEPLOY.md); absent, the form has
+          # no human check and auto-approve stays off.
+          TURNSTILE_PARAM: !Sub /ptapp/${Stage}/turnstile-secret
           RUST_LOG: info
       LoggingConfig:
         LogGroup: !Ref ApiLogGroup
@@ -295,7 +299,9 @@ Resources:
               Resource: !Sub "${EventApi.ApiArn}/channelNamespace/inbox"
             - Effect: Allow
               Action: ssm:GetParameter
-              Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/ptapp/${Stage}/vapid-private-key"
+              Resource:
+                - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/ptapp/${Stage}/vapid-private-key"
+                - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/ptapp/${Stage}/turnstile-secret"
       Events:
         Api:
           Type: HttpApi
