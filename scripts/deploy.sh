@@ -60,6 +60,14 @@ if [ -n "$TURNSTILE_SITE_KEY" ] && ! MSYS_NO_PATHCONV=1 aws ssm get-parameter --
   echo "!! a Turnstile site key but no /ptapp/$STAGE/turnstile-secret: the form will show the check but the API won't verify it" >&2
 fi
 
+# sam refuses "Key=" with nothing after it, so settings left empty are left
+# out; CloudFormation then uses the template's default, which is empty too.
+OVERRIDES=()
+for kv in "Stage=$STAGE" "CognitoDomainPrefix=$COGNITO_DOMAIN_PREFIX" "AdminEmails=$ADMIN_EMAILS" "InviteFromAddress=$INVITE_FROM" \
+  "CreateSenderIdentity=$CREATE_SENDER_IDENTITY" "AppDomain=$APP_DOMAIN" "AppCertificateArn=$APP_CERT_ARN" "AlarmEmail=$ALARM_EMAIL" "FdcApiKey=$FDC_API_KEY"; do
+  if [ -n "${kv#*=}" ]; then OVERRIDES+=("$kv"); fi
+done
+
 echo "==> deploying stack $STACK to $REGION"
 sam deploy \
   --template-file template.yaml \
@@ -69,8 +77,7 @@ sam deploy \
   --resolve-s3 \
   --no-confirm-changeset \
   --no-fail-on-empty-changeset \
-  --parameter-overrides "Stage=$STAGE" "CognitoDomainPrefix=$COGNITO_DOMAIN_PREFIX" "AdminEmails=$ADMIN_EMAILS" "InviteFromAddress=$INVITE_FROM" "CreateSenderIdentity=$CREATE_SENDER_IDENTITY" \
-    "AppDomain=$APP_DOMAIN" "AppCertificateArn=$APP_CERT_ARN" "AlarmEmail=$ALARM_EMAIL" "FdcApiKey=$FDC_API_KEY"
+  --parameter-overrides "${OVERRIDES[@]}"
 
 out() {
   aws cloudformation describe-stacks --region "$REGION" --stack-name "$STACK" \
