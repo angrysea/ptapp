@@ -3,7 +3,7 @@
 use axum::extract::{Path, State};
 use axum::Json;
 use chrono::Utc;
-use ptcore::model::Program;
+use ptcore::model::{Block, Program};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -26,19 +26,33 @@ fn normalize(p: &mut Program) {
         if pw.workout.id.is_empty() {
             pw.workout.id = new_id();
         }
-        for b in &mut pw.workout.blocks {
-            if b.id.is_empty() {
-                b.id = new_id();
-            }
-            for it in &mut b.items {
-                if it.id.is_empty() {
-                    it.id = new_id();
-                }
+        fill_ids(&mut pw.workout.blocks);
+    }
+    fill_ids(&mut p.default_blocks);
+    p.workouts.sort_by_key(|pw| (pw.week, pw.day));
+    p.updated_at = Some(Utc::now());
+}
+
+fn fill_ids(blocks: &mut [Block]) {
+    for b in blocks {
+        if b.id.is_empty() {
+            b.id = new_id();
+        }
+        for it in &mut b.items {
+            if it.id.is_empty() {
+                it.id = new_id();
             }
         }
     }
-    p.workouts.sort_by_key(|pw| (pw.week, pw.day));
-    p.updated_at = Some(Utc::now());
+}
+
+fn clear_ids(blocks: &mut [Block]) {
+    for b in blocks {
+        b.id.clear();
+        for it in &mut b.items {
+            it.id.clear();
+        }
+    }
 }
 
 pub async fn list(State(st): State<AppState>, ctx: Ctx) -> ApiResult<Json<Vec<Program>>> {
@@ -101,13 +115,9 @@ pub async fn copy(
     p.name = body.name.filter(|n| !n.trim().is_empty()).unwrap_or_else(|| format!("{} (copy)", p.name));
     for pw in &mut p.workouts {
         pw.workout.id.clear();
-        for b in &mut pw.workout.blocks {
-            b.id.clear();
-            for it in &mut b.items {
-                it.id.clear();
-            }
-        }
+        clear_ids(&mut pw.workout.blocks);
     }
+    clear_ids(&mut p.default_blocks);
     normalize(&mut p);
     st.store.put(&pk(coach), &sk(&p.id), &p).await?;
     Ok(Json(p))

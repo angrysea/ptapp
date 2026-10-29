@@ -14,6 +14,7 @@ pub mod me;
 pub mod messages;
 pub mod password;
 pub mod metrics;
+pub mod nutrition;
 pub mod notify;
 pub mod programs;
 pub mod records;

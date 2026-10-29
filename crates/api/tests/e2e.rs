@@ -1206,6 +1206,51 @@ async fn full_client_journey() {
     assert!(hs["streaks"].get(&wid).is_none());
     assert!(hs["habits"].as_array().unwrap().iter().any(|h| h["id"] == wid.as_str() && h["active"] == false));
 
+    // --- food journal: client logs meals, coach searches and estimates
+    let (s, lunch) = t.call("POST", "/clients/client1/meals", Some("client1"), Some(json!({
+        "date": day(0), "label": " Lunch ",
+        "items": [{ "text": "chicken 12oz" }, { "text": "rice" }]
+    }))).await;
+    assert_eq!(s, StatusCode::OK, "{lunch}");
+    assert_eq!(lunch["label"].as_str().unwrap(), "Lunch");
+    assert_eq!(lunch["items"][0]["text"].as_str().unwrap(), "chicken", "the typed amount parses into grams");
+    let chicken_g: f64 = lunch["items"][0]["grams"].as_f64().unwrap_or(0.0);
+    assert!(chicken_g > 340.0 && chicken_g < 341.0, "12 oz ≈ {chicken_g} g");
+    assert_eq!(lunch["items"][1]["text"].as_str().unwrap(), "rice", "no amount stays as typed");
+    assert_eq!(t.call("POST", "/clients/client1/meals", Some("client1"), Some(json!({ "date": day(0), "items": [] }))).await.0, StatusCode::BAD_REQUEST, "an empty meal is refused");
+    assert_eq!(t.call("POST", "/clients/client1/meals", Some("client1"), Some(json!({ "date": day(8), "items": [{ "text": "x" }] }))).await.0, StatusCode::BAD_REQUEST, "not before the editable window");
+    let lid = lunch["id"].as_str().unwrap();
+    // the coach attaches an estimate (search is off without an FDC key, so the
+    // snapshot comes from a lookup run elsewhere); a coach's number wins
+    let (_, est) = t.call("PUT", &format!("/clients/client1/meals/{lid}"), Some("coach1"), Some(json!({
+        "date": day(0), "label": "Lunch",
+        "items": [
+            { "text": "chicken", "grams": 340.2, "food": { "fdcId": "1702589", "description": "Chicken breast", "perGrams": 100.0, "kcalPer": 165.0 }, "basis": "searched" },
+            { "text": "rice", "kcal": 200.0, "basis": "manual" }
+        ]
+    }))).await;
+    assert_eq!(est["items"].as_array().unwrap().len(), 2);
+    let (_, ms) = t.call("GET", "/clients/client1/meals?days=7", Some("coach1"), None).await;
+    let total: f64 = ms["totals"].get(day(0)).unwrap().as_f64().unwrap_or(0.0);
+    assert!(total > 760.0 && total < 762.0, "165 kcal/100 g × 340.2 g + 200 = {total}");
+    assert_eq!(t.call("GET", "/clients/client1/meals", Some("coach2"), None).await.0, StatusCode::FORBIDDEN, "another coach's client");
+    // food search: coach-only, and it says so when the key is off
+    assert_eq!(t.call("GET", "/foods/search?q=chicken+breast", Some("client1"), None).await.0, StatusCode::FORBIDDEN);
+    assert_eq!(t.call("GET", "/foods/search?q=chicken+breast", Some("coach1"), None).await.0, StatusCode::BAD_REQUEST, "no FDC key: search is off");
+    assert_eq!(t.call("GET", "/foods/search?q=", Some("coach1"), None).await.0, StatusCode::BAD_REQUEST, "needs words");
+    // a coach's saved staples live in the coach's partition
+    let (s, staple) = t.call("POST", "/foods", Some("coach1"), Some(json!({ "name": " Usual lunch ", "snap": { "fdcId": "1702589", "perGrams": 100.0, "kcalPer": 165.0 } }))).await;
+    assert_eq!(s, StatusCode::OK, "{staple}");
+    assert_eq!(staple["name"].as_str().unwrap(), "Usual lunch");
+    assert_eq!(t.call("POST", "/foods", Some("client1"), Some(json!({ "name": "x" }))).await.0, StatusCode::FORBIDDEN);
+    // the client can delete their own meal, the coach cannot
+    assert_eq!(t.call("DELETE", &format!("/clients/client1/meals/{lid}"), Some("coach1"), None).await.0, StatusCode::FORBIDDEN);
+    let (s, gone) = t.call("DELETE", &format!("/clients/client1/meals/{lid}"), Some("client1"), None).await;
+    assert_eq!(s, StatusCode::OK, "{gone}");
+    let (_, ms) = t.call("GET", "/clients/client1/meals", Some("client1"), None).await;
+    assert_eq!(ms["meals"].as_array().unwrap().len(), 0, "the estimate went with the meal");
+    assert_eq!(t.call("POST", "/foods", Some("coach1"), Some(json!({ "name": "  " }))).await.0, StatusCode::BAD_REQUEST, "a blank name is refused");
+
     // --- scheduling (BZ-2): availability, open slots, booking, cancelling, the calendar feed
     let every_day = (0..7).map(|d| json!({ "day": d, "start": "08:00:00", "end": "10:00:00" })).collect::<Vec<_>>();
     assert_eq!(t.call("PUT", "/availability", Some("coach1"), Some(json!({ "windows": [{ "day": 0, "start": "10:00:00", "end": "09:00:00" }], "minutes": 60 }))).await.0, StatusCode::BAD_REQUEST);

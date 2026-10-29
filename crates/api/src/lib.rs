@@ -45,6 +45,12 @@ pub struct AppState {
     pub push: Option<push::Push>,
     /// Password changes (USER_POOL_ID, USER_POOL_CLIENT_ID); None turns them off.
     pub cognito: Option<routes::password::Cognito>,
+    /// Shared HTTP client (food lookups; push and realtime borrow it too).
+    pub http: reqwest::Client,
+    /// USDA FoodData Central key (FDC_API_KEY, a free data.gov signup);
+    /// None turns /foods/search off. Never ship it in the web app: keys found
+    /// in public code get deactivated.
+    pub fdc_key: Option<String>,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -127,6 +133,12 @@ pub fn router(state: AppState) -> Router {
         .route("/clients/{cid}/habits", get(habits::list).post(habits::create))
         .route("/clients/{cid}/habits/{hid}", put(habits::update))
         .route("/clients/{cid}/habits/{hid}/days/{date}", put(habits::log_day))
+        // food journal: client writes meals, coach searches and estimates
+        .route("/clients/{cid}/meals", get(nutrition::list).post(nutrition::create))
+        .route("/clients/{cid}/meals/{mid}", put(nutrition::put_meal).delete(nutrition::remove))
+        .route("/foods/search", get(nutrition::search))
+        .route("/foods", get(nutrition::list_foods).post(nutrition::create_food))
+        .route("/foods/{fid}", delete(nutrition::remove_food))
         .route("/clients/{cid}/maxes", get(maxes::list))
         .route("/clients/{cid}/records", get(records::list))
         .route("/clients/{cid}/records/{key}", delete(records::remove))
@@ -174,8 +186,10 @@ impl AppState {
             invite_from: std::env::var("INVITE_FROM").ok().filter(|f| f.contains('@')),
             realtime: realtime::Realtime::from_env(&config, http.clone()),
             cognito: routes::password::Cognito::from_env(&config),
-            push: push::Push::from_env(&config, http, &app_url).await,
+            push: push::Push::from_env(&config, http.clone(), &app_url).await,
             app_url,
+            http: http.clone(),
+            fdc_key: std::env::var("FDC_API_KEY").ok().filter(|k| !k.trim().is_empty()),
             bucket: std::env::var("MEDIA_BUCKET").expect("MEDIA_BUCKET"),
             presign_ttl: Duration::from_secs(900),
             video_retention_days: std::env::var("VIDEO_RETENTION_DAYS").ok().and_then(|d| d.parse().ok()).unwrap_or(180),

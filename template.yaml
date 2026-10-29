@@ -18,6 +18,10 @@ Parameters:
     Default: 180
     MinValue: 1
     Description: Days after upload that set videos are deleted once a coach has reviewed them (unreviewed videos are kept)
+  FdcApiKey:
+    Type: String
+    Default: ""
+    Description: USDA FoodData Central API key (a free signup at api.data.gov) powering the coach's /foods/search. Empty turns food search off.
   AdminEmails:
     Type: String
     Default: ""
@@ -245,6 +249,7 @@ Resources:
           EVENTS_HTTP_DOMAIN: !GetAtt EventApi.Dns.Http
           USER_POOL_ID: !Ref UserPool
           USER_POOL_CLIENT_ID: !Ref UserPoolClient
+          FDC_API_KEY: !Ref FdcApiKey
           # Web Push key, an SSM SecureString made once by scripts/deploy.sh.
           VAPID_PARAM: !Sub /ptapp/${Stage}/vapid-private-key
           RUST_LOG: info

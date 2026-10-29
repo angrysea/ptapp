@@ -20,6 +20,7 @@ import { suggestionsCard } from './progression.js';
 import { alertsCard } from './alerts.js';
 import { checkinsTab } from './checkins.js';
 import { habitsCard } from './habits.js';
+import { overviewCard } from './meals.js';
 
 /** The client's 1-5 rating of a workout; bad ones stand out. */
 function ratingChip(n) {
@@ -152,6 +153,7 @@ async function overview(el, client) {
             h('td', {}, c.check.sleep ?? ''), h('td', {}, c.check.soreness ?? ''),
             h('td', {}, c.check.pain ? h('span', { class: 'chip bad' }, c.check.painLocation || 'yes') : ''))))),
     await habitsCard(client),
+    await overviewCard(client),
   );
 }
 

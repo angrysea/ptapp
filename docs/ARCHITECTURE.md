@@ -63,6 +63,9 @@ When a coach reads intake, waiver, metrics or photos, an `AUDIT#` item is writte
 | `CLIENT#{client}` | `PHOTO#{date}-{rand}` | photo record; S3 key `media/{coach}/{client}/photos/…` |
 | `CLIENT#{client}` | `VIDEO#{date}-{rand}` | set video (log, item, set index), status uploading/ready; S3 keys `media/{coach}/{client}/videos/{id}.{mp4,mov,webm}` and `.jpg` poster, uploaded as a multipart upload in 8 MiB parts |
 | `CLIENT#{client}` | `AUDIT#{rfc3339}#{rand}` | coach access log, `ttl` 1 year |
+| `CLIENT#{client}` | `MEAL#{date}#{id}` | food journal: whole meal (item lines with parsed grams and food snapshots); per-day kcal computed on read, `updatedAt` server-stamped |
+| `COACH#{coach}` | `FOOD#{id}` | coach's saved staple food, usually with a snapshot ("their usual lunch") |
+| `FOODCACHE#{query}` | `CACHE` | food-search results from the USDA proxy, `ttl` 30 days |
 
 "Today's workout" is one `Query` on `CLIENT#id` between `SCHED#{from}` and `SCHED#{to}#~`. Phases 1b and 2 add a GSI (`gsi1pk`/`gsi1sk`) for cross-client queues, such as unreviewed videos sorted oldest first (see ROADMAP).
 
@@ -95,6 +98,8 @@ GET|POST /clients/{cid}/assignments   DELETE /clients/{cid}/assignments/{aid}
 GET  /clients/{cid}/schedule?from&to  GET /clients/{cid}/logs?from&to  PUT /clients/{cid}/logs/{lid}
 GET|POST /clients/{cid}/comments
 GET|POST /clients/{cid}/metrics?kind=  DELETE /clients/{cid}/metrics/{mid}
+GET|POST /clients/{cid}/meals          PUT|DELETE /clients/{cid}/meals/{mid}   # food journal
+GET  /foods/search?q=                  GET|POST /foods  DELETE /foods/{fid}    # USDA proxy + coach staples
 GET|POST /clients/{cid}/photos         DELETE /clients/{cid}/photos/{pid}
 GET|POST /clients/{cid}/videos?logId=  DELETE /clients/{cid}/videos/{vid}
 POST /clients/{cid}/videos/{vid}/parts   POST /clients/{cid}/videos/{vid}/complete   POST /clients/{cid}/videos/{vid}/reviewed

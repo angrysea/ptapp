@@ -3,7 +3,7 @@
 use axum::extract::{Path, State};
 use axum::Json;
 use ptcore::library::{builtin_exercises, is_builtin};
-use ptcore::model::{Exercise, Filming};
+use ptcore::model::{Exercise, Filming, Modality};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -53,6 +53,8 @@ pub struct ExerciseIn {
     /// Filming guidance (VS-5); None clears it.
     #[serde(default)]
     filming: Option<Filming>,
+    #[serde(default)]
+    modality: Modality,
 }
 
 fn clean_filming(f: Option<Filming>) -> ApiResult<Option<Filming>> {
@@ -81,6 +83,7 @@ pub async fn create(State(st): State<AppState>, ctx: Ctx, Json(body): Json<Exerc
         demo_key: None,
         pending_demo_key: None,
         custom: true,
+        modality: body.modality,
         filming: clean_filming(body.filming)?,
     };
     st.store.put(&format!("COACH#{coach}"), &format!("EXERCISE#{}", ex.id), &ex).await?;
@@ -113,6 +116,7 @@ pub async fn update(
     ex.cues = clean(body.cues);
     ex.demo_url = body.demo_url.filter(|u| u.starts_with("https://"));
     ex.filming = clean_filming(body.filming)?;
+    ex.modality = body.modality;
     st.store.put(&format!("COACH#{coach}"), &format!("EXERCISE#{id}"), &ex).await?;
     Ok(Json(ex))
 }

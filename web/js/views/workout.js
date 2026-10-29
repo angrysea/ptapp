@@ -19,6 +19,7 @@ import { celebrate } from './records.js';
 import { commentOn } from './comments.js';
 import { checkinCard } from './checkins.js';
 import { habitTiles } from './habits.js';
+import { todayCard } from './meals.js';
 import { nextSessionCard } from './sessions.js';
 
 // A finished workout the server refused for good (not a 409, which means a
@@ -133,6 +134,8 @@ export async function renderToday() {
   nextSessionCard(sessionSlot); // BZ-2 (online only)
   const habitSlot = h('div');
   habitTiles(habitSlot, me); // BZ-3: works offline from the cached list
+  const mealSlot = h('div');
+  todayCard(mealSlot, me); // food journal: same offline pattern
   mount($app(),
     detail && (!detail.intake || !detail.waiver) && h('div', { class: 'banner' },
       'Finish setting up: ',
@@ -145,6 +148,7 @@ export async function renderToday() {
     h('h2', {}, 'Today'),
     todays.length ? todays.map((s) => card(s, true)) : h('div', { class: 'card muted' }, 'Rest day. Nothing scheduled today.'),
     habitSlot,
+    mealSlot,
     upcoming.length > 0 && [h('h2', {}, 'Coming up'), upcoming.map((s) => card(s, false))],
     recent.length > 0 && [h('h2', {}, 'Last 7 days'), recent.map((s) => card(s, false))],
     !sched.length && h('p', { class: 'muted' }, 'Your coach hasn’t assigned a program yet.'),

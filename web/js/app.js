@@ -1,7 +1,7 @@
 // App bootstrap: auth, profile, role-based tabs and routes.
 
 import { flush, get, onSync, put } from './api.js';
-import { handleCallback, login, signedIn } from './auth.js';
+import { handleCallback, signedIn } from './auth.js';
 import { kv } from './idb.js';
 import { kick as resumeUploads } from './uploads.js';
 import { route, start } from './router.js';
@@ -20,6 +20,7 @@ import { loadExercises, renderExercises } from './views/exercises.js';
 import { renderIntake, renderWaiver } from './views/intake.js';
 import { renderMetrics } from './views/metrics.js';
 import { captureInvite, renderOnboarding } from './views/onboarding.js';
+import { landing } from './views/landing.js';
 import { renderInviteSignedIn, renderInviteSignUp, resumeAfterSignOut } from './views/signup.js';
 import { renderThread } from './views/comments.js';
 import { renderCheckin } from './views/checkins.js';
@@ -47,20 +48,6 @@ function tabs(items) {
         : current === p || current.startsWith(`${p}/`) || (p === '/videos' && current.startsWith('/review/')));
     }
   };
-}
-
-function landing() {
-  let deleted = false;
-  try { deleted = sessionStorage.getItem('pt.accountDeleted') === '1'; sessionStorage.removeItem('pt.accountDeleted'); } catch { /* no storage */ }
-  mount($app(),
-    deleted && h('p', { class: 'banner' }, 'Your account and everything in it have been deleted.'),
-    h('div', { class: 'center', style: 'padding-top:12vh' },
-      h('img', { src: 'icon.svg', alt: '', width: 88, height: 88 }),
-      h('h1', {}, 'PT Coach'),
-      h('p', { class: 'muted' }, 'Train with your coach: workouts, progress and feedback in one place.'),
-      h('button', { class: 'primary', onclick: () => login() }, 'Sign in'),
-      h('p', {}, h('a', { class: 'btn', href: '#/coaches' }, 'Find a coach')),
-      h('p', { class: 'small muted' }, 'New here? Accounts are by invitation: use the link in your invitation email.')));
 }
 
 async function boot() {

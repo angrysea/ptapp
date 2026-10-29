@@ -230,6 +230,8 @@ mod tests {
             realtime: None,
             push: None,
             cognito: None,
+            http: reqwest::Client::new(),
+            fdc_key: None,
         };
         let up = super::presign_put(&state, "k", "image/jpeg", 1234, Some(super::PENDING_TAG)).await.unwrap();
         assert!(up.url.contains("X-Amz-SignedHeaders=content-length%3B"), "{}", up.url);

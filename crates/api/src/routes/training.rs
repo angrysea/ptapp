@@ -7,6 +7,7 @@ use aws_sdk_dynamodb::types::{AttributeValue, Delete, Put, TransactWriteItem};
 use axum::extract::{Path, Query, State};
 use axum::Json;
 use chrono::{Duration, NaiveDate, Utc};
+use ptcore::cardio::add_program_defaults;
 use ptcore::model::{Assignment, Program, ScheduledWorkout, WorkoutLog};
 use ptcore::schedule::{end_date, materialize};
 use ptcore::strength::resolve_workout;
@@ -95,6 +96,7 @@ pub async fn assign(
             day: pw.day,
             workout: pw.workout.clone(),
         };
+        add_program_defaults(&mut sw.workout, &program.default_blocks);
         resolve_workout(&mut sw.workout, &maxes, scope.client.units);
         items.push(keyed(&pk, &format!("SCHED#{date}#{}", sw.id), &sw)?);
     }

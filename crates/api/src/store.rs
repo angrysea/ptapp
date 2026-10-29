@@ -3,11 +3,12 @@
 //!
 //! Key layout (see docs/ARCHITECTURE.md):
 //!   USER#{sub}      PROFILE
-//!   COACH#{coach}   CLIENT#{client} | INVITE#{code} | EXERCISE#{id} | PROGRAM#{id} | REVIEW#{ts}#{video} | THREAD#{client}
+//!   COACH#{coach}   CLIENT#{client} | INVITE#{code} | EXERCISE#{id} | PROGRAM#{id} | REVIEW#{ts}#{video} | THREAD#{client} | FOOD#{id}
 //!   INVITE#{code}   INVITE
 //!   ADMIN           INVITE#{code} | COACH#{coach}
 //!   CLIENT#{client} INTAKE | WAIVER#{ts} | ASSIGN#{id} | SCHED#{date}#{id} | LOG#{date}#{id}
-//!                   COMMENT#{ts}#{id} | METRIC#{date-id} | PHOTO#{date-id} | VIDEO#{date-id} | AUDIT#{ts}#{id}
+//!                   COMMENT#{ts}#{id} | METRIC#{date-id} | PHOTO#{date-id} | VIDEO#{date-id} | AUDIT#{ts}#{id} | HABIT#{id} | HABITLOG#{date}#{id} | MEAL#{date}#{id}
+//!   FOODCACHE#{q}   CACHE — coach food-search results (FDC proxy), ttl 30 days
 
 use std::collections::HashMap;
 
