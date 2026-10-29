@@ -376,7 +376,9 @@ with sync_playwright() as p:
     client.get_by_label("Daily target").fill("8")
     client.get_by_label("Unit").fill("glasses")
     client.get_by_role("button", name="Add habit").click()
-    client.locator(".sheet").get_by_role("button", name="Done").click()
+    # adding closes the sheet once it's saved (and Today redraws with the tile)
+    expect(client.get_by_text("Habit added")).to_be_visible()
+    expect(client.locator(".sheet")).to_have_count(0)
     water = client.locator(".habit", has_text="Water")
     for _ in range(3):
         water.get_by_role("button", name="One more Water").click()
