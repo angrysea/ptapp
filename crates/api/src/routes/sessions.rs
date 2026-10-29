@@ -265,6 +265,10 @@ pub async fn feed(State(st): State<AppState>, Path(file): Path<String>) -> ApiRe
     }
     let owner: CalToken = st.store.get(&format!("CALTOKEN#{token}"), "CALTOKEN").await?.ok_or(ApiError::NotFound("calendar"))?;
     let me = profile(&st, &owner.user_id).await?;
+    // A suspended account's link is off too (suspending also removes it).
+    if me.suspended_at.is_some() {
+        return Err(ApiError::NotFound("calendar"));
+    }
     let now = Utc::now();
     let (from, to) = (now - Duration::days(31), now + Duration::days(366));
     let pk = match me.role {

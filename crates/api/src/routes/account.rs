@@ -9,6 +9,7 @@ use axum::extract::{Path, State};
 use axum::Json;
 use chrono::Utc;
 use ptcore::model::{CoachEntry, Profile, ReviewEntry, Role};
+use ptcore::sessions::Session;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use serde_dynamo::aws_sdk_dynamodb_1::from_item;
@@ -189,6 +190,14 @@ pub async fn delete(State(st): State<AppState>, ctx: Ctx, Json(body): Json<Confi
             theirs.push((coach_pk.clone(), sk_of(item)));
         }
     }
+    // ...and the coach's copies of their sessions, with the slot locks.
+    for item in queue.iter().filter(|i| sk_of(i).starts_with("SESSION#")) {
+        let s: Session = from_item(item.clone())?;
+        if s.client_id == p.user_id {
+            theirs.push((coach_pk.clone(), sk_of(item)));
+            theirs.push((coach_pk.clone(), format!("SLOTLOCK#{}", s.start.to_rfc3339())));
+        }
+    }
     st.store.batch_delete(theirs).await?;
 
     // 4. Their user records, push subscriptions and sign-in.
@@ -231,6 +240,7 @@ pub async fn suspend_coach(State(st): State<AppState>, ctx: Ctx, Path(id): Path<
     }
     if body.suspended {
         delete_push(&st, &id).await?;
+        super::sessions::forget_calendar(&st, &id).await?;
     }
     // Disabling the sign-in also ends their sessions: refresh tokens stop
     // working, and the API refuses the access token they still hold.

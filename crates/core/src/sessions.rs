@@ -161,8 +161,29 @@ pub enum When {
     AllDay(NaiveDate),
 }
 
+/// Text for a content line (RFC 5545 3.3.11): line breaks become `\n` and
+/// other control characters are dropped, so no value can start a line of
+/// its own (a forged property or event).
 fn escape(s: &str) -> String {
-    s.replace('\\', "\\\\").replace(';', "\\;").replace(',', "\\,").replace("\r\n", "\\n").replace('\n', "\\n")
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            ';' => out.push_str("\\;"),
+            ',' => out.push_str("\\,"),
+            '\r' => {
+                if chars.peek() == Some(&'\n') {
+                    chars.next();
+                }
+                out.push_str("\\n");
+            }
+            '\n' => out.push_str("\\n"),
+            c if c.is_control() => {}
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 /// Folds a content line to 75 octets, as RFC 5545 requires.
@@ -297,5 +318,16 @@ mod tests {
         assert!(doc.contains("STATUS:CANCELLED"));
         assert!(doc.split("\r\n").all(|l| l.len() <= 75), "lines are folded");
         assert!(doc.contains("\r\n "), "the long description was folded");
+    }
+
+    #[test]
+    fn ics_values_cannot_start_lines_of_their_own() {
+        let now = Utc.with_ymd_and_hms(2026, 10, 29, 12, 0, 0).unwrap();
+        let sneaky = "Leg day\rEND:VEVENT\rBEGIN:VEVENT\nSUMMARY:x\r\nok\u{0}\u{7}\u{1b}";
+        let e = Event { uid: "u".into(), summary: sneaky.into(), description: String::new(), location: None, when: When::Timed { start: now, end: now }, cancelled: false };
+        let doc = ics("C", &[e], now);
+        assert_eq!(doc.split("\r\n").filter(|l| l.starts_with("BEGIN:VEVENT") || l.starts_with("END:VEVENT")).count(), 2, "one event only: {doc}");
+        assert!(doc.contains("SUMMARY:Leg day\\nEND:VEVENT\\nBEGIN:VEVENT\\nSUMMARY:x\\nok\r\n"), "{doc}");
+        assert!(!doc.chars().any(|c| c.is_control() && c != '\r' && c != '\n'), "no other control characters");
     }
 }

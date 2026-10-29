@@ -1284,4 +1284,21 @@ async fn full_client_journey() {
     assert_eq!(got["extraAnswers"]["sport"], "Powerlifting");
     assert_eq!(got["extraQuestions"][1]["unit"], "days", "kept with the answers");
     assert_eq!(t.call("PUT", "/intake-template", Some("coach1"), Some(json!({ "questions": [] }))).await.0, StatusCode::OK, "removable");
+
+    // --- security review: a suspended coach's calendar link stops working
+    let (_, cal) = t.call("GET", "/me/calendar", Some("coach1"), None).await;
+    let coach_feed = cal["path"].as_str().unwrap().to_string();
+    assert_eq!(t.text(&coach_feed).await.0, StatusCode::OK);
+    t.call("PUT", "/admin/coaches/coach1/suspended", Some("admin1"), Some(json!({ "suspended": true }))).await;
+    assert_eq!(t.text(&coach_feed).await.0, StatusCode::NOT_FOUND);
+    t.call("PUT", "/admin/coaches/coach1/suspended", Some("admin1"), Some(json!({ "suspended": false }))).await;
+    assert_eq!(t.text(&coach_feed).await.0, StatusCode::NOT_FOUND, "suspending removed the link; the coach makes a new one");
+
+    // --- security review: deleting a client's account removes the coach's copies of their sessions
+    let (_, before) = t.call("GET", "/sessions", Some("coach1"), None).await;
+    assert!(before.as_array().unwrap().iter().any(|s| s["clientId"] == "client1"));
+    let (s, d) = t.call("DELETE", "/me/account", Some("client1"), Some(json!({ "confirm": "client1@dev.local" }))).await;
+    assert_eq!(s, StatusCode::OK, "{d}");
+    let (_, after) = t.call("GET", "/sessions", Some("coach1"), None).await;
+    assert!(!after.as_array().unwrap().iter().any(|s| s["clientId"] == "client1"), "{after}");
 }
