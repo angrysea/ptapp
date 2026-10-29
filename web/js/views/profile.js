@@ -203,6 +203,7 @@ export async function renderProfile() {
     p.role === 'coach' && alertSettingsCard(),
     p.role === 'coach' && checkinSettingsCard(),
     p.role === 'coach' && automationCard(),
+    p.role === 'coach' && timeCard(),
     p.role === 'client' && yourDataCard(p),
     !devMode() && h('div', { class: 'card' },
       h('h3', {}, 'Password'),
@@ -213,4 +214,16 @@ export async function renderProfile() {
         : 'Everything is synced.'),
       h('button', { class: 'block danger', onclick: signOut }, 'Sign out')),
   );
+}
+
+/** The coach's own time per client (counted while on a client's pages). */
+function timeCard() {
+  const box = h('div', { class: 'card' }, h('h3', {}, 'Your coaching time'));
+  get('/usage?weeks=4').then((u) => {
+    const week = u.weeks[u.weeks.length - 1];
+    box.append(
+      h('p', {}, `This week: ${week.minutes} min across ${week.clientsSeen} client${week.clientsSeen === 1 ? '' : 's'}.`),
+      u.avgMinutesPerClientPerWeek != null && h('p', { class: 'muted small' }, `Last 4 weeks: ${u.avgMinutesPerClientPerWeek} min per client per week. Counted while you’re active on a client’s pages.`));
+  }).catch(() => box.append(h('p', { class: 'muted small' }, 'Couldn’t load your time.')));
+  return box;
 }

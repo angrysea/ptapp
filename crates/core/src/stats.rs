@@ -6,6 +6,7 @@ use std::collections::{BTreeMap, HashMap};
 use chrono::{Datelike, Duration, NaiveDate};
 use serde::Serialize;
 
+use crate::cardio::Phase;
 use crate::model::{LogStatus, ScheduledWorkout, WorkoutLog};
 
 #[derive(Debug, Clone, Serialize, PartialEq, Default)]
@@ -82,19 +83,28 @@ pub fn week_start(d: NaiveDate) -> NaiveDate {
 #[serde(rename_all = "camelCase")]
 pub struct WeeklyVolume {
     pub week_start: NaiveDate,
-    /// Sum of reps x load over completed sets.
+    /// Sum of reps x load over completed strength sets.
     pub volume_kg: f64,
+    /// Completed strength sets: main work, not warm-ups or cardio.
     pub sets: u32,
     pub workouts: u32,
+    /// Cardio logged for time or distance (main or post-workout, not
+    /// warm-ups, which are only ticked off).
+    pub cardio_sec: u32,
+    pub cardio_m: f64,
 }
 
 pub fn weekly_volume(logs: &[WorkoutLog]) -> Vec<WeeklyVolume> {
     let mut weeks: BTreeMap<NaiveDate, WeeklyVolume> = BTreeMap::new();
     for l in logs.iter().filter(|l| l.status.counts_as_done()) {
         let ws = week_start(l.date);
-        let w = weeks.entry(ws).or_insert(WeeklyVolume { week_start: ws, volume_kg: 0.0, sets: 0, workouts: 0 });
+        let w = weeks.entry(ws).or_insert(WeeklyVolume { week_start: ws, volume_kg: 0.0, sets: 0, workouts: 0, cardio_sec: 0, cardio_m: 0.0 });
         w.workouts += 1;
-        for s in l.sets.iter().filter(|s| s.done) {
+        for s in l.sets.iter().filter(|s| s.done && s.phase != Phase::Warmup && s.is_cardio()) {
+            w.cardio_sec += s.duration_sec.unwrap_or(0);
+            w.cardio_m += s.distance_m.unwrap_or(0.0);
+        }
+        for s in l.sets.iter().filter(|s| s.done && s.is_strength()) {
             w.sets += 1;
             if let (Some(r), Some(kg)) = (s.reps, s.load_kg) {
                 w.volume_kg += r as f64 * kg;
@@ -105,6 +115,7 @@ pub fn weekly_volume(logs: &[WorkoutLog]) -> Vec<WeeklyVolume> {
         .into_values()
         .map(|mut w| {
             w.volume_kg = w.volume_kg.round();
+            w.cardio_m = w.cardio_m.round();
             w
         })
         .collect()
@@ -131,7 +142,7 @@ pub struct StrengthTrend {
 pub fn strength_trends(logs: &[WorkoutLog]) -> Vec<StrengthTrend> {
     let mut per: HashMap<String, (String, BTreeMap<NaiveDate, f64>)> = HashMap::new();
     for l in logs.iter().filter(|l| l.status.counts_as_done()) {
-        for s in l.sets.iter().filter(|s| s.done) {
+        for s in l.sets.iter().filter(|s| s.done && s.is_strength()) {
             let (Some(r), Some(kg)) = (s.reps, s.load_kg) else { continue };
             if r == 0 || kg <= 0.0 || r > 12 {
                 continue; // e1RM formulas are unreliable past ~12 reps
@@ -177,7 +188,7 @@ mod tests {
             program_name: "P".into(),
             week: 1,
             day: 1,
-            workout: Workout { id: "w".into(), name: "W".into(), notes: String::new(), blocks: vec![] },
+            workout: Workout { id: "w".into(), name: "W".into(), notes: String::new(), skip_program_defaults: false, blocks: vec![] },
         }
     }
 
@@ -202,6 +213,7 @@ mod tests {
                     load_kg: Some(kg),
                     rpe: None,
                     done: true,
+                    ..Default::default()
                 })
                 .collect(),
             comment: String::new(),
@@ -270,5 +282,20 @@ mod tests {
         assert_eq!(t[0].points[0].e1rm_kg, 116.7); // 100 * (1 + 5/30)
         assert_eq!(t[0].points[1].e1rm_kg, 121.0); // 110 * 1.1
         assert_eq!(t[0].best_e1rm_kg, 130.0);
+    }
+
+    #[test]
+    fn warmups_and_cardio_stay_out_of_strength_numbers() {
+        let mut l = log("a", 5, LogStatus::Completed, vec![(5, 100.0), (10, 20.0)]);
+        l.sets[1].phase = Phase::Warmup; // a light goblet squat warm-up
+        let cardio = |phase, sec, m: Option<f64>| SetLog { exercise_id: "rowing-erg".into(), phase, duration_sec: Some(sec), distance_m: m, done: true, ..Default::default() };
+        l.sets.push(cardio(Phase::Warmup, 300, None));
+        l.sets.push(cardio(Phase::Post, 1200, Some(4000.0)));
+        l.sets.push(cardio(Phase::Main, 600, None));
+        let v = weekly_volume(&[l.clone()]);
+        assert_eq!((v[0].sets, v[0].volume_kg), (1, 500.0));
+        assert_eq!((v[0].cardio_sec, v[0].cardio_m), (1800, 4000.0));
+        let t = strength_trends(&[l]);
+        assert_eq!(t[0].points[0].e1rm_kg, 116.7);
     }
 }

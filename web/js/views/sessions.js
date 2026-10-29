@@ -194,3 +194,24 @@ export async function renderSessions() {
         }, timeLabel(t)))))),
   );
 }
+
+/** For the client's Messages screen (MS-5): the coach's weekly hours, in the
+ * coach's time zone (named when it isn't the client's), and a booking link. */
+export function coachHours(slot) {
+  get('/availability').then(({ availability: av, timeZone }) => {
+    if (!av.windows.length) return;
+    const short = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    const t = (s) => { const [hh, mm] = s.split(':').map(Number); const ap = hh < 12 ? 'am' : 'pm'; return `${hh % 12 || 12}${mm ? `:${String(mm).padStart(2, '0')}` : ''} ${ap}`; };
+    // Days with the same hours are listed together: "Mon, Wed, Fri 8 am–12 pm".
+    const byHours = new Map();
+    for (const w of av.windows) {
+      const k = `${t(w.start)}–${t(w.end)}`;
+      if (!byHours.has(k)) byHours.set(k, []);
+      if (!byHours.get(k).includes(w.day)) byHours.get(k).push(w.day);
+    }
+    const parts = [...byHours].map(([hours, days]) => `${days.sort().map((d) => short[d]).join(', ')} ${hours}`);
+    const mine = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const zone = timeZone !== mine ? ` (${timeZone.split('/').pop().replace(/_/g, ' ')} time)` : '';
+    mount(slot, h('p', { class: 'small muted coach-hours' }, `🕒 Usually available: ${parts.join(' · ')}${zone}. `, h('a', { href: '#/sessions' }, 'Book a session')));
+  }).catch(() => { /* offline: nothing shown */ });
+}

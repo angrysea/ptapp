@@ -8,8 +8,8 @@ use aws_sdk_s3::types::{Delete, ObjectIdentifier};
 use axum::extract::{Path, State};
 use axum::Json;
 use chrono::Utc;
-use ptcore::model::{CoachEntry, Profile, ReviewEntry, Role};
-use ptcore::sessions::Session;
+use ptcore::model::{CoachEntry, Profile, ReviewEntry, Role, RosterEntry};
+use ptcore::sessions::{Session, SessionStatus};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use serde_dynamo::aws_sdk_dynamodb_1::from_item;
@@ -32,8 +32,9 @@ fn client_only(ctx: &Ctx) -> ApiResult<()> {
     Ok(())
 }
 
-fn media_prefix(p: &Profile) -> String {
-    format!("media/{}/{}/", p.coach_id, p.user_id)
+/// The client's media folders: under their coach, and any earlier coaches.
+fn media_prefixes(p: &Profile) -> Vec<String> {
+    std::iter::once(&p.coach_id).chain(&p.former_coach_ids).map(|c| format!("media/{c}/{}/", p.user_id)).collect()
 }
 
 fn sk_of(item: &Item) -> String {
@@ -144,7 +145,10 @@ pub async fn export(State(st): State<AppState>, ctx: Ctx) -> ApiResult<Json<Valu
         }
         records.push(v);
     }
-    let keys = media_keys(&st, &media_prefix(p)).await?;
+    let mut keys = Vec::new();
+    for prefix in media_prefixes(p) {
+        keys.extend(media_keys(&st, &prefix).await?);
+    }
     let mut files = Vec::new();
     for key in keys.iter().take(MAX_EXPORT_FILES) {
         files.push(json!({ "key": key, "url": presign_get(&st, key).await? }));
@@ -175,7 +179,9 @@ pub async fn delete(State(st): State<AppState>, ctx: Ctx, Json(body): Json<Confi
     }
 
     // 1. Files: photos, set videos, replies, message attachments.
-    delete_media(&st, &media_prefix(&p)).await?;
+    for prefix in media_prefixes(&p) {
+        delete_media(&st, &prefix).await?;
+    }
 
     // 2. Everything in the client's partition.
     delete_partition(&st, &format!("CLIENT#{}", p.user_id)).await?;
@@ -275,7 +281,7 @@ pub async fn delete_coach(
     let clients = items.iter().filter(|i| sk_of(i).starts_with("CLIENT#")).count();
     if clients > 0 {
         return Err(ApiError::Conflict(json!({
-            "message": format!("this coach still has {clients} client{}; suspend them instead, or delete once their clients have left", if clients == 1 { "" } else { "s" }),
+            "message": format!("this coach still has {clients} client{}; move them to another coach first (or suspend this coach instead)", if clients == 1 { "" } else { "s" }),
             "clients": clients,
         })));
     }
@@ -299,4 +305,92 @@ pub async fn delete_coach(
     delete_user(&st, &id).await?;
     tracing::info!(coach = %id, by = %ctx.user_id(), "coach account deleted");
     Ok(Json(json!({ "deleted": true })))
+}
+
+// ---------------------------------------------------------------- admin: moving a client
+
+/// `GET /admin/coaches/{id}/clients`: a coach's roster, for moving clients.
+pub async fn coach_clients(State(st): State<AppState>, ctx: Ctx, Path(id): Path<String>) -> ApiResult<Json<Vec<RosterEntry>>> {
+    ctx.require_admin()?;
+    let mut list: Vec<RosterEntry> = st.store.query_prefix(&format!("COACH#{id}"), "CLIENT#").await?;
+    list.sort_by_key(|r| r.name.to_lowercase());
+    Ok(Json(list))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Move {
+    coach_id: String,
+}
+
+/// `POST /admin/clients/{cid}/move`: the client trains with another coach
+/// from now on. Their own data (workouts, measurements, photos, videos,
+/// messages, scheduled programs) stays with them; unreviewed videos go to
+/// the new coach's queue; sessions still to come with the old coach are
+/// cancelled; the old coach's suggestions and alerts about them go.
+pub async fn move_client(State(st): State<AppState>, ctx: Ctx, Path(cid): Path<String>, Json(body): Json<Move>) -> ApiResult<Json<Value>> {
+    ctx.require_admin()?;
+    let mut client: Profile = st
+        .store
+        .get::<Profile>(&format!("USER#{cid}"), "PROFILE")
+        .await?
+        .filter(|p| p.role == Role::Client)
+        .ok_or(ApiError::NotFound("client not found"))?;
+    let to = load_coach(&st, &body.coach_id).await?;
+    if to.suspended_at.is_some() {
+        return Err(bad_request("that coach is suspended"));
+    }
+    let from = client.coach_id.clone();
+    if from == to.user_id {
+        return Err(bad_request("the client already trains with that coach"));
+    }
+    let (old_pk, new_pk) = (format!("COACH#{from}"), format!("COACH#{}", to.user_id));
+    let now = Utc::now();
+
+    // 1. The client's profile now points at the new coach.
+    if !client.former_coach_ids.contains(&from) {
+        client.former_coach_ids.push(from.clone());
+    }
+    client.coach_id = to.user_id.clone();
+    st.store.put(&format!("USER#{cid}"), "PROFILE", &client).await?;
+
+    // 2. The rosters.
+    let roster = RosterEntry { client_id: cid.clone(), name: client.name.clone(), email: client.email.clone(), joined_at: now };
+    st.store.put(&new_pk, &format!("CLIENT#{cid}"), &roster).await?;
+
+    // 3. The old coach's records about them: the queue moves, the rest goes.
+    let mut gone = vec![(old_pk.clone(), format!("CLIENT#{cid}")), (old_pk.clone(), format!("THREAD#{cid}"))];
+    let mut moved_reviews = Vec::new();
+    let mut cancelled = 0;
+    for item in st.store.partition(&old_pk).await? {
+        let sk = sk_of(&item);
+        let about_them = item.get("clientId").and_then(|v| v.as_s().ok()).is_some_and(|c| c == &cid);
+        if !about_them {
+            continue;
+        }
+        if sk.starts_with("REVIEW#") {
+            let e: ReviewEntry = from_item(item.clone())?;
+            moved_reviews.push(crate::store::keyed(&new_pk, &sk, &e)?);
+            gone.push((old_pk.clone(), sk));
+        } else if sk.starts_with("SESSION#") {
+            let mut s: Session = from_item(item.clone())?;
+            gone.push((old_pk.clone(), sk.clone()));
+            gone.push((old_pk.clone(), format!("SLOTLOCK#{}", s.start.to_rfc3339())));
+            if s.start > now && s.status == SessionStatus::Booked {
+                s.status = SessionStatus::Cancelled;
+                st.store.put(&format!("CLIENT#{cid}"), &sk, &s).await?;
+                cancelled += 1;
+            }
+        } else if sk.starts_with("SUGGEST#") || sk.starts_with("ALERT#") {
+            gone.push((old_pk.clone(), sk));
+        }
+    }
+    st.store.batch_put(moved_reviews).await?;
+    st.store.batch_delete(gone).await?;
+
+    // 4. Tell the client and the new coach.
+    super::notify::notify_user(&st, &cid, &to.name, &format!("You're now training with {}", to.name), "#/coach", "coach-change").await;
+    super::notify::notify_user(&st, &to.user_id, &client.name, &format!("{} is now one of your clients", client.name), &format!("#/c/{cid}"), &format!("new-client-{cid}")).await;
+    tracing::info!(client = %cid, from = %from, to = %to.user_id, by = %ctx.user_id(), "client moved");
+    Ok(Json(json!({ "moved": true, "from": from, "to": to.user_id, "cancelledSessions": cancelled })))
 }

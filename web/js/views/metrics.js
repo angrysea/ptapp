@@ -1,12 +1,12 @@
 // Body metrics (BM-1..BM-4, BM-8), progress photos (BM-7), 1RMs (WB-5,
 // views/maxes.js) and personal records (LG-5, views/records.js). Used by the client's Progress tab and the coach's client page.
 
-import { del, get, post } from '../api.js';
+import { del, get, post, put } from '../api.js';
 import { session } from '../session.js';
 import { maxes } from './maxes.js';
 import { records } from './records.js';
 import {
-  addDays, busy, confirmSheet, field, fmtDate, h, isoDate, lineChart, mount, num, round, select, shrinkImage, subtabs, toast, todayIso, units,
+  addDays, busy, confirmSheet, field, fmtDate, h, isoDate, lineChart, mount, num, round, select, sheet, shrinkImage, subtabs, toast, todayIso, units,
 } from '../ui.js';
 
 const TAPE = [['neck', 'Neck'], ['chest', 'Chest'], ['waist', 'Waist'], ['hips', 'Hips'], ['armL', 'Arm (L)'], ['armR', 'Arm (R)'],
@@ -49,13 +49,49 @@ function bodyFigure(active, focus) {
 }
 
 /** Mount the metrics UI for a client into `el`. `client` is their Profile. */
+// The client's starting point (ON-4): the date progress is measured from;
+// null means each measurement's first entry. Loaded with the Progress view.
+const starts = {};
+const startOf = (client) => starts[client.userId] ?? null;
+/** The first of `dates` (sorted ISO strings) on or after the starting point. */
+const fromStart = (client, dates) => dates.find((d) => !startOf(client) || d >= startOf(client)) ?? dates[0];
+
 export function renderMetrics(el, client, initial = 'weight') {
+  const head = h('div');
+  let current = initial;
   const show = (tab) => {
+    current = tab;
     const body = h('div');
-    mount(el, subtabs([['weight', 'Weight'], ['tape', 'Tape'], ['skinfold', 'Body fat'], ['photos', 'Photos'], ['maxes', 'Maxes'], ['records', 'Records']], tab, show), body);
+    mount(el, head, subtabs([['weight', 'Weight'], ['tape', 'Tape'], ['skinfold', 'Body fat'], ['photos', 'Photos'], ['maxes', 'Maxes'], ['records', 'Records']], tab, show), body);
     ({ weight, tape, skinfold, photos, maxes, records })[tab](body, client).catch((e) => mount(body, h('p', { class: 'muted' }, e.message)));
   };
-  show(initial);
+  const drawHead = () => mount(head, h('p', { class: 'small muted start-point' },
+    `📍 Starting point: ${startOf(client) ? fmtDate(startOf(client)) : 'first entries'} · `,
+    h('button', { class: 'linklike', onclick: () => startSheet(client, () => { drawHead(); show(current); }) }, 'Change')));
+  get(`/clients/${client.userId}/baseline`, { cache: true })
+    .then((b) => { starts[client.userId] = b.date; })
+    .catch(() => { /* offline with nothing cached: first entries */ })
+    .finally(() => { drawHead(); show(initial); });
+}
+
+/** Pick the starting point (coach or client), or go back to first entries. */
+function startSheet(client, done) {
+  const date = h('input', { type: 'date', value: startOf(client) || '', max: todayIso() });
+  const save = async (value) => {
+    const b = await put(`/clients/${client.userId}/baseline`, { date: value });
+    starts[client.userId] = b.date;
+    sh.close();
+    toast('Starting point saved');
+    done();
+  };
+  const sh = sheet(
+    h('h2', {}, 'Starting point'),
+    h('p', { class: 'muted small' }, 'Progress is measured from this date: weight and tape changes, and the photos compared first. Use the date of the first proper check-in or assessment.'),
+    field('Date', date),
+    h('button', { class: 'primary block', onclick: (e) => busy(e.currentTarget, () => save(date.value || null)) }, 'Save'),
+    h('button', { class: 'block', onclick: (e) => busy(e.currentTarget, () => save(null)) }, 'Use first entries'),
+    h('button', { class: 'ghost block', onclick: () => sh.close() }, 'Cancel'),
+  );
 }
 
 // Mirrors the API: an entry can be deleted by whoever recorded it; photos by
@@ -106,6 +142,12 @@ async function weight(el, client) {
           weight(el, client);
         }),
       }, 'Log weight')),
+    sorted.length > 1 && (() => {
+      const base = sorted.find((p) => p.x === fromStart(client, sorted.map((q) => q.x)));
+      const last = sorted[sorted.length - 1];
+      const d = round(last.y - base.y, 1);
+      return base !== last && h('div', { class: 'card' }, stat(`${d > 0 ? '+' : ''}${d} ${u.w}`, `Since the starting point (${base.y} ${u.w} on ${fmtDate(base.x)})`));
+    })(),
     h('div', { class: 'card' }, h('h3', {}, 'Trend'),
       lineChart([{ label: `Weight (${u.w})`, points: pts }, { label: '7-day average', points: trend, dashed: true, color: '#d97706' }])),
     weekly.length > 0 && h('div', { class: 'card' }, h('h3', {}, 'Weekly average'),
@@ -129,7 +171,7 @@ async function tape(el, client) {
   const u = units(session.profile);
   const list = await get(metricsPath(client, 'tape'), { cache: true });
   const latest = list[list.length - 1];
-  const first = list[0];
+  const first = list.find((m) => m.date === fromStart(client, list.map((x) => x.date))) || list[0];
   const date = h('input', { type: 'date', value: todayIso() });
   const inputs = Object.fromEntries(TAPE.map(([k]) => [k, h('input', { type: 'number', inputmode: 'decimal', step: '0.1' })]));
   mount(el,
@@ -149,7 +191,7 @@ async function tape(el, client) {
     latest && h('div', { class: 'card' }, h('h3', {}, `Latest (${fmtDate(latest.date)})`),
       h('table', {}, h('tr', {}, h('th', {}, 'Site'), h('th', {}, u.l), h('th', {}, `Since ${fmtDate(first.date)}`)),
         TAPE.filter(([k]) => latest.tapeCm[k] != null).map(([k, label]) => {
-          const base = list.find((m) => m.tapeCm[k] != null).tapeCm[k];
+          const base = (list.find((m) => m.date >= first.date && m.tapeCm[k] != null) || list.find((m) => m.tapeCm[k] != null)).tapeCm[k];
           const d = u.toL(latest.tapeCm[k]) - u.toL(base);
           return h('tr', {}, h('td', {}, label), h('td', {}, u.toL(latest.tapeCm[k])), h('td', {}, `${d >= 0 ? '+' : ''}${round(d, 1)}`));
         }))),
@@ -332,7 +374,7 @@ async function photos(el, client) {
   const date = h('input', { type: 'date', value: todayIso() });
   const pose = select([['front', 'Front'], ['side', 'Side'], ['back', 'Back']], 'front');
   const file = h('input', { type: 'file', accept: 'image/*', capture: 'environment' });
-  const left = select(dates.map((d) => [d, fmtDate(d)]), dates[dates.length - 1]);
+  const left = select(dates.map((d) => [d, fmtDate(d)]), fromStart(client, [...dates].reverse()));
   const right = select(dates.map((d) => [d, fmtDate(d)]), dates[0]);
   const compare = h('div');
   const drawCompare = () => mount(compare, ['front', 'side', 'back'].map((p) => h('div', { class: 'row', style: 'flex-wrap:nowrap' },

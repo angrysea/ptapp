@@ -20,7 +20,7 @@ Status legend: ✅ done in MVP · 🟡 partial · ⬜ not started
 
 | Area | Must (MVP) | Should / Could |
 |---|---|---|
-| Onboarding | ON-1 ✅ (emailed with SES, bound to the invited verified email) · ON-2 ✅ · ON-3 ✅ · coach profiles + public coach directory ✅ (`tasks/coaches`; tax IDs left to Stripe in BZ-1) | ON-4 🟡 (test-lift maxes; no baseline flag) · ON-5 ✅ (coach's extra questions after the standard intake) |
+| Onboarding | ON-1 ✅ (emailed with SES, bound to the invited verified email) · ON-2 ✅ · ON-3 ✅ · coach profiles + public coach directory ✅ (`tasks/coaches`; tax IDs left to Stripe in BZ-1) | ON-4 ✅ (test-lift maxes; a starting-point date progress is measured from) · ON-5 ✅ (coach's extra questions after the standard intake) |
 | Builder | WB-1 ✅ · WB-2 ✅ · WB-3 ✅ · WB-4 ✅ | WB-5 ✅ (%1RM resolved from client maxes) · WB-6 ✅ (rules → coach-approved suggestions) · WB-7 ⬜ |
 | Logging | LG-1 ✅ · LG-2 ✅ · LG-3 ✅ · LG-4 ✅ · LG-6 ✅ | LG-5 ✅ (rep-max and e1RM records, celebrated) · LG-7 ✅ (alert inbox: pain at once, missed runs hourly, pushed) · LG-8 ⬜ |
 | Video submission | VS-1 ✅ · VS-2 ✅ · VS-3 ✅ · VS-4 ✅ (real-device checks pending, see `tasks/todo.md`) | VS-5 ✅ (filming tips per exercise) |
@@ -28,7 +28,7 @@ Status legend: ✅ done in MVP · 🟡 partial · ⬜ not started
 | Feedback | FB-1 ✅ · FB-2 ✅ | FB-3 ✅ (weekly check-ins, editable questions, 4-week view) · FB-4 ✅ (snippets with a / shortcut) |
 | AI | AI-6/AI-7 (whenever AI ships) | AI-1…AI-5 ⬜ |
 | Body metrics | BM-1 ✅ · BM-2 ✅ · BM-3 ✅ · BM-4 ✅ · BM-7 ✅ · BM-8 ✅ | BM-5 ✅ · BM-6 ✅ (US Navy tape estimate; DEXA/BIA/scale readings) |
-| Messaging | MS-1 ✅ (live via AppSync Events, polling fallback; coach inbox; text only) · MS-2 ✅ (Web Push; iPhone needs the Home Screen app) | MS-3 ✅ (messages link to the workout, set or video) · MS-4 ✅ (reminders and scheduled messages, hourly sweep) · MS-5 🟡 (availability shown when booking) · MS-6 ⬜ |
+| Messaging | MS-1 ✅ (live via AppSync Events, polling fallback; coach inbox; text only) · MS-2 ✅ (Web Push; iPhone needs the Home Screen app) | MS-3 ✅ (messages link to the workout, set or video) · MS-4 ✅ (reminders and scheduled messages, hourly sweep) · MS-5 ✅ (coach's hours on the client's Messages screen and when booking) · MS-6 ⬜ |
 | Business | BZ-1 ⬜ | BZ-2 ✅ (availability, booking, private calendar feed) · BZ-3 ✅ (habits with streaks) · BZ-4 ⬜ · BZ-5 ⬜ · BZ-6 ✅ (printable progress report; PDF via the browser) |
 | NFRs | privacy ✅ (private photos, tenant checks, per-user offline cache, data agreement at sign-up) · audit log ✅ · offline ✅ · upload size limits ✅ · CI ✅ (tests on every push; deploys run locally) · backups ✅ (PITR + daily AWS Backup, 35 days; restore tested 2026-10-28, see DEPLOY.md) · MFA ⏸ (deferred by decision, 2026-10-28) · alarms ✅ (email) · export/delete ✅ (clients, self-service; admins suspend or delete coaches) · video retention ✅ (lifecycle on reviewed videos and replies) | |
 
@@ -89,7 +89,7 @@ Use the server-side render approach from the BRD: the browser records an **edit 
 
 * ✅ **ON-1 email:** done. SES (production access) emails coach and client invitations, with Resend; the share-a-link fallback stays.
 * **Coach MFA:** add a Cognito **pre-token-generation** Lambda that adds `role`. The API then rejects coach routes unless the token's `amr` claim includes `mfa`, and the PWA links to the hosted UI's TOTP setup. Alternatively, use separate coach and client user pools, with `MfaConfiguration: ON` for the coach pool.
-* ✅ **Privacy export, delete and consent (privacy NFR):** done (routes/account.rs). Clients download everything as JSON with 15-minute file links (`GET /me/export`) and delete their own account (`DELETE /me/account`). Accepting an invitation requires agreeing to how data is used (`Profile.consentedAt`); accounts from before the agreement are asked once on sign-in (`POST /me/consent`). Admins suspend coaches (`PUT /admin/coaches/{id}/suspended`: API refused, Cognito sign-in disabled, out of the directory, push subscriptions dropped) and delete coaches with no clients left (`DELETE /admin/coaches/{id}`). Still open: a way to move or remove a coach's clients, so a coach with clients can be deleted.
+* ✅ **Privacy export, delete and consent (privacy NFR):** done (routes/account.rs). Clients download everything as JSON with 15-minute file links (`GET /me/export`) and delete their own account (`DELETE /me/account`). Accepting an invitation requires agreeing to how data is used (`Profile.consentedAt`); accounts from before the agreement are asked once on sign-in (`POST /me/consent`). Admins suspend coaches (`PUT /admin/coaches/{id}/suspended`: API refused, Cognito sign-in disabled, out of the directory, push subscriptions dropped) and delete coaches with no clients left (`DELETE /admin/coaches/{id}`). Admins move a client to another coach (`POST /admin/clients/{cid}/move`), after which a coach with no clients left can be deleted.
 * ✅ **Upload size limits:** done. Presigned PUTs are signed for an exact, capped size (15 MB photos, 250 MB demo videos), so S3 refuses anything else; no post-upload check is needed. Video parts (section 1) should do the same per part.
 * ✅ **Observability:** done. CloudWatch alarms on Lambda errors/throttles and HTTP API 5xx → SNS email (`ALARM_EMAIL`); structured `tracing` logs.
 * ✅ **Backups:** done. PITR plus an AWS Backup plan (daily at 08:00 UTC, kept 35 days, in a retained vault); restore tested (DEPLOY.md). Repeat the restore test quarterly.
@@ -123,7 +123,7 @@ Use the server-side render approach from the BRD: the browser records an **edit 
 | **MS-4 Automated messages** | EventBridge Scheduler schedules per coach rule (`SCHEDULE#{id}`) → Lambda sends the message and push. |
 | **VS-5 Filming guidance** | Add `filming {angle: side\|front\|45, distanceM, notes}` to `Exercise`; shown before the camera opens. |
 
-**Exit gate:** a coach handles 30+ clients without the app being the bottleneck. Instrument time-in-app per client per week.
+**Exit gate:** a coach handles 30+ clients without the app being the bottleneck. Measured: the coach's app counts active minutes on each client's pages (`/usage`); coaches see theirs on Profile, admins the average minutes per client per week on each coach's sheet.
 
 ---
 

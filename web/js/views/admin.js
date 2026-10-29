@@ -4,7 +4,7 @@
 // working once used.
 
 import { api, del, get, post, put } from '../api.js';
-import { $app, busy, confirmSheet, field, fmtDate, h, mount, sheet, toast } from '../ui.js';
+import { $app, busy, confirmSheet, field, fmtDate, h, mount, select, sheet, toast } from '../ui.js';
 
 const appLink = (path) => `${location.origin}${location.pathname}#${path}`;
 
@@ -32,7 +32,11 @@ export async function renderAdmin() {
 
 /** A coach's full profile, private details included, and the directory switch. */
 async function coachSheet(id) {
-  const { account, profile: p, photoUrl, listed } = await get(`/admin/coaches/${encodeURIComponent(id)}`);
+  const [{ account, profile: p, photoUrl, listed }, usage, clients] = await Promise.all([
+    get(`/admin/coaches/${encodeURIComponent(id)}`),
+    get(`/admin/coaches/${encodeURIComponent(id)}/usage?weeks=4`).catch(() => null),
+    get(`/admin/coaches/${encodeURIComponent(id)}/clients`).catch(() => []),
+  ]);
   const row = (label, value) => value && h('p', {}, h('strong', {}, `${label}: `), value);
   const date = (d) => (d ? fmtDate(d, { year: 'numeric', month: 'short', day: 'numeric' }) : 'no date given');
   const sh = sheet(
@@ -63,6 +67,16 @@ async function coachSheet(id) {
           sh.close();
         }),
       }, p.hiddenByAdmin ? 'Show in the directory' : 'Hide from the directory')],
+    usage && h('div', {},
+      h('h3', {}, 'Coaching time (last 4 weeks)'),
+      h('p', {}, usage.avgMinutesPerClientPerWeek == null ? 'No clients yet.'
+        : `${usage.avgMinutesPerClientPerWeek} min per client per week, across ${usage.clients} client${usage.clients === 1 ? '' : 's'}.`),
+      h('p', { class: 'muted small' }, usage.weeks.map((w) => `${fmtDate(w.weekStart, { month: 'short', day: 'numeric' })}: ${w.minutes} min`).join(' · '))),
+    h('h3', {}, `Clients (${clients.length})`),
+    clients.length === 0 ? h('p', { class: 'muted small' }, 'No clients.')
+      : clients.map((c) => h('div', { class: 'spread', style: 'padding:4px 0' },
+        h('span', {}, c.name, h('span', { class: 'muted small' }, ` · ${c.email}`)),
+        h('button', { class: 'small', onclick: () => { sh.close(); moveSheet(c, id, account.name); } }, 'Move…'))),
     h('h3', {}, 'Account'),
     account.suspendedAt && h('p', { class: 'banner' }, `Suspended ${fmtDate(account.suspendedAt.slice(0, 10))}. They can’t sign in; their clients can still log workouts.`),
     h('button', {
@@ -87,7 +101,7 @@ function deleteCoachSheet(id, account) {
   const problem = h('p', { class: 'small', 'aria-live': 'polite' });
   const sh = sheet(
     h('h2', {}, `Delete ${account.name}`),
-    h('p', {}, 'This permanently deletes the coach’s account, exercises, programs, profile and directory entry. A coach who still has clients can’t be deleted; suspend them instead.'),
+    h('p', {}, 'This permanently deletes the coach’s account, exercises, programs, profile and directory entry. A coach who still has clients can’t be deleted: move their clients to another coach first (from this coach’s sheet).'),
     field(`Type ${account.email} to confirm`, confirm),
     problem,
     h('button', {
@@ -144,5 +158,32 @@ function inviteSheet() {
         renderAdmin();
       }),
     }, 'Send invitation'),
+  );
+}
+
+/** Move a client to another coach: their own data goes with them. */
+async function moveSheet(client, fromId, fromName) {
+  const coaches = (await get('/admin/coaches')).filter((c) => c.coachId !== fromId && !c.suspendedAt);
+  if (!coaches.length) return toast('There’s no other coach to move them to.', 'error');
+  const to = select(coaches.map((c) => [c.coachId, c.name]), coaches[0].coachId);
+  const sh = sheet(
+    h('h2', {}, `Move ${client.name}`),
+    h('p', {}, `From ${fromName} to:`),
+    field('New coach', to),
+    h('ul', { class: 'small' },
+      h('li', {}, 'Their workouts, measurements, photos, videos, messages and the programs on their calendar go with them, so the new coach sees their history.'),
+      h('li', {}, 'Videos waiting for review move to the new coach’s queue.'),
+      h('li', {}, `Sessions still to come with ${fromName} are cancelled.`),
+      h('li', {}, `${fromName} loses access. Both the client and the new coach are told.`)),
+    h('button', {
+      class: 'primary block',
+      onclick: (e) => busy(e.currentTarget, async () => {
+        const r = await post(`/admin/clients/${encodeURIComponent(client.clientId)}/move`, { coachId: to.value });
+        toast(`${client.name} moved${r.cancelledSessions ? `; ${r.cancelledSessions} session${r.cancelledSessions === 1 ? '' : 's'} cancelled` : ''}`);
+        sh.close();
+        renderAdmin();
+      }),
+    }, 'Move client'),
+    h('button', { class: 'ghost block', onclick: () => sh.close() }, 'Cancel'),
   );
 }

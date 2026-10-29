@@ -333,6 +333,15 @@ with sync_playwright() as p:
         expect(client.get_by_text("Saved").first).to_be_visible()
         client.wait_for_timeout(300)
     shot(client, "09-weight")
+    # the starting point (ON-4): first entries by default; set to a week ago, the change is from 183.4
+    expect(client.get_by_text("📍 Starting point: first entries")).to_be_visible()
+    expect(client.get_by_text(re.compile(r"Since the starting point \(185 lb"))).to_be_visible()
+    client.locator(".start-point").get_by_role("button", name="Change").click()
+    client.locator(".sheet").get_by_label("Date").fill((datetime.date.today() - datetime.timedelta(days=7)).isoformat())
+    client.locator(".sheet").get_by_role("button", name="Save", exact=True).click()
+    expect(client.get_by_text("Starting point saved")).to_be_visible()
+    expect(client.get_by_text(re.compile(r"Since the starting point \(183\.4 lb"))).to_be_visible()
+    expect(client.locator(".card", has_text="Since the starting point")).to_contain_text("-1.4 lb")
     client.get_by_role("button", name="Body fat").click()
     inputs = client.locator(".sheet, .card").first.locator("input[placeholder='mm']")
     for i, v in enumerate([15, 25, 20]):
@@ -418,6 +427,7 @@ with sync_playwright() as p:
 
     # ---------------- the coach's own intake questions (ON-5)
     coach.get_by_role("link", name="Profile").click()
+    expect(coach.get_by_role("heading", name="Your coaching time")).to_be_visible()
     coach.get_by_role("button", name="Edit intake questions").click()
     coach.get_by_role("button", name="+ Add a question").click()
     coach.locator(".sheet").get_by_label("Question").fill("Your main sport")
@@ -658,6 +668,9 @@ with sync_playwright() as p:
     expect(coach.locator(".session-row", has_text="Sam Client")).to_be_visible()
     client.get_by_role("link", name="Profile").click()
     expect(client.get_by_label("Calendar feed link")).to_have_value(re.compile(r"/cal/[a-z0-9]+\.ics$"))
+    # the coach's hours on the client's Messages screen (MS-5)
+    client.locator('#tabs a[data-path="/coach"]').click()
+    expect(client.locator(".coach-hours")).to_contain_text("Usually available: Mon, Tue, Wed, Thu, Fri, Sat, Sun 8 am–12 pm")
 
     # ---------------- reminders and automated messages (MS-4)
     coach.get_by_role("link", name="Profile").click()
@@ -673,6 +686,9 @@ with sync_playwright() as p:
     # ---------------- the admin suspends the coach, then lifts it
     admin.reload()
     admin.locator(".card.link", has_text=f"coach{RUN}@dev.local").click()
+    expect(admin.locator(".sheet")).to_contain_text("Clients (1)")
+    expect(admin.locator(".sheet").get_by_role("button", name="Move…")).to_be_visible()
+    expect(admin.locator(".sheet")).to_contain_text("Coaching time (last 4 weeks)")
     admin.locator(".sheet").get_by_role("button", name="Suspend coach").click()
     admin.get_by_role("button", name="Suspend", exact=True).click()
     expect(admin.locator(".card.link", has_text=f"coach{RUN}@dev.local").get_by_text("Suspended")).to_be_visible()

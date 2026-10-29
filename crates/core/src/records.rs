@@ -71,7 +71,7 @@ pub fn new_records(log: &WorkoutLog, current: &HashMap<String, PersonalRecord>) 
             best.insert(rec.key.clone(), rec);
         }
     };
-    for s in log.sets.iter().filter(|s| s.done) {
+    for s in log.sets.iter().filter(|s| s.done && s.is_strength()) {
         let (Some(reps), Some(kg)) = (s.reps, s.load_kg) else { continue };
         if reps == 0 || kg <= 0.0 {
             continue;
@@ -157,6 +157,7 @@ mod tests {
                     load_kg: Some(*kg),
                     rpe: None,
                     done: *done,
+                    ..Default::default()
                 })
                 .collect(),
             comment: String::new(),

@@ -9,6 +9,7 @@ use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::bodycomp::{BodyCompResult, BodyFatReading, DensityEquation, SkinfoldMethod};
+use crate::cardio::{CardioTarget, Phase};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -64,6 +65,10 @@ pub struct Profile {
     /// their requests (auth.rs).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub suspended_at: Option<DateTime<Utc>>,
+    /// A client's earlier coaches, after an admin moved them: files from then
+    /// are under those coaches' media folders (export and deletion look there).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub former_coach_ids: Vec<String>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -214,9 +219,21 @@ pub struct Exercise {
     pub pending_demo_key: Option<String>,
     #[serde(default)]
     pub custom: bool,
+    /// Cardio exercises are programmed for time or distance.
+    #[serde(default)]
+    pub modality: Modality,
     /// How to film a set for review (VS-5), shown before the camera opens.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub filming: Option<Filming>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Modality {
+    #[default]
+    Strength,
+    Cardio,
+    Mobility,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -289,6 +306,10 @@ pub struct Item {
     pub rest_sec: Option<u32>,
     pub rpe: Option<f64>,
     pub rir: Option<f64>,
+    /// Set for work done for time or distance (cardio.rs); `reps` and the
+    /// load are then unused, and `sets` counts repeats.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cardio: Option<CardioTarget>,
     #[serde(default)]
     pub notes: String,
 }
@@ -299,6 +320,9 @@ pub struct Block {
     #[serde(default)]
     pub id: String,
     pub kind: BlockKind,
+    /// Warm-up, main work, or post-workout cardio.
+    #[serde(default)]
+    pub phase: Phase,
     /// Rounds for superset/circuit/interval.
     pub rounds: Option<u32>,
     /// Total cap for AMRAP / EMOM.
@@ -319,6 +343,9 @@ pub struct Workout {
     pub name: String,
     #[serde(default)]
     pub notes: String,
+    /// Leave out the program's default warm-up and post-workout cardio.
+    #[serde(default)]
+    pub skip_program_defaults: bool,
     #[serde(default)]
     pub blocks: Vec<Block>,
 }
@@ -346,6 +373,10 @@ pub struct Program {
     pub is_template: bool,
     #[serde(default)]
     pub workouts: Vec<ProgramWorkout>,
+    /// Warm-up and post-workout blocks every workout gets when the program
+    /// is assigned (`cardio::add_program_defaults`).
+    #[serde(default)]
+    pub default_blocks: Vec<Block>,
     pub updated_at: Option<DateTime<Utc>>,
 }
 
@@ -368,30 +399,44 @@ impl Program {
                 return Err("every workout needs a name".into());
             }
             for b in &pw.workout.blocks {
-                for it in &b.items {
-                    if !(1..=50).contains(&it.sets) {
-                        return Err(format!("{}: sets must be 1-50", it.exercise_name));
-                    }
-                    if it.rpe.is_some_and(|r| !(1.0..=10.0).contains(&r)) {
-                        return Err(format!("{}: RPE must be 1-10", it.exercise_name));
-                    }
-                    if it.rir.is_some_and(|r| !(0.0..=10.0).contains(&r)) {
-                        return Err(format!("{}: RIR must be 0-10", it.exercise_name));
-                    }
-                    if it.load_kg.is_some_and(|l| l < 0.0) {
-                        return Err(format!("{}: load cannot be negative", it.exercise_name));
-                    }
-                    if let Some(rule) = &it.progression {
-                        rule.validate().map_err(|e| format!("{}: {e}", it.exercise_name))?;
-                    }
-                    if it.load_pct.is_some_and(|p| !(p > 0.0 && p <= crate::strength::MAX_PCT)) {
-                        return Err(format!("{}: % of 1RM must be above 0 and at most {}", it.exercise_name, crate::strength::MAX_PCT));
-                    }
-                }
+                validate_block(b)?;
             }
+        }
+        for b in &self.default_blocks {
+            if b.phase.is_main() {
+                return Err("the program's defaults can only be warm-ups and post-workout cardio".into());
+            }
+            validate_block(b)?;
         }
         Ok(())
     }
+}
+
+fn validate_block(b: &Block) -> Result<(), String> {
+    for it in &b.items {
+        if !(1..=50).contains(&it.sets) {
+            return Err(format!("{}: sets must be 1-50", it.exercise_name));
+        }
+        if it.rpe.is_some_and(|r| !(1.0..=10.0).contains(&r)) {
+            return Err(format!("{}: RPE must be 1-10", it.exercise_name));
+        }
+        if it.rir.is_some_and(|r| !(0.0..=10.0).contains(&r)) {
+            return Err(format!("{}: RIR must be 0-10", it.exercise_name));
+        }
+        if it.load_kg.is_some_and(|l| l < 0.0) {
+            return Err(format!("{}: load cannot be negative", it.exercise_name));
+        }
+        if let Some(rule) = &it.progression {
+            rule.validate().map_err(|e| format!("{}: {e}", it.exercise_name))?;
+        }
+        if it.load_pct.is_some_and(|p| !(p > 0.0 && p <= crate::strength::MAX_PCT)) {
+            return Err(format!("{}: % of 1RM must be above 0 and at most {}", it.exercise_name, crate::strength::MAX_PCT));
+        }
+        if let Some(c) = &it.cardio {
+            c.validate().map_err(|e| format!("{}: {e}", it.exercise_name))?;
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -466,7 +511,7 @@ impl LogStatus {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct SetLog {
     pub item_id: String,
@@ -478,6 +523,29 @@ pub struct SetLog {
     pub rpe: Option<f64>,
     #[serde(default)]
     pub done: bool,
+    /// Copied from the item's block, so stats can leave warm-ups out.
+    #[serde(default, skip_serializing_if = "Phase::is_main")]
+    pub phase: Phase,
+    /// Cardio done (items with a cardio target).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_sec: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub distance_m: Option<f64>,
+    /// Average heart rate, beats per minute.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avg_hr: Option<u32>,
+}
+
+impl SetLog {
+    /// A set done for time or distance rather than reps.
+    pub fn is_cardio(&self) -> bool {
+        self.duration_sec.is_some() || self.distance_m.is_some()
+    }
+
+    /// Counts toward strength numbers: volume, e1RM trends, records.
+    pub fn is_strength(&self) -> bool {
+        self.phase.is_main() && !self.is_cardio()
+    }
 }
 
 /// Post-workout check (FB-2).
@@ -524,7 +592,8 @@ pub const MAX_EXERCISE_NOTE: usize = 1000;
 
 impl WorkoutLog {
     /// Trims exercise notes and drops empty ones; refuses a rating outside
-    /// 1-5, an over-long note, or more notes than the workout could have.
+    /// 1-5, an over-long note, more notes than the workout could have, or
+    /// cardio numbers out of range.
     pub fn clean_feedback(&mut self) -> Result<(), String> {
         if self.rating.is_some_and(|r| !(1..=5).contains(&r)) {
             return Err("rating must be 1-5".into());
@@ -538,6 +607,17 @@ impl WorkoutLog {
         self.exercise_notes.retain(|_, n| !n.is_empty());
         if self.exercise_notes.len() > 100 {
             return Err("too many exercise notes".into());
+        }
+        for s in &self.sets {
+            if s.duration_sec.is_some_and(|d| d > crate::cardio::MAX_DURATION_SEC) {
+                return Err(format!("{}: time must be up to 6 hours", s.exercise_name));
+            }
+            if s.distance_m.is_some_and(|d| !(0.0..=crate::cardio::MAX_DISTANCE_M).contains(&d)) {
+                return Err(format!("{}: distance must be 0-200 km", s.exercise_name));
+            }
+            if s.avg_hr.is_some_and(|h| !(30..=250).contains(&h)) {
+                return Err(format!("{}: heart rate must be 30-250 bpm", s.exercise_name));
+            }
         }
         Ok(())
     }
@@ -858,6 +938,7 @@ mod tests {
             rest_sec: Some(180),
             rpe,
             rir: None,
+            cardio: None,
             notes: String::new(),
         }
     }
@@ -869,6 +950,7 @@ mod tests {
             description: String::new(),
             weeks: 4,
             is_template: true,
+            default_blocks: vec![],
             updated_at: None,
             workouts: vec![ProgramWorkout {
                 week,
@@ -877,9 +959,11 @@ mod tests {
                     id: "w".into(),
                     name: "Day A".into(),
                     notes: String::new(),
+                    skip_program_defaults: false,
                     blocks: vec![Block {
                         id: "b".into(),
                         kind: BlockKind::Straight,
+                        phase: Default::default(),
                         rounds: None,
                         duration_sec: None,
                         work_sec: None,
@@ -928,6 +1012,7 @@ mod tests {
             time_zone: None,
             consented_at: None,
             suspended_at: None,
+            former_coach_ids: Vec::new(),
             created_at: Utc::now(),
         };
         // 5 pm Oct 27 in Los Angeles is already Oct 28 in UTC.

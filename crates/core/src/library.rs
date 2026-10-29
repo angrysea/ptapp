@@ -1,7 +1,7 @@
 //! Built-in exercise library (WB-1). Shipped inside the binary so it costs no
 //! storage or reads; coaches add custom exercises on top in DynamoDB.
 
-use crate::model::{CameraAngle, Exercise, Filming};
+use crate::model::{CameraAngle, Exercise, Filming, Modality};
 
 struct Seed {
     id: &'static str,
@@ -46,6 +46,19 @@ const SEEDS: &[Seed] = &[
     Seed { id: "rowing-erg", name: "Rowing (erg)", muscles: &["full body", "conditioning"], equipment: &["rower"], cues: &["Legs, body, arms; arms, body, legs"] },
     Seed { id: "assault-bike", name: "Air Bike", muscles: &["conditioning"], equipment: &["air bike"], cues: &["Push and pull with arms"] },
     Seed { id: "jump-rope", name: "Jump Rope", muscles: &["calves", "conditioning"], equipment: &["jump rope"], cues: &["Stay on the balls of your feet", "Wrists turn the rope"] },
+    Seed { id: "treadmill-run", name: "Treadmill Run", muscles: &["conditioning"], equipment: &["treadmill"], cues: &["Run tall, eyes forward", "Short, quick steps", "Don't hold the rails"] },
+    Seed { id: "incline-walk", name: "Incline Walk", muscles: &["conditioning", "glutes", "calves"], equipment: &["treadmill"], cues: &["Hands off the rails", "Push through the whole foot"] },
+    Seed { id: "outdoor-run", name: "Run (outdoors)", muscles: &["conditioning"], equipment: &["bodyweight"], cues: &["Easy pace: you can still talk", "Land under your hips"] },
+    Seed { id: "brisk-walk", name: "Brisk Walk", muscles: &["conditioning"], equipment: &["bodyweight"], cues: &["Arms swing", "Pace where talking takes effort"] },
+    Seed { id: "stationary-bike", name: "Stationary Bike", muscles: &["conditioning", "quads"], equipment: &["bike"], cues: &["Seat at hip height when standing", "Slight bend in the knee at the bottom"] },
+    Seed { id: "elliptical", name: "Elliptical", muscles: &["conditioning"], equipment: &["elliptical"], cues: &["Stand tall", "Push and pull the handles"] },
+    Seed { id: "stair-climber", name: "Stair Climber", muscles: &["conditioning", "glutes", "quads"], equipment: &["stair climber"], cues: &["Whole foot on each step", "Light hands on the rails"] },
+    Seed { id: "ski-erg", name: "Ski Erg", muscles: &["full body", "conditioning"], equipment: &["ski erg"], cues: &["Hinge and pull with lats", "Arms finish past the hips"] },
+    Seed { id: "swim", name: "Swim", muscles: &["full body", "conditioning"], equipment: &["pool"], cues: &["Long, relaxed strokes", "Breathe every 2-3 strokes"] },
+    Seed { id: "worlds-greatest-stretch", name: "World's Greatest Stretch", muscles: &["hips", "thoracic spine", "hamstrings"], equipment: &["bodyweight"], cues: &["Elbow toward the instep", "Rotate and reach to the ceiling"] },
+    Seed { id: "cat-cow", name: "Cat-Cow", muscles: &["spine"], equipment: &["bodyweight"], cues: &["Move one segment at a time", "Breathe with the movement"] },
+    Seed { id: "leg-swing", name: "Leg Swings", muscles: &["hips", "hamstrings"], equipment: &["bodyweight"], cues: &["Hold something for balance", "Swing a little higher each rep"] },
+    Seed { id: "band-pull-apart", name: "Band Pull-apart", muscles: &["rear delts", "upper back"], equipment: &["band"], cues: &["Arms straight", "Squeeze shoulder blades together"] },
 ];
 
 pub fn builtin_exercises() -> Vec<Exercise> {
@@ -61,9 +74,19 @@ pub fn builtin_exercises() -> Vec<Exercise> {
             demo_key: None,
             pending_demo_key: None,
             custom: false,
+            modality: modality(s.id),
             filming: filming(s.id),
         })
         .collect()
+}
+
+fn modality(id: &str) -> Modality {
+    match id {
+        "rowing-erg" | "assault-bike" | "jump-rope" | "treadmill-run" | "incline-walk" | "outdoor-run" | "brisk-walk"
+        | "stationary-bike" | "elliptical" | "stair-climber" | "ski-erg" | "swim" => Modality::Cardio,
+        "worlds-greatest-stretch" | "cat-cow" | "leg-swing" | "band-pull-apart" => Modality::Mobility,
+        _ => Modality::Strength,
+    }
 }
 
 /// Default filming guidance for the built-in lifts worth reviewing on video.
@@ -108,5 +131,14 @@ mod tests {
             assert!(f.validate().is_ok());
         }
         assert!(get("plank").is_none());
+    }
+
+    #[test]
+    fn cardio_machines_are_cardio() {
+        let all = super::builtin_exercises();
+        let modality = |id: &str| all.iter().find(|e| e.id == id).unwrap().modality;
+        assert_eq!(modality("rowing-erg"), super::Modality::Cardio);
+        assert_eq!(modality("incline-walk"), super::Modality::Cardio);
+        assert_eq!(modality("back-squat"), super::Modality::Strength);
     }
 }

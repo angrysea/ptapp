@@ -56,6 +56,7 @@ pub async fn register(State(st): State<AppState>, caller: Caller, Json(body): Js
         // Admins run the service; the agreement is for coaches and clients.
         consented_at: None,
         suspended_at: None,
+        former_coach_ids: Vec::new(),
         created_at: Utc::now(),
     };
     if !st.store.put_new(&format!("USER#{}", caller.sub), "PROFILE", &profile).await? {

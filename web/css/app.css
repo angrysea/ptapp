@@ -408,3 +408,7 @@ table.checkins thead th { white-space: nowrap; }
   .report-notes { border: 0; }
   .report-notes:empty { display: none; }
 }
+
+/* The starting point line (views/metrics.js). */
+.start-point { margin: 0 0 8px; }
+.linklike { background: none; border: 0; padding: 0; min-height: 0; color: var(--accent); font: inherit; text-decoration: underline; cursor: pointer; }

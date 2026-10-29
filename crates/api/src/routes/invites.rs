@@ -205,6 +205,7 @@ pub async fn accept(
         time_zone: None,
         consented_at: Some(now),
         suspended_at: None,
+        former_coach_ids: Vec::new(),
         created_at: now,
     };
     // The new member's entry in the sender's list: the coach's roster or the

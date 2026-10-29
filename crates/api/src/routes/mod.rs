@@ -21,5 +21,6 @@ pub mod replies;
 pub mod sessions;
 pub mod snippets;
 pub mod suggestions;
+pub mod usage;
 pub mod training;
 pub mod videos;

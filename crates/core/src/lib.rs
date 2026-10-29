@@ -3,6 +3,7 @@
 
 pub mod automation;
 pub mod bodycomp;
+pub mod cardio;
 pub mod checkin;
 pub mod coach;
 pub mod habits;

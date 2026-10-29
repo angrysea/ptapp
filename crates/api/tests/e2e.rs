@@ -1285,6 +1285,32 @@ async fn full_client_journey() {
     assert_eq!(got["extraQuestions"][1]["unit"], "days", "kept with the answers");
     assert_eq!(t.call("PUT", "/intake-template", Some("coach1"), Some(json!({ "questions": [] }))).await.0, StatusCode::OK, "removable");
 
+    // --- the starting point (ON-4): first entries until someone picks a date
+    assert_eq!(t.call("GET", "/clients/client1/baseline", Some("coach1"), None).await.1["date"], Value::Null);
+    let tomorrow = (today + chrono::Duration::days(1)).to_string();
+    assert_eq!(t.call("PUT", "/clients/client1/baseline", Some("client1"), Some(json!({ "date": tomorrow }))).await.0, StatusCode::BAD_REQUEST);
+    let start = (today - chrono::Duration::days(14)).to_string();
+    let (s, b) = t.call("PUT", "/clients/client1/baseline", Some("coach1"), Some(json!({ "date": start }))).await;
+    assert_eq!((s, b["setBy"].as_str()), (StatusCode::OK, Some("coach")));
+    assert_eq!(t.call("GET", "/clients/client1/baseline", Some("client1"), None).await.1["date"], start.as_str());
+    assert_eq!(t.call("GET", "/clients/client1/baseline", Some("client2"), None).await.0, StatusCode::FORBIDDEN);
+
+    // --- coach time per client (the Phase 2 exit gate)
+    let usage = |secs: u32| json!({ "entries": [{ "clientId": "client1", "seconds": secs }, { "clientId": "not-my-client", "seconds": 60 }] });
+    assert_eq!(t.call("POST", "/usage", Some("client1"), Some(usage(60))).await.0, StatusCode::FORBIDDEN);
+    assert_eq!(t.call("POST", "/usage", Some("coach1"), Some(usage(5000))).await.0, StatusCode::BAD_REQUEST);
+    for _ in 0..3 {
+        let (s, r) = t.call("POST", "/usage", Some("coach1"), Some(usage(120))).await;
+        assert_eq!((s, r["added"].as_u64()), (StatusCode::OK, Some(120)), "only the coach's own client counts");
+    }
+    let (_, mine) = t.call("GET", "/usage?weeks=2", Some("coach1"), None).await;
+    assert_eq!(mine["weeks"][1]["minutes"], 6);
+    assert_eq!(mine["weeks"][1]["clientsSeen"], 1);
+    assert!(mine["avgMinutesPerClientPerWeek"].as_f64().unwrap() > 0.0);
+    let (s, theirs) = t.call("GET", "/admin/coaches/coach1/usage?weeks=2", Some("admin1"), None).await;
+    assert_eq!((s, theirs["weeks"][1]["minutes"].as_u64()), (StatusCode::OK, Some(6)));
+    assert_eq!(t.call("GET", "/admin/coaches/coach1/usage", Some("coach1"), None).await.0, StatusCode::FORBIDDEN);
+
     // --- security review: a suspended coach's calendar link stops working
     let (_, cal) = t.call("GET", "/me/calendar", Some("coach1"), None).await;
     let coach_feed = cal["path"].as_str().unwrap().to_string();
@@ -1301,4 +1327,32 @@ async fn full_client_journey() {
     assert_eq!(s, StatusCode::OK, "{d}");
     let (_, after) = t.call("GET", "/sessions", Some("coach1"), None).await;
     assert!(!after.as_array().unwrap().iter().any(|s| s["clientId"] == "client1"), "{after}");
+
+    // --- the admin moves a client to another coach
+    let (_, ci3) = t.call("POST", "/admin/invites", Some("admin1"), Some(json!({ "email": "coach3@dev.local", "name": "Coach Three" }))).await;
+    assert_eq!(t.call("POST", &format!("/invites/{}/accept", ci3["code"].as_str().unwrap()), Some("coach3"), Some(json!({ "consent": true }))).await.0, StatusCode::OK);
+    let (_, inv4) = t.call("POST", "/invites", Some("coach1"), Some(json!({ "email": "client4@dev.local", "clientName": "Four" }))).await;
+    assert_eq!(t.call("POST", &format!("/invites/{}/accept", inv4["code"].as_str().unwrap()), Some("client4"), Some(json!({ "consent": true }))).await.0, StatusCode::OK);
+    t.call("POST", "/clients/client4/comments", Some("client4"), Some(json!({ "text": "Hi coach one" }))).await;
+    let soon = (chrono::Utc::now() + chrono::Duration::days(3)).format("%Y-%m-%dT21:00:00Z").to_string();
+    let (s, sess) = t.call("POST", "/clients/client4/sessions", Some("coach1"), Some(json!({ "start": soon, "minutes": 30 }))).await;
+    assert_eq!(s, StatusCode::OK, "{sess}");
+    let (_, c1) = t.call("GET", "/admin/coaches/coach1/clients", Some("admin1"), None).await;
+    assert!(c1.as_array().unwrap().iter().any(|r| r["clientId"] == "client4"));
+    assert_eq!(t.call("POST", "/admin/clients/client4/move", Some("coach1"), Some(json!({ "coachId": "coach3" }))).await.0, StatusCode::FORBIDDEN);
+    assert_eq!(t.call("POST", "/admin/clients/client4/move", Some("admin1"), Some(json!({ "coachId": "coach1" }))).await.0, StatusCode::BAD_REQUEST, "already theirs");
+    let (s, mv) = t.call("POST", "/admin/clients/client4/move", Some("admin1"), Some(json!({ "coachId": "coach3" }))).await;
+    assert_eq!(s, StatusCode::OK, "{mv}");
+    assert_eq!(mv["cancelledSessions"], 1);
+    assert_eq!(t.call("GET", "/me", Some("client4"), None).await.1["profile"]["coachId"], "coach3");
+    assert_eq!(t.call("GET", "/clients/client4", Some("coach1"), None).await.0, StatusCode::FORBIDDEN, "the old coach has no access");
+    let (_, thread) = t.call("GET", "/clients/client4/comments", Some("coach3"), None).await;
+    assert!(thread.as_array().unwrap().iter().any(|c| c["text"] == "Hi coach one"), "the client's history moves with them");
+    let (_, r1) = t.call("GET", "/clients", Some("coach1"), None).await;
+    assert!(!r1.as_array().unwrap().iter().any(|r| r["client"]["clientId"] == "client4"));
+    let (_, r3) = t.call("GET", "/clients", Some("coach3"), None).await;
+    assert!(r3.as_array().unwrap().iter().any(|r| r["client"]["clientId"] == "client4"));
+    let (_, mine) = t.call("GET", "/sessions", Some("client4"), None).await;
+    assert_eq!(mine[0]["status"], "cancelled", "the session with the old coach is off");
+    assert!(!t.call("GET", "/sessions", Some("coach1"), None).await.1.as_array().unwrap().iter().any(|x| x["clientId"] == "client4"));
 }

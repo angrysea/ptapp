@@ -24,8 +24,9 @@ import { renderInviteSignedIn, renderInviteSignUp, resumeAfterSignOut } from './
 import { renderThread } from './views/comments.js';
 import { renderCheckin } from './views/checkins.js';
 import { renderAutomation } from './views/automation.js';
-import { renderSchedule, renderSessions } from './views/sessions.js';
+import { coachHours, renderSchedule, renderSessions } from './views/sessions.js';
 import { renderReport } from './views/report.js';
+import { startUsage } from './usage.js';
 import { renderProfile, signOut } from './views/profile.js';
 import { renderProgramEditor, renderPrograms } from './views/programs.js';
 import { refreshVideoBadge, renderVideoQueue } from './views/videos.js';
@@ -139,6 +140,7 @@ async function boot() {
   } else if (session.isCoach) {
     highlight = tabs([['/', '👥', 'Clients'], ['/messages', '💬', 'Messages'], ['/videos', '🎥', 'Videos'], ['/programs', '🗓️', 'Programs'], ['/exercises', '🏋️', 'Exercises'], ['/me', '⚙️', 'Profile']]);
     refreshVideoBadge();
+    startUsage(); // time per client (Phase 2 exit gate)
     route('/', renderRoster);
     route('/c/:id/report', (id) => renderReport(id)); // before /c/:id/:tab, which would match it too
     route('/c/:id', (id) => renderClient(id));
@@ -157,7 +159,13 @@ async function boot() {
     route('/', renderToday);
     route('/workout/:date/:id', renderWorkout);
     route('/progress', () => renderMetrics(mount($app(), h('div', { class: 'spread page-head' }, h('h1', {}, 'Progress'), h('a', { class: 'btn small', href: '#/report' }, '📄 Report')), h('div')).lastChild, session.profile));
-    route('/coach', () => { const el = h('div'); mount($app(), h('h1', {}, 'Messages'), el); return renderThread(el, session.userId); });
+    route('/coach', () => {
+      const el = h('div');
+      const hours = h('div');
+      mount($app(), h('h1', {}, 'Messages'), hours, el);
+      coachHours(hours); // MS-5: when the coach is around (online only)
+      return renderThread(el, session.userId);
+    });
     route('/intake', renderIntake);
     route('/checkin', renderCheckin);
     route('/sessions', renderSessions);

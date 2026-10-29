@@ -175,6 +175,7 @@ mod tests {
             rest_sec: None,
             rpe: None,
             rir: None,
+            cardio: None,
             notes: String::new(),
         }
     }
@@ -202,6 +203,7 @@ mod tests {
                     load_kg: Some(*kg),
                     rpe: *rpe,
                     done: *done,
+                    ..Default::default()
                 })
                 .collect(),
             comment: String::new(),

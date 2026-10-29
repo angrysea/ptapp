@@ -93,8 +93,9 @@ mod tests {
         Workout {
             id: "w".into(),
             name: "Day 1".into(),
-            blocks: vec![Block { id: "b".into(), kind: BlockKind::Straight, rounds: None, duration_sec: None, work_sec: None, rest_sec: None, items, notes: String::new() }],
+            blocks: vec![Block { id: "b".into(), kind: BlockKind::Straight, phase: Default::default(), rounds: None, duration_sec: None, work_sec: None, rest_sec: None, items, notes: String::new() }],
             notes: String::new(),
+            skip_program_defaults: false,
         }
     }
 
@@ -112,6 +113,7 @@ mod tests {
             rest_sec: None,
             rpe: None,
             rir: None,
+            cardio: None,
             notes: String::new(),
         }
     }

@@ -286,3 +286,37 @@ pub async fn remove_photo(
     st.store.delete(&scope.pk(), &format!("PHOTO#{pid}")).await?;
     Ok(Json(json!({ "ok": true })))
 }
+
+// ---------------------------------------------------------------- starting point (ON-4)
+
+/// `CLIENT#{id}` / `BASELINE`: the date progress is measured from. Without
+/// one, each measurement's first entry is the starting point.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Baseline {
+    date: Option<NaiveDate>,
+    #[serde(default)]
+    set_by: Option<Role>,
+}
+
+/// `GET /clients/{cid}/baseline`.
+pub async fn get_baseline(State(st): State<AppState>, ctx: Ctx, Path(cid): Path<String>) -> ApiResult<Json<Baseline>> {
+    let scope = client_scope(&st, &ctx, &cid).await?;
+    Ok(Json(st.store.get(&scope.pk(), "BASELINE").await?.unwrap_or(Baseline { date: None, set_by: None })))
+}
+
+#[derive(Deserialize)]
+pub struct BaselineIn {
+    date: Option<NaiveDate>,
+}
+
+/// `PUT /clients/{cid}/baseline` (coach or client); a null date goes back to first entries.
+pub async fn put_baseline(State(st): State<AppState>, ctx: Ctx, Path(cid): Path<String>, Json(body): Json<BaselineIn>) -> ApiResult<Json<Baseline>> {
+    let scope = client_scope(&st, &ctx, &cid).await?;
+    if body.date.is_some_and(|d| d > scope.today()) {
+        return Err(bad_request("the starting point can't be in the future"));
+    }
+    let b = Baseline { date: body.date, set_by: Some(scope.actor_role()) };
+    st.store.put(&scope.pk(), "BASELINE", &b).await?;
+    Ok(Json(b))
+}
