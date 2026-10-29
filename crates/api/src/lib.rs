@@ -9,6 +9,7 @@ pub mod push;
 pub mod realtime;
 pub mod routes;
 pub mod store;
+pub mod sweep;
 pub mod util;
 
 use std::time::Duration;
@@ -98,6 +99,10 @@ pub fn router(state: AppState) -> Router {
         .route("/clients/{cid}/attachments", post(comments::attachment))
         .route("/clients/{cid}/messages/read", post(messages::mark_read))
         .route("/messages", get(messages::inbox))
+        .route("/checkin-template", get(checkins::get_template).put(checkins::put_template))
+        .route("/clients/{cid}/checkins", get(checkins::list))
+        .route("/clients/{cid}/checkins/{week}", put(checkins::put))
+        .route("/automation", get(automation::get).put(automation::put))
         .route("/alerts", get(alerts::list))
         .route("/alerts/settings", put(alerts::put_settings))
         .route("/alerts/{id}/done", post(alerts::done))

@@ -16,7 +16,7 @@ use crate::util::{audit, new_id};
 use crate::AppState;
 
 /// Scheduled workouts and logs from `days` before `today` through `today`.
-async fn recent(st: &AppState, pk: &str, today: NaiveDate, days: i64) -> ApiResult<(Vec<ScheduledWorkout>, Vec<WorkoutLog>)> {
+pub async fn recent(st: &AppState, pk: &str, today: NaiveDate, days: i64) -> ApiResult<(Vec<ScheduledWorkout>, Vec<WorkoutLog>)> {
     let from = today - Duration::days(days);
     let to = today;
     let (s_from, s_to) = (format!("SCHED#{from}"), format!("SCHED#{to}#~"));

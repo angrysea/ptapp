@@ -342,3 +342,19 @@ button.reply.new { background: var(--accent); color: var(--accent-ink); }
 .alerts { border-left: 4px solid var(--warn); }
 .alert-row { padding: 10px 0; border-bottom: 1px solid var(--line); }
 .alert-row:last-child { border-bottom: 0; }
+
+/* Weekly check-ins (views/checkins.js). */
+.checkin-due { border-left: 4px solid var(--accent); }
+.checkin-q { margin-bottom: 14px; }
+.checkin-q > label { display: block; font-weight: 600; margin-bottom: 6px; }
+.scale { display: grid; grid-template-columns: repeat(10, 1fr); gap: 4px; }
+.scale button { min-width: 0; padding: 0; }
+.scale button.on { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.table-wrap { overflow-x: auto; }
+table.checkins { border-collapse: collapse; width: 100%; font-size: 0.875rem; background: var(--card); border-radius: 10px; }
+table.checkins th, table.checkins td { padding: 8px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+table.checkins thead th { white-space: nowrap; }
+
+/* Day toggles (views/automation.js). */
+.days { display: flex; flex-wrap: wrap; gap: 4px; }
+.days button { min-width: 44px; }

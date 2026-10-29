@@ -353,6 +353,21 @@ with sync_playwright() as p:
     client.get_by_role("button", name="Records").click()
     expect(client.locator(".card", has_text="Back Squat").get_by_text("5-rep max: 225 lb")).to_be_visible()
 
+    # ---------------- weekly check-in (FB-3): from Today, answered, seen by the coach
+    client.get_by_role("link", name="Today").click()
+    client.get_by_role("link", name="Start check-in").click()
+    expect(client.get_by_role("heading", name="Weekly check-in")).to_be_visible()
+    client.get_by_role("button", name="Send check-in").click()
+    expect(client.get_by_text("“How was your week overall?” needs an answer")).to_be_visible()
+    for label, n in [("How was your week overall?", "8"), ("Energy", "7"), ("Sleep quality", "6"), ("Stress (10 = very stressed)", "4")]:
+        client.get_by_role("radiogroup", name=label).get_by_role("radio", name=n, exact=True).click()
+    client.get_by_label("Wins this week").fill("Squat felt fast")
+    client.get_by_role("button", name="Send check-in").click()
+    expect(client.get_by_text("Weekly check-in sent.")).to_be_visible()
+    coach.goto(coach.url.split("#")[0] + "#/c/client" + RUN + "/checkins")
+    expect(coach.locator("table.checkins")).to_contain_text("Squat felt fast")
+    shot(coach, "10c-coach-checkins")
+
     # ---------------- coach dashboard + feedback
     coach.get_by_role("button", name="Overview").click()
     print("coach url", coach.url)
@@ -522,6 +537,17 @@ with sync_playwright() as p:
     client.get_by_label("Notify me about new messages and video replies").check()
     # no VAPID key on the local server, so it says so rather than failing
     expect(client.get_by_text("Notifications aren’t set up on this server yet.")).to_be_visible()
+
+    # ---------------- reminders and automated messages (MS-4)
+    coach.get_by_role("link", name="Profile").click()
+    coach.get_by_role("link", name="Set up reminders & messages").click()
+    expect(coach.get_by_role("heading", name="Reminders & automated messages")).to_be_visible()
+    expect(coach.get_by_label("Weekly check-in reminder time")).to_have_value("17")  # on by default, Sunday 5 pm
+    coach.get_by_role("button", name="+ Add an automated message").click()
+    coach.get_by_label("Message", exact=True).fill("New week, {name}! Check your program for this week.")
+    coach.get_by_role("button", name="Save", exact=True).click()
+    expect(coach.get_by_text("Saved")).to_be_visible()
+    shot(coach, "16-automation")
 
     # ---------------- the admin suspends the coach, then lifts it
     admin.reload()

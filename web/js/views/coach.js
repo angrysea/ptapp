@@ -18,6 +18,7 @@ import { renderMetrics, stat } from './metrics.js';
 import { statusChip } from './workout.js';
 import { suggestionsCard } from './progression.js';
 import { alertsCard } from './alerts.js';
+import { checkinsTab } from './checkins.js';
 
 /** The client's 1-5 rating of a workout; bad ones stand out. */
 function ratingChip(n) {
@@ -113,14 +114,14 @@ export async function renderClient(cid, tab = 'overview', focus = null) {
   try { detail = await get(`/clients/${cid}`, { cache: true }); } catch (e) { errorToast(e); return go('/'); }
   const client = detail.profile;
   const body = h('div');
-  const tabs = [['overview', 'Overview'], ['calendar', 'Calendar'], ['logs', 'Logs'], ['metrics', 'Body'], ['intake', 'Intake'], ['messages', 'Messages']];
+  const tabs = [['overview', 'Overview'], ['calendar', 'Calendar'], ['logs', 'Logs'], ['checkins', 'Check-ins'], ['metrics', 'Body'], ['intake', 'Intake'], ['messages', 'Messages']];
   mount($app(),
     h('button', { class: 'ghost small', onclick: () => go('/') }, '‹ Clients'),
     h('h1', {}, client.name),
     h('p', { class: 'muted small' }, client.email),
     subtabs(tabs, tabs.some(([k]) => k === tab) ? tab : 'overview', (t) => go(`/c/${cid}/${t}`)),
     body);
-  const views = { overview, calendar, logs, metrics: (el) => renderMetrics(el, client), intake: (el) => mount(el, h('h3', {}, 'Intake'), intakeSummary(detail.intake, client), h('h3', {}, 'Health screening & waiver'), waiverSummary(detail.waiver)), messages: (el) => renderThread(el, cid) };
+  const views = { overview, calendar, logs, checkins: checkinsTab, metrics: (el) => renderMetrics(el, client), intake: (el) => mount(el, h('h3', {}, 'Intake'), intakeSummary(detail.intake, client), h('h3', {}, 'Health screening & waiver'), waiverSummary(detail.waiver)), messages: (el) => renderThread(el, cid) };
   try { await views[tab](body, client, focus); } catch (e) { mount(body, h('p', { class: 'muted' }, e.message)); }
   body.querySelector('.card.focus')?.scrollIntoView({ block: 'center' });
 }

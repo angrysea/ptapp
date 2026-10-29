@@ -65,7 +65,7 @@ async fn full_client_journey() {
 
     let mut state = api::AppState::from_env().await;
     state.s3 = s3.clone();
-    let t = T { app: api::router(state) };
+    let t = T { app: api::router(state.clone()) };
     let today = chrono::Utc::now().date_naive();
 
     // --- health + auth
@@ -1104,4 +1104,62 @@ async fn full_client_journey() {
     let (s, set) = t.call("PUT", "/alerts/settings", Some("coach1"), Some(json!({ "missedInARow": 3 }))).await;
     assert_eq!(s, StatusCode::OK, "{set}");
     assert_eq!(t.call("GET", "/clients", Some("coach1"), None).await.0, StatusCode::OK, "the roster checks for missed runs");
+
+    // --- weekly check-ins (FB-3)
+    let (_, tpl) = t.call("GET", "/checkin-template", Some("client1"), None).await;
+    assert_eq!(tpl["questions"][0]["id"], "overall", "the default questions");
+    let mut mine = tpl.clone();
+    mine["questions"] = json!([
+        { "id": "overall", "kind": "scale", "label": " How was the week? ", "required": true },
+        { "id": "steps", "kind": "number", "label": "Average daily steps", "unit": "steps" },
+        { "id": "travel", "kind": "yesno", "label": "Travelling?" }
+    ]);
+    assert_eq!(t.call("PUT", "/checkin-template", Some("client1"), Some(mine.clone())).await.0, StatusCode::FORBIDDEN);
+    let (s, saved) = t.call("PUT", "/checkin-template", Some("coach1"), Some(mine)).await;
+    assert_eq!(s, StatusCode::OK, "{saved}");
+    assert_eq!(saved["questions"][0]["label"], "How was the week?");
+    let (_, ci) = t.call("GET", "/clients/client1/checkins", Some("client1"), None).await;
+    let week = ci["thisWeek"].as_str().unwrap().to_string();
+    assert_eq!(ci["template"]["questions"].as_array().unwrap().len(), 3);
+    let path = format!("/clients/client1/checkins/{week}");
+    assert_eq!(t.call("PUT", &path, Some("client1"), Some(json!({ "answers": { "steps": 9000 } }))).await.0, StatusCode::BAD_REQUEST, "a required answer is missing");
+    assert_eq!(t.call("PUT", &path, Some("coach1"), Some(json!({ "answers": { "overall": 8 } }))).await.0, StatusCode::FORBIDDEN);
+    let next = (chrono::NaiveDate::parse_from_str(&week, "%Y-%m-%d").unwrap() + chrono::Duration::days(7)).to_string();
+    assert_eq!(t.call("PUT", &format!("/clients/client1/checkins/{next}"), Some("client1"), Some(json!({ "answers": { "overall": 8 } }))).await.0, StatusCode::BAD_REQUEST, "not next week");
+    let (s, done) = t.call("PUT", &path, Some("client1"), Some(json!({ "answers": { "overall": 8, "steps": 9000, "travel": true } }))).await;
+    assert_eq!(s, StatusCode::OK, "{done}");
+    let (_, ci) = t.call("GET", "/clients/client1/checkins", Some("coach1"), None).await;
+    assert_eq!(ci["checkins"][0]["answers"]["steps"], 9000);
+    assert_eq!(ci["checkins"][0]["questions"][1]["label"], "Average daily steps", "it keeps the questions it answered");
+
+    // --- automated messages and reminders (MS-4): the hourly sweep
+    let (_, auto) = t.call("GET", "/automation", Some("coach1"), None).await;
+    assert_eq!(auto["checkinReminder"], json!({ "days": [6], "hour": 17 }), "check-in reminders default to Sunday 17:00");
+    let now = chrono::Utc::now();
+    let (_, c1) = t.call("GET", "/clients/client1", Some("coach1"), None).await;
+    let hour = ptcore::automation::local_time(now, c1["profile"]["timeZone"].as_str()).format("%H").to_string().parse::<u32>().unwrap();
+    let rules = json!({
+        "checkinReminder": { "days": [], "hour": hour },
+        "workoutReminder": null,
+        "messages": [{ "id": "hello", "text": " Automated hello, {name} ", "when": { "days": [], "hour": hour } }]
+    });
+    assert_eq!(t.call("PUT", "/automation", Some("client1"), Some(rules.clone())).await.0, StatusCode::FORBIDDEN);
+    let mut bad = rules.clone();
+    bad["messages"][0]["when"]["hour"] = json!(24);
+    assert_eq!(t.call("PUT", "/automation", Some("coach1"), Some(bad)).await.0, StatusCode::BAD_REQUEST);
+    let (s, saved) = t.call("PUT", "/automation", Some("coach1"), Some(rules)).await;
+    assert_eq!(s, StatusCode::OK, "{saved}");
+    assert_eq!(saved["messages"][0]["text"], "Automated hello, {name}");
+    let report = api::sweep::run(&state, now).await;
+    assert_eq!(report.errors, 0, "{report:?}");
+    assert!(report.messages >= 1, "{report:?}");
+    assert_eq!(report.checkin_reminders, 0, "client1 already sent this week's check-in");
+    let (_, thread) = t.call("GET", "/clients/client1/comments", Some("client1"), None).await;
+    let hello: Vec<&Value> = thread.as_array().unwrap().iter().filter(|c| c["text"].as_str().is_some_and(|t| t.starts_with("Automated hello, "))).collect();
+    assert_eq!(hello.len(), 1);
+    assert_eq!(hello[0]["authorRole"], "coach");
+    assert!(!hello[0]["text"].as_str().unwrap().contains("{name}"));
+    // a second sweep in the same hour sends nothing again (once per day per item)
+    let again = api::sweep::run(&state, now).await;
+    assert_eq!((again.messages, again.errors), (0, 0), "{again:?}");
 }

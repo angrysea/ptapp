@@ -17,6 +17,7 @@ import { canRecord, recordClip } from './recorder.js';
 import { trimmer } from './trim.js';
 import { celebrate } from './records.js';
 import { commentOn } from './comments.js';
+import { checkinCard } from './checkins.js';
 
 // A finished workout the server refused for good (not a 409, which means a
 // newer copy is already saved) goes back to being a draft, so it is neither
@@ -124,6 +125,8 @@ export async function renderToday() {
     h('div', { class: 'muted small' }, `${fmtDate(s.date)} · ${s.programName} · week ${s.week}`),
     h('div', { class: 'small' }, s.workout.blocks.flatMap((b) => b.items.map((i) => i.exerciseName)).join(' · ')));
 
+  const checkinSlot = h('div');
+  checkinCard(checkinSlot, me); // FB-3: fills in once it has loaded (online only)
   mount($app(),
     detail && (!detail.intake || !detail.waiver) && h('div', { class: 'banner' },
       'Finish setting up: ',
@@ -131,6 +134,7 @@ export async function renderToday() {
       !detail.intake && !detail.waiver && ' and ',
       !detail.waiver && h('a', { href: '#/waiver?onboarding=1' }, 'health screening & waiver')),
     h('h1', {}, `Hi ${me.name.split(' ')[0]}`),
+    checkinSlot,
     h('h2', {}, 'Today'),
     todays.length ? todays.map((s) => card(s, true)) : h('div', { class: 'card muted' }, 'Rest day. Nothing scheduled today.'),
     upcoming.length > 0 && [h('h2', {}, 'Coming up'), upcoming.map((s) => card(s, false))],

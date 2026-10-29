@@ -22,6 +22,8 @@ import { renderMetrics } from './views/metrics.js';
 import { captureInvite, renderOnboarding } from './views/onboarding.js';
 import { renderInviteSignedIn, renderInviteSignUp, resumeAfterSignOut } from './views/signup.js';
 import { renderThread } from './views/comments.js';
+import { renderCheckin } from './views/checkins.js';
+import { renderAutomation } from './views/automation.js';
 import { renderProfile, signOut } from './views/profile.js';
 import { renderProgramEditor, renderPrograms } from './views/programs.js';
 import { refreshVideoBadge, renderVideoQueue } from './views/videos.js';
@@ -145,6 +147,7 @@ async function boot() {
     route('/videos', renderVideoQueue);
     route('/messages', renderInbox);
     route('/review/:cid/:vid', renderReview);
+    route('/automation', renderAutomation);
   } else {
     highlight = tabs([['/', '🏋️', 'Today'], ['/progress', '📈', 'Progress'], ['/coach', '💬', 'Coach'], ['/me', '⚙️', 'Profile']]);
     route('/', renderToday);
@@ -152,6 +155,7 @@ async function boot() {
     route('/progress', () => renderMetrics(mount($app(), h('h1', {}, 'Progress'), h('div')).lastChild, session.profile));
     route('/coach', () => { const el = h('div'); mount($app(), h('h1', {}, 'Messages'), el); return renderThread(el, session.userId); });
     route('/intake', renderIntake);
+    route('/checkin', renderCheckin);
     route('/waiver', renderWaiver);
   }
   // Unread messages: badges now and whenever a message arrives (realtime.js).

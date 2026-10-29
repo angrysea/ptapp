@@ -477,6 +477,68 @@ Resources:
       LogGroupName: !Sub /aws/lambda/ptapp-${Stage}-api
       RetentionInDays: 30
 
+  # ------------------------------------------------------------------ sweep
+  # Every hour: reminders, coaches' automated messages and missed-workout
+  # alerts, each sent at the right local time for the client (src/sweep.rs).
+  SweepFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub ptapp-${Stage}-sweep
+      # Built by `cargo lambda build --release --arm64 --bin sweep` (scripts/deploy.sh)
+      CodeUri: target/lambda/sweep/
+      Handler: bootstrap
+      # Overlapping runs are harmless: each send is recorded first (SENT#).
+      Timeout: 120
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref Table
+          MEDIA_BUCKET: !Ref MediaBucket
+          APP_URL: !If [HasAppDomain, !Sub "https://${AppDomain}", !Sub "https://${Distribution.DomainName}"]
+          EVENTS_HTTP_DOMAIN: !GetAtt EventApi.Dns.Http
+          VAPID_PARAM: !Sub /ptapp/${Stage}/vapid-private-key
+          RUST_LOG: info
+      LoggingConfig:
+        LogGroup: !Ref SweepLogGroup
+      Policies:
+        - DynamoDBCrudPolicy: { TableName: !Ref Table }
+        - Statement:
+            - Effect: Allow
+              Action: appsync:EventPublish
+              Resource: !Sub "${EventApi.ApiArn}/channelNamespace/inbox"
+            - Effect: Allow
+              Action: ssm:GetParameter
+              Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/ptapp/${Stage}/vapid-private-key"
+      Events:
+        Hourly:
+          Type: ScheduleV2
+          Properties:
+            Name: !Sub ptapp-${Stage}-sweep
+            # Five past each hour, in UTC; the sweep works out each client's local time.
+            ScheduleExpression: cron(5 * * * ? *)
+            RetryPolicy: { MaximumRetryAttempts: 0 }
+
+  SweepLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/ptapp-${Stage}-sweep
+      RetentionInDays: 30
+
+  SweepErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ptapp-${Stage}-sweep-errors
+      AlarmDescription: The hourly sweep (reminders, automated messages) failed 3 times in a row
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions: [{ Name: FunctionName, Value: !Ref SweepFunction }]
+      Statistic: Sum
+      Period: 3600
+      EvaluationPeriods: 3
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: !If [HasAlarmEmail, [!Ref AlarmTopic], !Ref AWS::NoValue]
+
   # ------------------------------------------------------------------ web
   WebBucket:
     Type: AWS::S3::Bucket

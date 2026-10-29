@@ -29,8 +29,9 @@ ALARM_EMAIL="${ALARM_EMAIL:-}"
 # "false" if INVITE_FROM's domain is already an SES identity made outside this stack.
 CREATE_SENDER_IDENTITY="${CREATE_SENDER_IDENTITY:-true}"
 
-echo "==> building Lambda (arm64)"
+echo "==> building Lambdas (arm64): the API and the hourly sweep"
 cargo lambda build --release --arm64 --bin api
+cargo lambda build --release --arm64 --bin sweep
 
 # Web Push key (push.rs): made once per stage, kept in SSM, never printed.
 # MSYS_NO_PATHCONV stops Git Bash turning the /ptapp/... name into a Windows path.

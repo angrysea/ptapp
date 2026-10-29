@@ -5,6 +5,8 @@ import { kv, outbox } from '../idb.js';
 import { disable as pushOff, enable as pushOn, needsHomeScreen, prefetchKey, previewOn, setPreview, status as pushStatus, supported as pushSupported } from '../push.js';
 import { session } from '../session.js';
 import { alertSettingsCard } from './alerts.js';
+import { checkinSettingsCard } from './checkins.js';
+import { automationCard } from './automation.js';
 import { $app, busy, field, h, mount, passwordField, select, sheet, toast } from '../ui.js';
 
 /** Signs out from this device: warns about unsynced changes, then clears
@@ -197,6 +199,8 @@ export async function renderProfile() {
       h('a', { class: 'btn block', href: '#/waiver' }, 'Health screening & waiver')),
     p.role !== 'admin' && notificationsCard(),
     p.role === 'coach' && alertSettingsCard(),
+    p.role === 'coach' && checkinSettingsCard(),
+    p.role === 'coach' && automationCard(),
     p.role === 'client' && yourDataCard(p),
     !devMode() && h('div', { class: 'card' },
       h('h3', {}, 'Password'),

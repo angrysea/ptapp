@@ -1,6 +1,8 @@
 pub mod account;
 pub mod alerts;
+pub mod automation;
 pub mod admin;
+pub mod checkins;
 pub mod clients;
 pub mod coaches;
 pub mod comments;

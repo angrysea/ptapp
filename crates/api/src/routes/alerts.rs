@@ -64,7 +64,8 @@ pub async fn on_log(st: &AppState, scope: &ClientScope, log: &WorkoutLog) -> Api
 }
 
 /// Files a missed-workouts alert for a client whose latest run of missed
-/// workouts reaches the coach's threshold. One alert per run.
+/// workouts reaches the coach's threshold. One alert per run; returns it
+/// when it is new.
 pub async fn check_missed(
     st: &AppState,
     coach: &str,
@@ -73,10 +74,10 @@ pub async fn check_missed(
     sched: &[ScheduledWorkout],
     logs: &[WorkoutLog],
     today: NaiveDate,
-) -> ApiResult<()> {
-    let Some((run, start)) = missed_streak(sched, logs, today) else { return Ok(()) };
+) -> ApiResult<Option<Alert>> {
+    let Some((run, start)) = missed_streak(sched, logs, today) else { return Ok(None) };
     if run < threshold {
-        return Ok(());
+        return Ok(None);
     }
     let latest = sched.iter().filter(|s| s.date < today).map(|s| s.date).max().unwrap_or(start);
     let alert = Alert {
@@ -90,8 +91,7 @@ pub async fn check_missed(
         done: false,
         created_at: Utc::now(),
     };
-    st.store.put_new(&pk(coach), &sk(&alert.id), &alert).await?;
-    Ok(())
+    Ok(st.store.put_new(&pk(coach), &sk(&alert.id), &alert).await?.then_some(alert))
 }
 
 /// `GET /alerts`: open alerts, newest first, and the coach's settings.
