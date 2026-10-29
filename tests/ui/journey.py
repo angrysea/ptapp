@@ -368,6 +368,28 @@ with sync_playwright() as p:
     expect(coach.locator("table.checkins")).to_contain_text("Squat felt fast")
     shot(coach, "10c-coach-checkins")
 
+    # ---------------- daily habits (BZ-3): added and tapped on Today, seen by the coach
+    client.get_by_role("link", name="Today").click()
+    client.get_by_role("button", name="+ Add a daily habit").click()
+    client.get_by_label("Habit", exact=True).fill("Water")
+    client.get_by_label("Kind").select_option("count")
+    client.get_by_label("Daily target").fill("8")
+    client.get_by_label("Unit").fill("glasses")
+    client.get_by_role("button", name="Add habit").click()
+    client.locator(".sheet").get_by_role("button", name="Done").click()
+    water = client.locator(".habit", has_text="Water")
+    for _ in range(3):
+        water.get_by_role("button", name="One more Water").click()
+    expect(water).to_contain_text("3 / 8 glasses")
+    water.get_by_label("Water today").fill("8")
+    water.get_by_label("Water today").press("Tab")
+    expect(water).to_contain_text("🔥 1")
+    expect(water).to_have_class(re.compile("done"))
+    shot(client, "10d-habits")
+    expect(client.locator("#sync")).to_be_hidden(timeout=15000)  # the queued values have synced
+    coach.goto(coach.url.split("#")[0] + "#/c/client" + RUN + "/overview")
+    expect(coach.locator(".habit-row", has_text="Water")).to_contain_text("🔥 1")
+
     # ---------------- coach dashboard + feedback
     coach.get_by_role("button", name="Overview").click()
     print("coach url", coach.url)

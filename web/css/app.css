@@ -358,3 +358,18 @@ table.checkins thead th { white-space: nowrap; }
 /* Day toggles (views/automation.js). */
 .days { display: flex; flex-wrap: wrap; gap: 4px; }
 .days button { min-width: 44px; }
+
+/* Daily habits (views/habits.js). */
+.habit-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; margin-bottom: 6px; }
+.habit { display: flex; flex-direction: column; align-items: stretch; gap: 4px; text-align: left; padding: 12px; min-height: 88px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); font-weight: 400; }
+.habit.done { border-color: var(--good); background: var(--good-soft); }
+.habit .streak { color: var(--warn); font-weight: 600; }
+.habit-count { flex-wrap: nowrap; gap: 4px; }
+.habit-count input { flex: 1; min-width: 0; width: auto; text-align: center; }
+.habit-count button { flex: 0 0 36px; padding: 0; }
+.habit-row { padding: 8px 0; border-bottom: 1px solid var(--line); }
+.habit-row:last-child { border-bottom: 0; }
+.dots { display: flex; gap: 4px; margin-top: 6px; }
+.dot { width: 14px; height: 14px; border-radius: 50%; background: var(--line); }
+.dot.part { background: var(--warn-soft); border: 1px solid var(--warn); }
+.dot.on { background: var(--good); }

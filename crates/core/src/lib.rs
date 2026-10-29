@@ -5,6 +5,7 @@ pub mod automation;
 pub mod bodycomp;
 pub mod checkin;
 pub mod coach;
+pub mod habits;
 pub mod library;
 pub mod model;
 pub mod progression;

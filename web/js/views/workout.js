@@ -18,6 +18,7 @@ import { trimmer } from './trim.js';
 import { celebrate } from './records.js';
 import { commentOn } from './comments.js';
 import { checkinCard } from './checkins.js';
+import { habitTiles } from './habits.js';
 
 // A finished workout the server refused for good (not a 409, which means a
 // newer copy is already saved) goes back to being a draft, so it is neither
@@ -127,6 +128,8 @@ export async function renderToday() {
 
   const checkinSlot = h('div');
   checkinCard(checkinSlot, me); // FB-3: fills in once it has loaded (online only)
+  const habitSlot = h('div');
+  habitTiles(habitSlot, me); // BZ-3: works offline from the cached list
   mount($app(),
     detail && (!detail.intake || !detail.waiver) && h('div', { class: 'banner' },
       'Finish setting up: ',
@@ -137,6 +140,7 @@ export async function renderToday() {
     checkinSlot,
     h('h2', {}, 'Today'),
     todays.length ? todays.map((s) => card(s, true)) : h('div', { class: 'card muted' }, 'Rest day. Nothing scheduled today.'),
+    habitSlot,
     upcoming.length > 0 && [h('h2', {}, 'Coming up'), upcoming.map((s) => card(s, false))],
     recent.length > 0 && [h('h2', {}, 'Last 7 days'), recent.map((s) => card(s, false))],
     !sched.length && h('p', { class: 'muted' }, 'Your coach hasn’t assigned a program yet.'),

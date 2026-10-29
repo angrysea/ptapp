@@ -74,9 +74,12 @@ export async function enqueue(method, path, body, key = null) {
 }
 
 let flushing = false;
+let again = false; // a write was queued mid-flush: send it straight after
 export async function flush() {
-  if (flushing || !navigator.onLine) return notify();
+  if (flushing) { again = true; return notify(); }
+  if (!navigator.onLine) return notify();
   flushing = true;
+  again = false;
   try {
     for (const item of await myOutbox()) {
       try {
@@ -99,6 +102,7 @@ export async function flush() {
     flushing = false;
     await notify();
   }
+  if (again && navigator.onLine) flush();
 }
 
 window.addEventListener('online', flush);

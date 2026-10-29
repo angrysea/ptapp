@@ -1162,4 +1162,37 @@ async fn full_client_journey() {
     // a second sweep in the same hour sends nothing again (once per day per item)
     let again = api::sweep::run(&state, now).await;
     assert_eq!((again.messages, again.errors), (0, 0), "{again:?}");
+
+    // --- habits (BZ-3)
+    let (s, water) = t.call("POST", "/clients/client1/habits", Some("coach1"), Some(json!({ "name": " Water ", "kind": "count", "target": 8, "unit": "glasses" }))).await;
+    assert_eq!(s, StatusCode::OK, "{water}");
+    assert_eq!(water["name"], "Water");
+    let (_, creatine) = t.call("POST", "/clients/client1/habits", Some("client1"), Some(json!({ "name": "Creatine", "kind": "check", "target": 5 }))).await;
+    assert_eq!(creatine["target"], 1.0, "a check's target is 1");
+    assert_eq!(t.call("POST", "/clients/client1/habits", Some("coach1"), Some(json!({ "name": "x", "kind": "count", "target": 0 }))).await.0, StatusCode::BAD_REQUEST);
+    let wid = water["id"].as_str().unwrap().to_string();
+    let (_, me1) = t.call("GET", "/clients/client1/habits", Some("client1"), None).await;
+    let local_today = chrono::NaiveDate::parse_from_str(me1["today"].as_str().unwrap(), "%Y-%m-%d").unwrap();
+    let day = |n: i64| (local_today - chrono::Duration::days(n)).to_string();
+    for (n, v) in [(2, 8.0), (1, 9.0), (0, 5.0)] {
+        let (s, r) = t.call("PUT", &format!("/clients/client1/habits/{wid}/days/{}", day(n)), Some("client1"), Some(json!({ "value": v }))).await;
+        assert_eq!(s, StatusCode::OK, "{r}");
+    }
+    assert_eq!(t.call("PUT", &format!("/clients/client1/habits/{wid}/days/{}", day(0)), Some("coach1"), Some(json!({ "value": 1 }))).await.0, StatusCode::FORBIDDEN);
+    assert_eq!(t.call("PUT", &format!("/clients/client1/habits/{wid}/days/{}", day(8)), Some("client1"), Some(json!({ "value": 1 }))).await.0, StatusCode::BAD_REQUEST, "too long ago");
+    assert_eq!(t.call("PUT", &format!("/clients/client1/habits/{wid}/days/{}", day(-1)), Some("client1"), Some(json!({ "value": 1 }))).await.0, StatusCode::BAD_REQUEST, "not tomorrow");
+    let (_, hs) = t.call("GET", "/clients/client1/habits", Some("coach1"), None).await;
+    assert_eq!(hs["streaks"][&wid], 2, "today (5 of 8) isn't met yet, so yesterday's run of 2 stands");
+    assert_eq!(hs["logs"].as_array().unwrap().iter().filter(|l| l["habitId"] == wid.as_str()).count(), 3);
+    // reaching the target today extends it; 0 clears a day
+    t.call("PUT", &format!("/clients/client1/habits/{wid}/days/{}", day(0)), Some("client1"), Some(json!({ "value": 8 }))).await;
+    assert_eq!(t.call("GET", "/clients/client1/habits", Some("client1"), None).await.1["streaks"][&wid], 3);
+    t.call("PUT", &format!("/clients/client1/habits/{wid}/days/{}", day(1)), Some("client1"), Some(json!({ "value": 0 }))).await;
+    assert_eq!(t.call("GET", "/clients/client1/habits", Some("client1"), None).await.1["streaks"][&wid], 1);
+    // archived habits leave Today but keep their history
+    let (s, arch) = t.call("PUT", &format!("/clients/client1/habits/{wid}"), Some("coach1"), Some(json!({ "name": "Water", "kind": "count", "target": 8, "unit": "glasses", "active": false }))).await;
+    assert_eq!(s, StatusCode::OK, "{arch}");
+    let (_, hs) = t.call("GET", "/clients/client1/habits", Some("client1"), None).await;
+    assert!(hs["streaks"].get(&wid).is_none());
+    assert!(hs["habits"].as_array().unwrap().iter().any(|h| h["id"] == wid.as_str() && h["active"] == false));
 }

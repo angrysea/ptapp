@@ -7,6 +7,7 @@ pub mod clients;
 pub mod coaches;
 pub mod comments;
 pub mod exercises;
+pub mod habits;
 pub mod invites;
 pub mod maxes;
 pub mod me;

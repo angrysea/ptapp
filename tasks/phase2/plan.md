@@ -33,7 +33,7 @@ Phase 2 of `docs/ROADMAP.md`: make a coach fast enough to handle 30+ clients. It
 ### Slice C: check-ins and automation
 - [x] C1 FB-3 weekly check-in templates, answers, 4-week comparison
 - [x] C2 MS-4 automated messages + check-in reminders (EventBridge Scheduler daily sweep)
-- [ ] C3 BZ-3 habits with streaks on Today
+- [x] C3 BZ-3 habits with streaks on Today
 
 ### Slice D: video review
 - [ ] D1 VR-4 remaining drawing tools (angle with live degrees, circle, arrow, timer)
