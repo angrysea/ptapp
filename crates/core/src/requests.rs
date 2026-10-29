@@ -30,6 +30,24 @@ pub const MIN_FILL_MS: u64 = 3000;
 /// Requests one sender (IP address) may make in an hour.
 pub const MAX_PER_SENDER_HOUR: u32 = 5;
 
+/// Who counts as one sender for `MAX_PER_SENDER_HOUR`: an IPv4 address, or
+/// an IPv6 address's /64 network (one household or server gets a whole /64,
+/// so single IPv6 addresses are free to rotate). Anything unparseable counts
+/// as itself.
+pub fn sender_key(ip: &str) -> String {
+    match ip.trim().parse::<std::net::IpAddr>() {
+        Ok(std::net::IpAddr::V6(v6)) => match v6.to_ipv4_mapped() {
+            Some(v4) => v4.to_string(),
+            None => {
+                let s = v6.segments();
+                format!("{:x}:{:x}:{:x}:{:x}::/64", s[0], s[1], s[2], s[3])
+            }
+        },
+        Ok(std::net::IpAddr::V4(v4)) => v4.to_string(),
+        Err(_) => ip.trim().to_string(),
+    }
+}
+
 /// A plausible address: one `@`, a local part, and a dotted domain of
 /// letters, digits, dots and hyphens; no spaces or control characters.
 pub fn valid_email(email: &str) -> bool {
@@ -149,6 +167,15 @@ mod tests {
         for bad in ["nope", "@b.co", "a@", "a@b", "a@b.c", "a b@c.co", "a@b..co", "a@-b.co", "a@b.co\n", ".a@b.co", "a..b@c.co", "a@b.c0m", "<a>@b.co"] {
             assert!(!valid_email(bad), "{bad:?}");
         }
+    }
+
+    #[test]
+    fn ipv6_senders_count_by_their_64() {
+        assert_eq!(sender_key("203.0.113.9"), "203.0.113.9");
+        assert_eq!(sender_key("2001:db8:1:2:aaaa::1"), sender_key("2001:db8:1:2:bbbb:cccc:dddd:eeee"), "same /64");
+        assert_eq!(sender_key("2001:db8:1:2::1"), "2001:db8:1:2::/64");
+        assert_ne!(sender_key("2001:db8:1:2::1"), sender_key("2001:db8:1:3::1"), "next /64 is someone else");
+        assert_eq!(sender_key("::ffff:198.51.100.4"), "198.51.100.4", "IPv4 written as IPv6");
     }
 
     #[test]

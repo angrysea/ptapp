@@ -14,7 +14,7 @@ use axum::extract::{Path, State};
 use axum::Json;
 use chrono::{DateTime, Utc};
 use ptcore::model::{Invite, InviteKind};
-use ptcore::requests::{valid_email, Request, Settings, Status, MAX_NAME, MAX_PENDING, MAX_PER_SENDER_HOUR, MIN_FILL_MS};
+use ptcore::requests::{sender_key, valid_email, Request, Settings, Status, MAX_NAME, MAX_PENDING, MAX_PER_SENDER_HOUR, MIN_FILL_MS};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -64,15 +64,16 @@ async fn is_human(st: &AppState, secret: &str, token: &str, ip: Option<&str>) ->
     Ok(out["success"] == json!(true))
 }
 
-/// Counts one request from `ip` in the current hour; whether it is still
-/// within `MAX_PER_SENDER_HOUR`. The counters expire after two hours.
+/// Counts one request from `ip` (its `sender_key`: IPv6 by /64) in the
+/// current hour; whether it is still within `MAX_PER_SENDER_HOUR`. The
+/// counters expire after two hours.
 async fn within_sender_limit(st: &AppState, ip: &str, now: DateTime<Utc>) -> ApiResult<bool> {
     let out = st
         .store
         .ddb
         .update_item()
         .table_name(&st.store.table)
-        .set_key(Some(key(&format!("RATE#coach-request#{ip}"), &format!("HOUR#{}", now.format("%Y-%m-%dT%H")))))
+        .set_key(Some(key(&format!("RATE#coach-request#{}", sender_key(ip)), &format!("HOUR#{}", now.format("%Y-%m-%dT%H")))))
         .update_expression("ADD n :one SET #ttl = :ttl")
         .expression_attribute_names("#ttl", "ttl")
         .expression_attribute_values(":one", AttributeValue::N("1".into()))
