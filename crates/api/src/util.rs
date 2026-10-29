@@ -8,6 +8,24 @@ use crate::auth::{ClientScope, Ctx};
 use crate::error::{bad_request, ApiResult};
 use crate::AppState;
 
+/// A secret the API starts with: the `env` variable as given (local runs
+/// and tests), else the SSM SecureString named by the `param_env` variable
+/// (deployed stacks, where it's stored once by hand; docs/DEPLOY.md). None
+/// when neither is set or the parameter can't be read; that is logged.
+pub async fn secret(config: &aws_config::SdkConfig, env: &str, param_env: &str) -> Option<String> {
+    if let Some(s) = std::env::var(env).ok().filter(|s| !s.trim().is_empty()) {
+        return Some(s);
+    }
+    let name = std::env::var(param_env).ok().filter(|n| !n.is_empty())?;
+    match aws_sdk_ssm::Client::new(config).get_parameter().name(&name).with_decryption(true).send().await {
+        Ok(out) => out.parameter.and_then(|p| p.value).map(|v| v.trim().to_string()).filter(|v| !v.is_empty()),
+        Err(e) => {
+            tracing::warn!(param = %name, error = %aws_sdk_ssm::error::DisplayErrorContext(e), "can't read the secret; that feature is off");
+            None
+        }
+    }
+}
+
 pub fn new_id() -> String {
     uuid::Uuid::new_v4().simple().to_string()
 }

@@ -29,9 +29,6 @@ ALARM_EMAIL="${ALARM_EMAIL:-}"
 # LAMBDA_BUILD=wsl: build the Lambdas inside WSL Ubuntu (Windows with Smart App Control).
 # "false" if INVITE_FROM's domain is already an SES identity made outside this stack.
 CREATE_SENDER_IDENTITY="${CREATE_SENDER_IDENTITY:-true}"
-# FDC_API_KEY (USDA FoodData Central, free at api.data.gov) turns on the coach's
-# food search. Pass it on every deploy: leaving it out turns the search off.
-FDC_API_KEY="${FDC_API_KEY:-}"
 
 echo "==> building Lambdas (arm64): the API and the hourly sweep"
 # LAMBDA_BUILD=wsl builds inside WSL Ubuntu (scripts/build-lambda-wsl.sh), for
@@ -64,7 +61,7 @@ fi
 # out; CloudFormation then uses the template's default, which is empty too.
 OVERRIDES=()
 for kv in "Stage=$STAGE" "CognitoDomainPrefix=$COGNITO_DOMAIN_PREFIX" "AdminEmails=$ADMIN_EMAILS" "InviteFromAddress=$INVITE_FROM" \
-  "CreateSenderIdentity=$CREATE_SENDER_IDENTITY" "AppDomain=$APP_DOMAIN" "AppCertificateArn=$APP_CERT_ARN" "AlarmEmail=$ALARM_EMAIL" "FdcApiKey=$FDC_API_KEY"; do
+  "CreateSenderIdentity=$CREATE_SENDER_IDENTITY" "AppDomain=$APP_DOMAIN" "AppCertificateArn=$APP_CERT_ARN" "AlarmEmail=$ALARM_EMAIL"; do
   if [ -n "${kv#*=}" ]; then OVERRIDES+=("$kv"); fi
 done
 

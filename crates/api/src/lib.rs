@@ -47,8 +47,8 @@ pub struct AppState {
     pub cognito: Option<routes::password::Cognito>,
     /// Shared HTTP client (food lookups; push and realtime borrow it too).
     pub http: reqwest::Client,
-    /// USDA FoodData Central key (FDC_API_KEY, a free data.gov signup);
-    /// None turns /foods/search off. Never ship it in the web app: keys found
+    /// USDA FoodData Central key (a free data.gov signup): FDC_PARAM, an SSM
+    /// SecureString, or FDC_API_KEY locally; None turns /foods/search off. Never ship it in the web app: keys found
     /// in public code get deactivated.
     pub fdc_key: Option<String>,
     /// Cloudflare Turnstile secret (TURNSTILE_PARAM, an SSM SecureString, or
@@ -200,8 +200,8 @@ impl AppState {
             push: push::Push::from_env(&config, http.clone(), &app_url).await,
             app_url,
             http: http.clone(),
-            fdc_key: std::env::var("FDC_API_KEY").ok().filter(|k| !k.trim().is_empty()),
-            turnstile_secret: routes::requests::turnstile_secret(&config).await,
+            fdc_key: util::secret(&config, "FDC_API_KEY", "FDC_PARAM").await,
+            turnstile_secret: util::secret(&config, "TURNSTILE_SECRET", "TURNSTILE_PARAM").await,
             bucket: std::env::var("MEDIA_BUCKET").expect("MEDIA_BUCKET"),
             presign_ttl: Duration::from_secs(900),
             video_retention_days: std::env::var("VIDEO_RETENTION_DAYS").ok().and_then(|d| d.parse().ok()).unwrap_or(180),

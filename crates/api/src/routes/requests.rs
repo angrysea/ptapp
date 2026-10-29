@@ -27,23 +27,6 @@ use crate::AppState;
 
 const SITEVERIFY: &str = "https://challenges.cloudflare.com/turnstile/v0/siteverify";
 
-/// The Turnstile secret: TURNSTILE_SECRET as given (tests use Cloudflare's
-/// published test secrets), else the SSM SecureString named by
-/// TURNSTILE_PARAM. None when neither is set or the parameter can't be read.
-pub async fn turnstile_secret(config: &aws_config::SdkConfig) -> Option<String> {
-    if let Some(s) = std::env::var("TURNSTILE_SECRET").ok().filter(|s| !s.trim().is_empty()) {
-        return Some(s);
-    }
-    let name = std::env::var("TURNSTILE_PARAM").ok().filter(|n| !n.is_empty())?;
-    match aws_sdk_ssm::Client::new(config).get_parameter().name(&name).with_decryption(true).send().await {
-        Ok(out) => out.parameter.and_then(|p| p.value).filter(|v| !v.trim().is_empty()),
-        Err(e) => {
-            tracing::warn!(param = %name, error = %aws_sdk_ssm::error::DisplayErrorContext(e), "Turnstile off: can't read the secret");
-            None
-        }
-    }
-}
-
 /// Whether Cloudflare says the widget's `token` came from a person. An error
 /// (Cloudflare unreachable) is a 500, so the visitor is told to try again
 /// rather than being silently dropped.

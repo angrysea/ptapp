@@ -175,7 +175,7 @@ pub async fn search(State(st): State<AppState>, ctx: Ctx, Query(q): Query<Search
     if let Some(hit) = hit {
         return Ok(Json(json!({ "query": query, "candidates": hit.candidates })));
     }
-    let Some(key) = st.fdc_key.clone() else { return Err(bad_request("food search is off: FDC_API_KEY is not set")); };
+    let Some(key) = st.fdc_key.clone() else { return Err(bad_request("food search is off: no FoodData Central key is set up (docs/DEPLOY.md)")); };
     // The key goes in a header and the words are encoded as parameters, so
     // "mac & cheese" can't add parameters of its own.
     let page_size = MAX_CANDIDATES.to_string();
