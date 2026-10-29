@@ -42,14 +42,15 @@ pub async fn record(State(st): State<AppState>, ctx: Ctx, Json(body): Json<Batch
     if body.entries.len() > 50 {
         return Err(bad_request("too many entries"));
     }
+    // Checked before anything is added, so a refused post adds nothing.
+    if body.entries.iter().any(|e| e.seconds > MAX_SECONDS) {
+        return Err(bad_request(format!("at most {MAX_SECONDS} seconds per post")));
+    }
     let week = week_of(ctx.profile.today(Utc::now()));
     let pk = format!("COACH#{coach}");
     let roster: HashSet<String> = st.store.query_prefix::<RosterEntry>(&pk, "CLIENT#").await?.into_iter().map(|r| r.client_id).collect();
     let mut added = 0;
     for e in body.entries.iter().filter(|e| e.seconds > 0) {
-        if e.seconds > MAX_SECONDS {
-            return Err(bad_request(format!("at most {MAX_SECONDS} seconds per post")));
-        }
         // Only this coach's own clients count.
         if !roster.contains(&e.client_id) {
             continue;

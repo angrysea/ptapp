@@ -9,17 +9,20 @@ import cfg from '../config.js';
 import { $app, busy, field, h, mount, toast } from '../ui.js';
 
 // Public call, like the directory's plain fetch: the landing page works
-// signed out, so there is no token to attach.
+// signed out, so there is no token to attach. Returns the body, `{ problem }`
+// with the server's message for a refused request, or null when unreachable.
 async function pubPost(path, body) {
+  let res;
   try {
-    const res = await fetch(`${cfg.apiUrl}/public${path}`, {
+    res = await fetch(`${cfg.apiUrl}/public${path}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
     });
-    if (!res.ok) return null;
-    return await res.json();
-  } catch { return null; } // signed out and offline: no message to show
+  } catch { return null; } // offline or the API is down
+  const out = await res.json().catch(() => null);
+  if (res.status === 400) return { problem: out?.error || 'Check what you typed and try again.' };
+  return res.ok ? out : null;
 }
 
 // One card per feature area the MVP actually ships (README table); roadmap
@@ -85,6 +88,7 @@ function requestForm() {
         problem.textContent = '';
         const r = await pubPost('/coach-requests', { email: value, name: name.value });
         if (!r) { problem.textContent = 'Couldn’t reach the club right now; try again in a bit.'; return; }
+        if (r.problem) { problem.textContent = r.problem.charAt(0).toUpperCase() + r.problem.slice(1); return; }
         if (r.status === 'invited') {
           toast(r.emailed === false
             ? 'Approved — but the club’s email isn’t wired up yet, so ask them to invite you by hand'

@@ -7,8 +7,8 @@
 use axum::extract::{Path, Query, State};
 use axum::Json;
 use chrono::{DateTime, Duration, NaiveDate, Utc};
-use ptcore::habits::editable;
-use ptcore::nutrition::{Basis, Candidate, FoodSnap, Item, Meal, Saved, MAX_SAVED, normalize_fdc, totals};
+use ptcore::habits::{editable, EDITABLE_DAYS};
+use ptcore::nutrition::{Basis, Candidate, FoodSnap, Item, Meal, Saved, MAX_CANDIDATES, MAX_SAVED, normalize_fdc, totals};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -24,6 +24,13 @@ const HIGH: &str = "~";
 fn meal_sk(date: NaiveDate, id: &str) -> String {
     let d: String = date.to_string();
     format!("MEAL#{d}#{id}")
+}
+
+/// The meals dated from `since` on. A meal is found by id this way: ids
+/// aren't in the sort key on their own, and scanning every meal ever logged
+/// grows with the journal.
+async fn meals_since(st: &AppState, pk: &str, since: NaiveDate) -> ApiResult<Vec<Meal>> {
+    st.store.query_between(pk, &format!("MEAL#{since}"), &format!("MEAL#{HIGH}"), true).await
 }
 
 fn food_sk(id: &str) -> String {
@@ -63,7 +70,7 @@ pub struct ItemIn {
 /// replayed offline write cannot outrun a newer one by lying about time.
 fn to_meal(body: MealIn, id: String) -> Meal {
     Meal {
-        id: id,
+        id,
         date: body.date,
         label: body.label,
         items: body.items.into_iter().map(|b| Item {
@@ -86,7 +93,7 @@ pub async fn list(State(st): State<AppState>, ctx: Ctx, Path(cid): Path<String>,
     let today = scope.today();
     let days = q.days.unwrap_or(14).clamp(1, 90);
     let since = today - Duration::days(days - 1);
-    let meals: Vec<Meal> = st.store.query_between(&pk, &format!("MEAL#{since}"), &format!("MEAL#{HIGH}"), true).await?;
+    let meals = meals_since(&st, &pk, since).await?;
     let totals_map: serde_json::Map<String, Value> = totals(&meals).iter().map(|(d, k)| (d.to_string(), json!(k))).collect();
     Ok(Json(json!({ "today": today, "meals": meals, "totals": totals_map })))
 }
@@ -114,7 +121,8 @@ pub async fn put_meal(State(st): State<AppState>, ctx: Ctx, Path((cid, mid)): Pa
     if !editable(body.date, scope.today()) {
         return Err(bad_request("meals can be logged for today and the past week"));
     }
-    let all: Vec<Meal> = st.store.query_prefix(&pk, "MEAL#").await?;
+    // Only meals still in the editable week can be moved to another date.
+    let all = meals_since(&st, &pk, scope.today() - Duration::days(EDITABLE_DAYS)).await?;
     if let Some(old) = all.iter().find(|m| m.id == mid && m.date != body.date) {
         st.store.delete(&pk, &meal_sk(old.date, mid.as_str())).await?;
     }
@@ -131,7 +139,8 @@ pub async fn remove(State(st): State<AppState>, ctx: Ctx, Path((cid, mid)): Path
     if scope.by_coach {
         return Err(ApiError::Forbidden("only the client deletes their meals"));
     }
-    let all: Vec<Meal> = st.store.query_prefix(&scope.pk(), "MEAL#").await?;
+    // As far back as the journal is listed.
+    let all = meals_since(&st, &scope.pk(), scope.today() - Duration::days(90)).await?;
     let Some(old) = all.iter().find(|m| m.id == mid) else { return Err(ApiError::NotFound("meal")); };
     st.store.delete(&scope.pk(), &meal_sk(old.date, mid.as_str())).await?;
     Ok(Json(json!({ "deleted": mid })))
@@ -158,7 +167,7 @@ pub async fn search(State(st): State<AppState>, ctx: Ctx, Query(q): Query<Search
     ctx.require_coach()?;
     let raw = q.q.unwrap_or_default();
     let words: Vec<String> = raw.split_whitespace().map(|w| w.to_lowercase()).collect();
-    if words.len() < 1 || raw.trim().chars().count() > 80 {
+    if words.is_empty() || raw.trim().chars().count() > 80 {
         return Err(bad_request("search expects a food name (up to 80 characters)"));
     }
     let query: String = words.join(" ");
@@ -167,14 +176,17 @@ pub async fn search(State(st): State<AppState>, ctx: Ctx, Query(q): Query<Search
         return Ok(Json(json!({ "query": query, "candidates": hit.candidates })));
     }
     let Some(key) = st.fdc_key.clone() else { return Err(bad_request("food search is off: FDC_API_KEY is not set")); };
-    let q: String = words.join("+");
-    let url = format!("https://api.nal.usda.gov/fdc/v1/foods/search?api_key={key}&query={q}");
-    let Ok(res) = st.http.get(url).send().await else {
+    // The key goes in a header and the words are encoded as parameters, so
+    // "mac & cheese" can't add parameters of its own.
+    let page_size = MAX_CANDIDATES.to_string();
+    let url = reqwest::Url::parse_with_params("https://api.nal.usda.gov/fdc/v1/foods/search", [("query", query.as_str()), ("pageSize", page_size.as_str())])
+        .map_err(|_| bad_request("search expects a food name"))?;
+    let Ok(res) = st.http.get(url).header("X-Api-Key", key).send().await else {
         tracing::warn!("food search unreachable: network");
         return Err(bad_request("FoodData Central is not answering now; try again later"));
     };
     match res.status().as_u16() {
-        200..=399 => {},
+        200..=299 => {}
         s => {
             tracing::warn!("food search refused: {s}");
             return Err(bad_request("FoodData Central refused the search; try other words"));
@@ -208,7 +220,7 @@ pub async fn create_food(State(st): State<AppState>, ctx: Ctx, Json(body): Json<
     let pk = format!("COACH#{coach}");
     let existing: Vec<Saved> = st.store.query_prefix(&pk, "FOOD#").await?;
     if existing.len() >= MAX_SAVED {
-        return Err(bad_request("up to {MAX_SAVED} saved foods; delete one you no longer use"));
+        return Err(bad_request(format!("up to {MAX_SAVED} saved foods; delete one you no longer use")));
     }
     let mut f = Saved { id: new_id()[..12].to_string(), name: body.name, snap: body.snap, created_at: Utc::now() };
     f.validate().map_err(bad_request)?;

@@ -4,11 +4,13 @@
 //! conversations, so an admin suspends or deletes those instead
 //! (`/admin/coaches/{id}/suspended`, `DELETE /admin/coaches/{id}`).
 
+use std::collections::{HashMap, HashSet};
+
 use aws_sdk_s3::types::{Delete, ObjectIdentifier};
 use axum::extract::{Path, State};
 use axum::Json;
 use chrono::Utc;
-use ptcore::model::{CoachEntry, Profile, ReviewEntry, Role, RosterEntry};
+use ptcore::model::{CoachEntry, Exercise, Profile, ReviewEntry, Role, RosterEntry, ScheduledWorkout};
 use ptcore::sessions::{Session, SessionStatus};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -327,7 +329,13 @@ pub struct Move {
 /// from now on. Their own data (workouts, measurements, photos, videos,
 /// messages, scheduled programs) stays with them; unreviewed videos go to
 /// the new coach's queue; sessions still to come with the old coach are
-/// cancelled; the old coach's suggestions and alerts about them go.
+/// cancelled (past ones stay in the old coach's history); the old coach's
+/// suggestions and alerts about them go; the old coach's custom exercises in the
+/// client's workouts are copied to the new coach's library.
+///
+/// The profile is switched first, so a failure after that leaves the client
+/// with the new coach and the old coach's records partly cleaned up. Moving
+/// them to the same coach again finishes the job.
 pub async fn move_client(State(st): State<AppState>, ctx: Ctx, Path(cid): Path<String>, Json(body): Json<Move>) -> ApiResult<Json<Value>> {
     ctx.require_admin()?;
     let mut client: Profile = st
@@ -340,37 +348,56 @@ pub async fn move_client(State(st): State<AppState>, ctx: Ctx, Path(cid): Path<S
     if to.suspended_at.is_some() {
         return Err(bad_request("that coach is suspended"));
     }
-    let from = client.coach_id.clone();
-    if from == to.user_id {
-        return Err(bad_request("the client already trains with that coach"));
-    }
+    // Already with that coach: finish an earlier move if a former coach's
+    // roster still lists them, otherwise there is nothing to do.
+    let resuming = client.coach_id == to.user_id;
+    let from = if resuming {
+        let mut stale = None;
+        for c in client.former_coach_ids.iter().rev() {
+            if st.store.get::<RosterEntry>(&format!("COACH#{c}"), &format!("CLIENT#{cid}")).await?.is_some() {
+                stale = Some(c.clone());
+                break;
+            }
+        }
+        stale.ok_or_else(|| bad_request("the client already trains with that coach"))?
+    } else {
+        client.coach_id.clone()
+    };
     let (old_pk, new_pk) = (format!("COACH#{from}"), format!("COACH#{}", to.user_id));
     let now = Utc::now();
 
     // 1. The client's profile now points at the new coach.
-    if !client.former_coach_ids.contains(&from) {
-        client.former_coach_ids.push(from.clone());
-    }
-    client.coach_id = to.user_id.clone();
-    // Only if nothing moved them (or closed the account) since it was read.
-    let moved = st
-        .store
-        .put_if_with(&format!("USER#{cid}"), "PROFILE", &client, "attribute_exists(pk) AND coachId = :from", &[(":from", crate::store::s(&from))])
-        .await?;
-    if !moved {
-        return Err(ApiError::Conflict(json!({ "message": "the client's account changed meanwhile; reload and try again" })));
+    if !resuming {
+        if !client.former_coach_ids.contains(&from) {
+            client.former_coach_ids.push(from.clone());
+        }
+        client.coach_id = to.user_id.clone();
+        // Only if nothing moved them (or closed the account) since it was read.
+        let moved = st
+            .store
+            .put_if_with(&format!("USER#{cid}"), "PROFILE", &client, "attribute_exists(pk) AND coachId = :from", &[(":from", crate::store::s(&from))])
+            .await?;
+        if !moved {
+            return Err(ApiError::Conflict(json!({ "message": "the client's account changed meanwhile; reload and try again" })));
+        }
     }
 
-    // 2. The rosters.
+    // 2. The rosters (kept as it is when finishing an earlier move).
     let roster = RosterEntry { client_id: cid.clone(), name: client.name.clone(), email: client.email.clone(), joined_at: now };
-    st.store.put(&new_pk, &format!("CLIENT#{cid}"), &roster).await?;
+    st.store.put_new(&new_pk, &format!("CLIENT#{cid}"), &roster).await?;
 
     // 3. The old coach's records about them: the queue moves, the rest goes.
     let mut gone = vec![(old_pk.clone(), format!("CLIENT#{cid}")), (old_pk.clone(), format!("THREAD#{cid}"))];
     let mut moved_reviews = Vec::new();
     let mut cancelled = 0;
+    let mut custom: HashMap<String, Exercise> = HashMap::new();
     for item in st.store.partition(&old_pk).await? {
         let sk = sk_of(&item);
+        if sk.starts_with("EXERCISE#") {
+            let e: Exercise = from_item(item)?;
+            custom.insert(e.id.clone(), e);
+            continue;
+        }
         let about_them = item.get("clientId").and_then(|v| v.as_s().ok()).is_some_and(|c| c == &cid);
         if !about_them {
             continue;
@@ -380,10 +407,15 @@ pub async fn move_client(State(st): State<AppState>, ctx: Ctx, Path(cid): Path<S
             moved_reviews.push(crate::store::keyed(&new_pk, &sk, &e)?);
             gone.push((old_pk.clone(), sk));
         } else if sk.starts_with("SESSION#") {
+            // Past sessions stay in the old coach's history; upcoming ones go
+            // and free their slots.
             let mut s: Session = from_item(item.clone())?;
+            if s.start <= now {
+                continue;
+            }
             gone.push((old_pk.clone(), sk.clone()));
             gone.push((old_pk.clone(), format!("SLOTLOCK#{}", s.start.to_rfc3339())));
-            if s.start > now && s.status == SessionStatus::Booked {
+            if s.status == SessionStatus::Booked {
                 s.status = SessionStatus::Cancelled;
                 st.store.put(&format!("CLIENT#{cid}"), &sk, &s).await?;
                 cancelled += 1;
@@ -393,11 +425,30 @@ pub async fn move_client(State(st): State<AppState>, ctx: Ctx, Path(cid): Path<S
         }
     }
     st.store.batch_put(moved_reviews).await?;
+
+    // 4. The old coach's custom exercises in the client's workouts from today
+    // on, so the client keeps their cues and links. The demo video stays the
+    // old coach's to manage, so it isn't copied.
+    let today = client.today(now);
+    let upcoming: Vec<ScheduledWorkout> = st.store.query_between(&format!("CLIENT#{cid}"), &format!("SCHED#{today}"), "SCHED#~", true).await?;
+    let used: HashSet<&str> = upcoming.iter().flat_map(|s| &s.workout.blocks).flat_map(|b| &b.items).map(|i| i.exercise_id.as_str()).collect();
+    let mut copied = 0;
+    for id in used {
+        let Some(e) = custom.get(id) else { continue };
+        let copy = Exercise { demo_key: None, pending_demo_key: None, ..e.clone() };
+        if st.store.put_new(&new_pk, &format!("EXERCISE#{id}"), &copy).await? {
+            copied += 1;
+        }
+    }
     st.store.batch_delete(gone).await?;
 
-    // 4. Tell the client and the new coach.
+    // 5. Tell the client and the new coach (once).
+    if resuming {
+        tracing::info!(client = %cid, from = %from, to = %to.user_id, by = %ctx.user_id(), "client move finished");
+        return Ok(Json(json!({ "moved": true, "from": from, "to": to.user_id, "cancelledSessions": cancelled, "copiedExercises": copied })));
+    }
     super::notify::notify_user(&st, &cid, &to.name, &format!("You're now training with {}", to.name), "#/coach", "coach-change").await;
     super::notify::notify_user(&st, &to.user_id, &client.name, &format!("{} is now one of your clients", client.name), &format!("#/c/{cid}"), &format!("new-client-{cid}")).await;
     tracing::info!(client = %cid, from = %from, to = %to.user_id, by = %ctx.user_id(), "client moved");
-    Ok(Json(json!({ "moved": true, "from": from, "to": to.user_id, "cancelledSessions": cancelled })))
+    Ok(Json(json!({ "moved": true, "from": from, "to": to.user_id, "cancelledSessions": cancelled, "copiedExercises": copied })))
 }

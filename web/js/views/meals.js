@@ -6,10 +6,11 @@
 // online when estimating.
 
 import { api, enqueue, get, myOutbox } from '../api.js';
-import { addDays, busy, field, fmtDate, h, mount, select, sheet, toast, uid } from '../ui.js';
+import { addDays, busy, fmtDate, h, mount, num, select, sheet, toast, uid } from '../ui.js';
 
 const mealPath = (cid, id) => `/clients/${cid}/meals/${id}`;
 
+/** An item's kcal the way the server counts it (nutrition.rs `Item::energy`). */
 const foodKcal = (it) => it.kcal ?? (it.food && it.grams ? (it.food.kcalPer ?? 0) * it.grams / (it.food.perGrams || 100) : null);
 
 /** Server meals with this user's queued PUTs applied, so Today works offline. */
@@ -23,32 +24,36 @@ async function load(cid) {
   return { ...data, meals: [...byId.values()].sort((a, b) => (a.date || '').localeCompare(b.date || '')) };
 }
 
-/** kcal for a whole meal from the server's per-day totals. */
-function kcalOf(m, data) {
-  const t = data.totals?.[m.date];
-  return t ? Math.round(t) : null;
+/** kcal for one meal, or null while none of its items has an estimate. */
+function kcalOf(m) {
+  const known = (m.items ?? []).map(foodKcal).filter((k) => k != null);
+  return known.length ? Math.round(known.reduce((a, b) => a + b, 0)) : null;
 }
+
+const mealLine = (m) => {
+  const k = kcalOf(m);
+  return `${m.label || 'Meal'} · ${fmtDate(m.date)}${k != null ? ` ≈ ${k} kcal` : ' · not estimated yet'}`;
+};
 
 /** For the client's Today screen: the last meals and "+ Log a meal". Fills `slot`. */
 export async function todayCard(slot, me) {
-  let data;
-  try { data = await load(me.userId); } catch { return; } // offline with nothing cached
-  const recent = (data.meals ?? []).filter((m) => (m.date ?? '') >= addDays(data.today, -2)).slice(-5).reverse();
-  const row = (m) => {
-    const k = kcalOf(m, data);
-    return h('div', { class: 'small muted' }, m.label || 'Meal', ' · ', fmtDate(m.date), k ? ` ≈ ${k} kcal` : ' · not logged yet');
+  const draw = async () => {
+    let data;
+    try { data = await load(me.userId); } catch { return; } // offline with nothing cached
+    const recent = (data.meals ?? []).filter((m) => (m.date ?? '') >= addDays(data.today, -2)).slice(-5).reverse();
+    mount(slot,
+      h('div', { class: 'card' },
+        h('div', { class: 'spread' }, h('h3', {}, 'Meals'), h('button', { class: 'small ghost', onclick: () => logSheet(me, data.today, draw) }, '+ Log a meal')),
+        recent.length ? recent.map((m) => h('div', { class: 'small muted' }, mealLine(m))) : h('p', { class: 'muted small' }, 'Nothing logged in the last days.')));
   };
-  const draw = () => mount(slot,
-    h('div', { class: 'card' },
-      h('div', { class: 'spread' }, h('h3', {}, 'Meals'), h('button', { class: 'small ghost', onclick: () => logSheet(me, data.today, draw) }, '+ Log a meal')),
-      recent.length ? recent.map(row) : h('p', { class: 'muted small' }, 'Nothing logged in the last days.')));
-  draw();
+  await draw();
 }
 
 /** One meal, typed as item lines; queued through the outbox like a habit day. */
 async function logSheet(me, today, onDone) {
   const label = select([['Breakfast', 'Breakfast'], ['Lunch', 'Lunch'], ['Dinner', 'Dinner'], ['Snack', 'Snack']], 'Lunch');
   const lines = h('textarea', { maxlength: 800, placeholder: 'chicken 12oz\nrice\nbroccoli 200g', 'aria-label': 'One item per line', style: 'min-height:70px' });
+  let saved = false;
   const sh = sheet(
     h('h2', {}, 'Log a meal'),
     label, lines,
@@ -58,14 +63,16 @@ async function logSheet(me, today, onDone) {
         const items = lines.value.split('\n').map((s) => s.trim()).filter(Boolean).map((text) => ({ text }));
         if (!items.length) { toast('Write at least one item line', 'error'); return; }
         const id = uid();
-        enqueue('PUT', mealPath(me.userId, id), { date: today, label: label.value, items }, `meal:${id}`);
-        toast('Meal saved — it syncs when you are back online');
+        await enqueue('PUT', mealPath(me.userId, id), { date: today, label: label.value, items }, `meal:${id}`);
+        saved = true;
+        toast(navigator.onLine ? 'Meal saved' : 'Meal saved. It syncs when you’re back online.');
         sh.close();
       }),
     }, 'Save meal'),
-    h('button', { class: 'ghost block', onclick: () => sh.close() }, 'Done'),
+    h('button', { class: 'ghost block', onclick: () => sh.close() }, 'Cancel'),
   );
-  sh.onClose = () => onDone?.();
+  // Redraw with the new meal (load() reads it from the outbox).
+  sh.onClose = () => { if (saved) onDone?.(); };
 }
 
 /** For the coach's Overview tab: per-day dots and the last meals. */
@@ -83,53 +90,68 @@ export async function overviewCard(client) {
             const k = data.totals?.[d];
             return h('span', { class: `dot ${k ? 'on' : ''}`, title: `${fmtDate(d)}: ${k ? `${Math.round(k)} kcal` : 'nothing logged'}` });
           })),
-          h('div', { class: 'small muted' }, (data.meals ?? []).slice(-4).reverse().map((m) => {
-            const k = kcalOf(m, data);
-            return `${m.label || 'Meal'} · ${fmtDate(m.date)} · ${k ? `≈ ${k} kcal` : 'not logged yet'}\n`;
-          })),
+          (data.meals ?? []).slice(-4).reverse().map((m) => h('div', { class: 'small muted' }, mealLine(m))),
         ]);
   };
   draw().catch((e) => mount(card, h('p', { class: 'muted small' }, e.message)));
   return card;
 }
 
-/** The coach's estimate pass: match each unestimated item to the top food-
-    * search hit and save; the coach can re-run to overwrite or set numbers. */
+/** The coach's estimate pass: for each item without an estimate, pick one of
+ * the food-search matches (or none) and check the amount, then save. */
 async function estimate(cid, onDone) {
   const data = await load(cid);
   const meals = (data.meals ?? []).filter((m) => (m.date ?? '') >= addDays(data.today, -13));
   if (!meals.length) { toast('Nothing logged to estimate'); return; }
   const pick = select(meals.map((m) => [m.id, `${m.label || 'Meal'} · ${fmtDate(m.date)}`]), meals[meals.length - 1].id);
   const rows = h('div');
-  const show = (items) => mount(rows, items.map((it) => {
-    const k = foodKcal(it);
-    const from = it.kcal != null ? `${Math.round(it.kcal)} kcal (coach set)` : it.food ? `≈ ${Math.round(k ?? 0)} kcal (${it.food.description ?? 'food'})` : 'not logged yet';
-    return h('div', { class: 'small' }, it.text, it.grams ? ` · ${Math.round(it.grams)} g` : '', ' · ', from);
-  }));
+  let pending = []; // per item: () => the item to save
+  let saved = false;
+
+  async function show() {
+    const m = meals.find((x) => x.id === pick.value);
+    mount(rows, h('p', { class: 'muted small' }, 'Looking up foods…'));
+    pending = await Promise.all(m.items.map(async (it) => {
+      if (it.food || it.kcal != null) {
+        const k = foodKcal(it);
+        return { row: h('div', { class: 'small' }, it.text, ' · ', it.kcal != null ? `${Math.round(it.kcal)} kcal (set by hand)` : `≈ ${Math.round(k ?? 0)} kcal (${it.food.description ?? 'food'})`), get: () => it };
+      }
+      const found = await api('GET', `/foods/search?q=${encodeURIComponent(it.text)}`).catch(() => ({ candidates: [] }));
+      const cands = (found.candidates ?? []).slice(0, 5);
+      const choice = select([['', 'No match'], ...cands.map((c, i) => [String(i), `${c.name}${c.kcal != null ? ` · ${Math.round(c.kcal)} kcal/100 g` : ''}`])], cands.length ? '0' : '', { 'aria-label': `Food for ${it.text}` });
+      const grams = h('input', { type: 'number', inputmode: 'decimal', min: 0, step: 'any', value: it.grams != null ? Math.round(it.grams) : '', placeholder: 'grams', 'aria-label': `Grams of ${it.text}`, style: 'width:90px' });
+      return {
+        row: h('div', { class: 'field' }, h('div', { class: 'small' }, h('strong', {}, it.text), it.grams == null && h('span', { class: 'muted' }, ' · no amount given')),
+          h('div', { class: 'row' }, h('div', { class: 'grow' }, choice), grams, h('span', { class: 'small muted' }, 'g'))),
+        get: () => {
+          const c = cands[Number(choice.value)];
+          if (choice.value === '' || !c) return it;
+          return { ...it, grams: num(grams.value) ?? it.grams ?? null, basis: 'searched',
+            food: { fdcId: c.fdcId, description: c.name, perGrams: c.grams ?? 100, kcalPer: c.kcal ?? 0 } };
+        },
+      };
+    }));
+    mount(rows, pending.map((p) => p.row));
+  }
+
+  pick.addEventListener('change', show);
   const sh = sheet(
     h('h2', {}, 'Estimate a meal'),
     pick,
-    show((meals.find((m) => m.id === pick.value) ?? { items: [] }).items),
+    rows,
+    h('p', { class: 'muted small' }, 'Without an amount, a match can’t give calories: add the grams.'),
     h('button', {
       class: 'primary block',
       onclick: (e) => busy(e.currentTarget, async () => {
         const m = meals.find((x) => x.id === pick.value);
-        const items = [];
-        const notes = [];
-        for (const it of m.items) {
-          if (it.food || it.kcal != null) { items.push(it); continue; }
-          const found = await api('GET', `/foods/search?q=${encodeURIComponent(it.text)}`);
-          const top = found.candidates?.[0];
-          if (!top) { notes.push(`no match for ${it.text}`); items.push(it); continue; }
-          items.push({ ...it, food: { fdcId: top.fdcId, description: top.name, perGrams: top.grams ?? 100, kcalPer: top.kcal ?? 0 }, basis: 'searched' });
-          notes.push(`${it.text}: ${top.name}`);
-        }
-        await api('PUT', mealPath(cid, m.id), { date: m.date, label: m.label, items });
-        toast(notes.length ? `Matched: ${notes.join(', ')} — check one looks right` : 'Meal saved');
-        onDone?.();
+        await api('PUT', mealPath(cid, m.id), { date: m.date, label: m.label, items: pending.map((p) => p.get()) });
+        saved = true;
+        toast('Meal saved');
+        sh.close();
       }),
-    }, 'Match foods and save'),
-    h('button', { class: 'ghost block', onclick: () => sh.close() }, 'Done'),
+    }, 'Save'),
+    h('button', { class: 'ghost block', onclick: () => sh.close() }, 'Cancel'),
   );
-  sh.onClose = () => onDone?.();
+  sh.onClose = () => { if (saved) onDone?.(); };
+  show();
 }

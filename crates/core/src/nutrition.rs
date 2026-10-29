@@ -157,10 +157,10 @@ impl Meal {
                     return Err("an item's estimate must be 0-20000".into());
                 }
             }
-            if let Some(f) = it.food.as_ref() {
-                if !(f.per_grams > 0.0 && f.per_grams <= MAX_GRAMS) || !(f.kcal_per >= 0.0 && f.kcal_per <= MAX_KCAL) {
-                    return Err("a food snapshot needs a positive amount and a sane kcal figure".into());
-                }
+            if let Some(f) = it.food.as_ref()
+                && (!(f.per_grams > 0.0 && f.per_grams <= MAX_GRAMS) || !(f.kcal_per >= 0.0 && f.kcal_per <= MAX_KCAL))
+            {
+                return Err("a food snapshot needs a positive amount and a sane kcal figure".into());
             }
             // A typed line carries its own quantity: "chicken 12oz" parses to
             // grams so the coach's estimate scales without re-reading the text.
@@ -301,59 +301,50 @@ pub fn parse_item(text: String) -> (Option<f64>, String) {
     (grams, rest.join(" ").trim().to_string())
 }
 
-/// Flatten a FoodData Central search response into coach-facing candidates.
-/// Older reports put figures in `food_facts`, newer ones in a `nutrients`
-/// array, and name-only hits sit in `food_search_results`. Every lookup is
-/// soft: if the USDA shape shifts, candidates lose their numbers rather than
-/// the screen breaking.
 /// Read a number whether the API sent it as a number or a numeric string.
 fn num(v: Option<&Value>) -> Option<f64> {
     v.and_then(|x| x.as_f64().or(x.as_str().and_then(|s| s.trim().parse().ok())))
 }
 
-/// The amount of the nutrient whose name or type, lowercased, contains `want`
-/// — "kcal" hits both "Energy (kcal)" and the older "ENERGY_KCAL".
-fn nutrient(e: &Value, want: String) -> Option<f64> {
-    let found = e.get("nutrients").and_then(|n| n.as_array()).and_then(|ns| ns.iter().find(|x| {
-        let label: String = x.get("name").or(x.get("type")).and_then(|v| v.as_str()).map(|s| s.to_lowercase()).unwrap_or_default();
-        label.contains(&want)
-    }));
-    found.and_then(|x| num(x.get("amount")).or(num(x.get("value"))))
+/// The value of the nutrient named `name` in `unit` (e.g. "Energy", "KCAL").
+fn nutrient(e: &Value, name: &str, unit: &str) -> Option<f64> {
+    e.get("foodNutrients")?.as_array()?.iter().find(|n| {
+        let is = |k: &str, want: &str| n.get(k).and_then(|v| v.as_str()).is_some_and(|v| v.eq_ignore_ascii_case(want));
+        is("nutrientName", name) && is("unitName", unit)
+    }).and_then(|n| num(n.get("value")))
 }
 
+/// Flatten a FoodData Central `/foods/search` response (`{"foods": [...]}`)
+/// into coach-facing candidates. Search results give nutrients per 100 g for
+/// every data type, so `grams` is 100; the label's serving is kept as text.
+/// Every lookup is soft: if the USDA shape shifts, candidates lose their
+/// numbers rather than the screen breaking.
 pub fn normalize_fdc(body: Value) -> Vec<Candidate> {
     let entry = |e: &Value| -> Option<Candidate> {
-        let id: String = e.get("fdc_id").and_then(|v| v.as_str().map(|s| s.to_string()).or(v.as_i64().map(|n| n.to_string()))).unwrap_or_default();
-        if id.is_empty() {
-            return None;
-        }
-        let name: String = e.get("food_name").or(e.get("label")).and_then(|v| v.as_str()).map(|s| s.trim().to_string()).unwrap_or_default();
-        if name.is_empty() {
-            return None;
-        }
-        let facts = e.get("food_facts");
+        let fdc_id = e.get("fdcId").and_then(|v| v.as_i64().map(|n| n.to_string()).or(v.as_str().map(str::to_string)))?;
+        let name = e.get("description").and_then(|v| v.as_str()).map(|s| s.trim().to_string()).filter(|s| !s.is_empty())?;
+        let serving = num(e.get("servingSize")).map(|size| {
+            let unit = e.get("servingSizeUnit").and_then(|v| v.as_str()).unwrap_or("").to_lowercase();
+            let household = e.get("householdServingFullText").and_then(|v| v.as_str()).map(str::trim).filter(|s| !s.is_empty());
+            match household {
+                Some(h) => format!("{h} ({size} {unit})"),
+                None => format!("{size} {unit}"),
+            }
+        });
+        let kcal = nutrient(e, "Energy", "KCAL");
         Some(Candidate {
-            fdc_id: id,
-            name: name,
-            serving: facts.and_then(|f| f.get("serving_description")).or(e.get("serving_description"))
-                .and_then(|v| v.as_str()).map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
-            grams: num(facts.and_then(|f| f.get("serving_g")).or(facts.and_then(|f| f.get("weight_g"))).or(e.get("serving_weight_grams")).or(e.get("weight_g"))),
-            kcal: num(facts.and_then(|f| f.get("calories")).or(e.get("calories"))).or(nutrient(e, "kcal".to_string())).or(nutrient(e, "calorie".to_string())),
-            protein: num(facts.and_then(|f| f.get("protein")).or(e.get("protein_g"))).or(nutrient(e, "protein".to_string())),
+            fdc_id,
+            name,
+            serving,
+            grams: kcal.map(|_| 100.0),
+            kcal,
+            protein: nutrient(e, "Protein", "G"),
         })
     };
     let mut out: Vec<Candidate> = vec![];
-    let mut seen: Vec<String> = vec![];
-    for lst in [body.get("food_reports"), body.get("food_search_results")] {
-        if let Some(a) = lst.and_then(|v| v.as_array()) {
-            for e in a.iter() {
-                if let Some(c) = entry(e) {
-                    if !seen.contains(&c.fdc_id) {
-                        seen.push(c.fdc_id.clone());
-                        out.push(c);
-                    }
-                }
-            }
+    for c in body.get("foods").and_then(|v| v.as_array()).into_iter().flatten().filter_map(entry) {
+        if !out.iter().any(|o| o.fdc_id == c.fdc_id) {
+            out.push(c);
         }
     }
     out.truncate(MAX_CANDIDATES);
@@ -390,7 +381,7 @@ mod tests {
             match (g, want.0) {
                 (Some(a), Some(b)) => assert!((a - b).abs() < 0.05, "{text}: {a} g, want {b}"),
                 (None, None) => {},
-                (a, b) => assert!(false, "{text}: {a:?} vs want {b:?}"),
+                (a, b) => panic!("{text}: {a:?} vs want {b:?}"),
             }
             assert_eq!(rest, want.1, "{text}: rest {rest}");
         }
@@ -438,31 +429,36 @@ mod tests {
     }
 
     #[test]
-    fn normalize_fdc_reads_both_response_shapes() {
+    fn normalize_fdc_reads_the_search_response() {
+        // Trimmed from a real /foods/search answer.
         let body = json!({
-            "food_reports": [{
-                "fdc_id": "1702589",
-                "food_name": "Chicken Breast, Roasted, Skin, Not Edible",
-                "food_facts": { "calories": 165.0, "protein": 31.0, "serving_description": " 1 breast (100 g) ", "weight_g": 100.0, "weight_num": 100.0 }
+            "totalHits": 3,
+            "foods": [{
+                "fdcId": 2187885, "description": "CHICKEN BREAST", "dataType": "Branded",
+                "servingSize": 284.0, "servingSizeUnit": "g", "householdServingFullText": "1 breast",
+                "foodNutrients": [
+                    { "nutrientName": "Protein", "unitName": "G", "value": 20.4 },
+                    { "nutrientName": "Energy", "unitName": "kJ", "value": 690 },
+                    { "nutrientName": "Energy", "unitName": "KCAL", "value": 165 }
+                ]
             }, {
-                "fdc_id": 1693010,
-                "food_name": "Rice, Cooked, Long-Grain, Enriched, Parboiled",
-                "nutrients": [{ "name": "ENERGY_KCAL", "type": "Energy (kcal)", "amount": 141.0 }]
-            }],
-            "food_search_results": [{ "fdc_id": "1693010", "food_name": "a duplicate" }, { "fdc_id": "9999999", "food_name": "Some Yogurt, Vanilla, Non-Fat" }]
+                "fdcId": 2187885, "description": "a duplicate", "foodNutrients": []
+            }, {
+                "fdcId": 169756, "description": " Rice, white, cooked ", "dataType": "SR Legacy", "foodNutrients": []
+            }]
         });
         let cs = normalize_fdc(body);
-        assert_eq!(cs.len(), 3, "the duplicate fdc_id is dropped");
-        assert_eq!(cs[0].fdc_id, "1702589");
-        assert_eq!(cs[0].kcal, Some(165.0));
-        assert_eq!(cs[0].grams, Some(100.0));
-        assert_eq!(cs[0].serving.as_ref().unwrap(), "1 breast (100 g)", "trimmed");
-        assert_eq!(cs[1].fdc_id, "1693010", "a numeric id becomes a string");
-        assert_eq!(cs[1].kcal, Some(141.0), "the newer nutrients array still finds the kcal");
-        assert_eq!(cs[1].grams, None);
-        assert_eq!(cs[2].kcal, None, "name-only hits come through with no numbers");
-        let snap = cs[2].snap();
+        assert_eq!(cs.len(), 2, "the duplicate fdcId is dropped");
+        assert_eq!(cs[0].fdc_id, "2187885", "a numeric id becomes a string");
+        assert_eq!(cs[0].kcal, Some(165.0), "kcal, not kJ");
+        assert_eq!(cs[0].protein, Some(20.4));
+        assert_eq!(cs[0].grams, Some(100.0), "search nutrients are per 100 g");
+        assert_eq!(cs[0].serving.as_deref(), Some("1 breast (284 g)"));
+        assert_eq!(cs[1].name, "Rice, white, cooked", "trimmed");
+        assert_eq!((cs[1].kcal, cs[1].grams), (None, None), "no nutrients come through with no numbers");
+        let snap = cs[1].snap();
         assert_eq!(snap.kcal_per, 0.0, "a pick with no data snapshots as 0 per 100 g");
         assert_eq!(snap.per_grams, 100.0);
+        assert!(normalize_fdc(json!({ "unexpected": true })).is_empty());
     }
 }

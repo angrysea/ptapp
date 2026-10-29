@@ -1426,6 +1426,15 @@ async fn full_client_journey() {
     let soon = (chrono::Utc::now() + chrono::Duration::days(3)).format("%Y-%m-%dT21:00:00Z").to_string();
     let (s, sess) = t.call("POST", "/clients/client4/sessions", Some("coach1"), Some(json!({ "start": soon, "minutes": 30 }))).await;
     assert_eq!(s, StatusCode::OK, "{sess}");
+    // a program with one of coach1's own exercises, starting today
+    let (_, sled) = t.call("POST", "/exercises", Some("coach1"), Some(json!({ "name": "Sled Push", "cues": ["Low hips"] }))).await;
+    let (_, prog) = t
+        .call("POST", "/programs", Some("coach1"), Some(json!({ "name": "Move test", "weeks": 1, "workouts": [{ "week": 1, "day": 1, "workout": {
+            "name": "A", "blocks": [{ "kind": "straight", "items": [{ "exerciseId": sled["id"], "exerciseName": "Sled Push", "sets": 1, "reps": "1" }] }] } }] })))
+        .await;
+    let start = chrono::Utc::now().date_naive().to_string();
+    let (s, a) = t.call("POST", "/clients/client4/assignments", Some("coach1"), Some(json!({ "programId": prog["id"], "startDate": start }))).await;
+    assert_eq!(s, StatusCode::OK, "{a}");
     let (_, c1) = t.call("GET", "/admin/coaches/coach1/clients", Some("admin1"), None).await;
     assert!(c1.as_array().unwrap().iter().any(|r| r["clientId"] == "client4"));
     assert_eq!(t.call("POST", "/admin/clients/client4/move", Some("coach1"), Some(json!({ "coachId": "coach3" }))).await.0, StatusCode::FORBIDDEN);
@@ -1433,6 +1442,10 @@ async fn full_client_journey() {
     let (s, mv) = t.call("POST", "/admin/clients/client4/move", Some("admin1"), Some(json!({ "coachId": "coach3" }))).await;
     assert_eq!(s, StatusCode::OK, "{mv}");
     assert_eq!(mv["cancelledSessions"], 1);
+    assert_eq!(mv["copiedExercises"], 1);
+    let (_, lib) = t.call("GET", "/exercises", Some("client4"), None).await;
+    assert!(lib.as_array().unwrap().iter().any(|e| e["id"] == sled["id"] && e["cues"][0] == "Low hips"), "the client keeps the old coach's exercise");
+    assert_eq!(t.call("POST", "/admin/clients/client4/move", Some("admin1"), Some(json!({ "coachId": "coach3" }))).await.0, StatusCode::BAD_REQUEST, "nothing left to finish");
     assert_eq!(t.call("GET", "/me", Some("client4"), None).await.1["profile"]["coachId"], "coach3");
     assert_eq!(t.call("GET", "/clients/client4", Some("coach1"), None).await.0, StatusCode::FORBIDDEN, "the old coach has no access");
     let (_, thread) = t.call("GET", "/clients/client4/comments", Some("coach3"), None).await;

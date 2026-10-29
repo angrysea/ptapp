@@ -252,7 +252,8 @@ async function logs(el, client, focus = null) {
                 }, '✓ Mark reviewed'));
               },
             }, `▶ Set ${v.setIndex + 1}${v.reviewedAt ? ' ✓' : ''}`))),
-          h('div', { class: 'row small' }, ex.sets.sort((a, b) => a.setIndex - b.setIndex).map((s) => h('button', {
+          // A warm-up is ticked off as a whole, so one chip says it all.
+          h('div', { class: 'row small' }, ex.sets.sort((a, b) => a.setIndex - b.setIndex).slice(0, ex.sets[0]?.phase === 'warmup' ? 1 : undefined).map((s) => h('button', {
             class: `small ${s.done ? '' : 'ghost'}`, title: 'Comment on this set',
             onclick: async () => { if (await commentOn(client.userId, l.id, s.setIndex, s.itemId)) refresh(); },
           }, `${s.phase === 'warmup' ? (s.done ? 'Done' : 'Not done')

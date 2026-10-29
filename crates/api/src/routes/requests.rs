@@ -51,7 +51,7 @@ async fn approve(st: &AppState, req: Request) -> ApiResult<(Request, Value)> {
     r.invited(inv.code);
     r.updated_at = Utc::now();
     r.ttl = ttl();
-    st.store.put(&ADMIN_PK, &email_sk(&r.email), &r).await?;
+    st.store.put(ADMIN_PK, &email_sk(&r.email), &r).await?;
     Ok((r, out))
 }
 
@@ -66,7 +66,7 @@ pub async fn request(State(st): State<AppState>, Json(body): Json<RequestIn>) ->
     if body.name.trim().chars().count() > MAX_NAME {
         return Err(bad_request("a name is at most 100 characters"));
     }
-    let found: Option<Request> = st.store.get(&ADMIN_PK, &email_sk(&email)).await?;
+    let found: Option<Request> = st.store.get(ADMIN_PK, &email_sk(&email)).await?;
     // An invitation already went to this email: say so rather than queue or
     // send another.
     if found.as_ref().is_some_and(|r| r.status == Status::Invited) {
@@ -91,21 +91,21 @@ pub async fn request(State(st): State<AppState>, Json(body): Json<RequestIn>) ->
     r.re_request();
     r.name = body.name.trim().to_string();
     r.ttl = ttl();
-    let settings: Option<Settings> = st.store.get(&ADMIN_PK, "SETTINGS#AUTO").await?;
+    let settings: Option<Settings> = st.store.get(ADMIN_PK, "SETTINGS#AUTO").await?;
     if let Some(_auto) = settings.filter(|s| s.auto_approve) {
         let (invited, out) = approve(&st, r).await?;
         // Don't hand the invitation's code back to an anonymous visitor:
         // they get the email instead, like every other invitation.
         return Ok(Json(json!({ "email": email, "status": invited.status, "emailed": out["emailed"] })));
     }
-    st.store.put(&ADMIN_PK, &email_sk(&email), &r).await?;
+    st.store.put(ADMIN_PK, &email_sk(&email), &r).await?;
     Ok(Json(json!({ "email": email, "status": r.status })))
 }
 
 /// `GET /admin/coach-requests`: newest first, with each one's status.
 pub async fn queue(State(st): State<AppState>, ctx: Ctx) -> ApiResult<Json<Vec<Request>>> {
     ctx.require_admin()?;
-    let mut out: Vec<Request> = st.store.query_prefix(&ADMIN_PK, "REQUEST#").await?;
+    let mut out: Vec<Request> = st.store.query_prefix(ADMIN_PK, "REQUEST#").await?;
     out.sort_by_key(|r| r.requested_at);
     out.reverse();
     Ok(Json(out))
@@ -113,7 +113,7 @@ pub async fn queue(State(st): State<AppState>, ctx: Ctx) -> ApiResult<Json<Vec<R
 
 pub async fn get_settings(State(st): State<AppState>, ctx: Ctx) -> ApiResult<Json<Settings>> {
     ctx.require_admin()?;
-    let s: Option<Settings> = st.store.get(&ADMIN_PK, "SETTINGS#AUTO").await?;
+    let s: Option<Settings> = st.store.get(ADMIN_PK, "SETTINGS#AUTO").await?;
     Ok(Json(s.unwrap_or(Settings { auto_approve: false, updated_at: Utc::now() })))
 }
 
@@ -126,7 +126,7 @@ pub struct SettingsIn {
 pub async fn put_settings(State(st): State<AppState>, ctx: Ctx, Json(body): Json<SettingsIn>) -> ApiResult<Json<Settings>> {
     ctx.require_admin()?;
     let s = Settings { auto_approve: body.auto_approve, updated_at: Utc::now() };
-    st.store.put(&ADMIN_PK, "SETTINGS#AUTO", &s).await?;
+    st.store.put(ADMIN_PK, "SETTINGS#AUTO", &s).await?;
     Ok(Json(s))
 }
 
@@ -135,7 +135,7 @@ pub async fn put_settings(State(st): State<AppState>, ctx: Ctx, Json(body): Json
 pub async fn invite_route(State(st): State<AppState>, ctx: Ctx, Path(email): Path<String>) -> ApiResult<Json<Value>> {
     ctx.require_admin()?;
     let email = email.trim().to_lowercase();
-    let found: Option<Request> = st.store.get(&ADMIN_PK, &email_sk(&email)).await?;
+    let found: Option<Request> = st.store.get(ADMIN_PK, &email_sk(&email)).await?;
     let Some(r) = found else { return Err(ApiError::NotFound("request")); };
     if r.status == Status::Invited {
         return Err(bad_request("an invitation was already emailed to this address; revoke it on the invitations list if it went unused"));
@@ -147,7 +147,7 @@ pub async fn invite_route(State(st): State<AppState>, ctx: Ctx, Path(email): Pat
 pub async fn deny(State(st): State<AppState>, ctx: Ctx, Path(email): Path<String>) -> ApiResult<Json<Value>> {
     ctx.require_admin()?;
     let email = email.trim().to_lowercase();
-    let found: Option<Request> = st.store.get(&ADMIN_PK, &email_sk(&email)).await?;
+    let found: Option<Request> = st.store.get(ADMIN_PK, &email_sk(&email)).await?;
     let Some(r) = found else { return Err(ApiError::NotFound("request")); };
     if r.status == Status::Invited {
         return Err(bad_request("that email already has an invitation — revoke the invitation instead, and they can ask again"));
@@ -156,6 +156,6 @@ pub async fn deny(State(st): State<AppState>, ctx: Ctx, Path(email): Path<String
     x.denied();
     x.updated_at = Utc::now();
     x.ttl = ttl();
-    st.store.put(&ADMIN_PK, &email_sk(&email), &x).await?;
+    st.store.put(ADMIN_PK, &email_sk(&email), &x).await?;
     Ok(Json(json!({ "email": email, "status": x.status })))
 }
