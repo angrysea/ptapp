@@ -21,6 +21,7 @@ Parameters:
   FdcApiKey:
     Type: String
     Default: ""
+    NoEcho: true
     Description: USDA FoodData Central API key (a free signup at api.data.gov) powering the coach's /foods/search. Empty turns food search off.
   AdminEmails:
     Type: String
