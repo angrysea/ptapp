@@ -352,7 +352,14 @@ pub async fn move_client(State(st): State<AppState>, ctx: Ctx, Path(cid): Path<S
         client.former_coach_ids.push(from.clone());
     }
     client.coach_id = to.user_id.clone();
-    st.store.put(&format!("USER#{cid}"), "PROFILE", &client).await?;
+    // Only if nothing moved them (or closed the account) since it was read.
+    let moved = st
+        .store
+        .put_if_with(&format!("USER#{cid}"), "PROFILE", &client, "attribute_exists(pk) AND coachId = :from", &[(":from", crate::store::s(&from))])
+        .await?;
+    if !moved {
+        return Err(ApiError::Conflict(json!({ "message": "the client's account changed meanwhile; reload and try again" })));
+    }
 
     // 2. The rosters.
     let roster = RosterEntry { client_id: cid.clone(), name: client.name.clone(), email: client.email.clone(), joined_at: now };

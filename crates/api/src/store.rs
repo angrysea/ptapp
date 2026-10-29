@@ -5,7 +5,7 @@
 //!   USER#{sub}      PROFILE
 //!   COACH#{coach}   CLIENT#{client} | INVITE#{code} | EXERCISE#{id} | PROGRAM#{id} | REVIEW#{ts}#{video} | THREAD#{client} | FOOD#{id}
 //!   INVITE#{code}   INVITE
-//!   ADMIN           INVITE#{code} | COACH#{coach}
+//!   ADMIN           INVITE#{code} | COACH#{coach} | REQUEST#{email} | SETTINGS#AUTO
 //!   CLIENT#{client} INTAKE | WAIVER#{ts} | ASSIGN#{id} | SCHED#{date}#{id} | LOG#{date}#{id}
 //!                   COMMENT#{ts}#{id} | METRIC#{date-id} | PHOTO#{date-id} | VIDEO#{date-id} | AUDIT#{ts}#{id} | HABIT#{id} | HABITLOG#{date}#{id} | MEAL#{date}#{id}
 //!   FOODCACHE#{q}   CACHE — coach food-search results (FDC proxy), ttl 30 days
@@ -77,14 +77,16 @@ impl Store {
     /// Put only if the existing item (or its absence) meets `condition`.
     /// Returns false if it didn't.
     pub async fn put_if<T: Serialize>(&self, pk: &str, sk: &str, value: &T, condition: &str) -> ApiResult<bool> {
-        let res = self
-            .ddb
-            .put_item()
-            .table_name(&self.table)
-            .set_item(Some(keyed(pk, sk, value)?))
-            .condition_expression(condition)
-            .send()
-            .await;
+        self.put_if_with(pk, sk, value, condition, &[]).await
+    }
+
+    /// `put_if` with values for the condition's `:placeholders`.
+    pub async fn put_if_with<T: Serialize>(&self, pk: &str, sk: &str, value: &T, condition: &str, values: &[(&str, AttributeValue)]) -> ApiResult<bool> {
+        let mut req = self.ddb.put_item().table_name(&self.table).set_item(Some(keyed(pk, sk, value)?)).condition_expression(condition);
+        for (k, v) in values {
+            req = req.expression_attribute_values(*k, v.clone());
+        }
+        let res = req.send().await;
         match res {
             Ok(_) => Ok(true),
             Err(e) if e.as_service_error().is_some_and(|se| se.is_conditional_check_failed_exception()) => Ok(false),

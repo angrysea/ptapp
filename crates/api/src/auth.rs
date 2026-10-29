@@ -108,11 +108,19 @@ impl Ctx {
 /// self-service save can't undo an admin's suspension or bring back a
 /// deleted account.
 pub async fn save_profile(state: &AppState, p: &Profile) -> ApiResult<()> {
+    // The coach it was read with must still be the coach: an admin may have
+    // moved the client meanwhile, and this save must not move them back.
     let saved = state
         .store
-        .put_if(&format!("USER#{}", p.user_id), "PROFILE", p, "attribute_exists(pk) AND attribute_not_exists(suspendedAt)")
+        .put_if_with(
+            &format!("USER#{}", p.user_id),
+            "PROFILE",
+            p,
+            "attribute_exists(pk) AND attribute_not_exists(suspendedAt) AND coachId = :coach",
+            &[(":coach", crate::store::s(&p.coach_id))],
+        )
         .await?;
-    if saved { Ok(()) } else { Err(ApiError::Forbidden("this account is suspended or closed")) }
+    if saved { Ok(()) } else { Err(ApiError::Forbidden("this account was suspended, closed or moved to another coach; reload and try again")) }
 }
 
 /// Resolved access to one client's data.
