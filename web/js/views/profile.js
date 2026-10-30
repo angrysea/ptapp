@@ -168,6 +168,22 @@ function passwordSheet() {
   current.input.focus();
 }
 
+/** Light, dark, or the device's setting; applies at once and is kept on this
+ * device (read at startup by js/theme.js). */
+function appearanceCard() {
+  let current = 'system';
+  try { current = localStorage.getItem('pt.theme') || 'system'; } catch { /* follow the device */ }
+  const sel = select([['system', 'Match this device'], ['light', 'Light'], ['dark', 'Dark']], current, {
+    onchange: () => {
+      const t = sel.value;
+      if (t === 'system') delete document.documentElement.dataset.theme;
+      else document.documentElement.dataset.theme = t;
+      try { if (t === 'system') localStorage.removeItem('pt.theme'); else localStorage.setItem('pt.theme', t); } catch { /* applies until reload */ }
+    },
+  });
+  return h('div', { class: 'card' }, h('h3', {}, 'Appearance'), field('Colors', sel, 'Saved on this device.'));
+}
+
 export async function renderProfile() {
   const p = session.profile;
   const name = h('input', { value: p.name });
@@ -190,6 +206,7 @@ export async function renderProfile() {
           toast('Saved');
         }),
       }, 'Save')),
+    appearanceCard(),
     p.role === 'assistant' && myRoleCard(),
     p.role === 'coach' && h('div', { class: 'card' },
       h('a', { class: 'btn block', href: '#/coach-profile' }, 'Edit coach profile'),

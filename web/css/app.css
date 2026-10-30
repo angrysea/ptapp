@@ -17,8 +17,10 @@
   --tap: 48px;
   color-scheme: light dark;
 }
+/* Dark: the device's setting unless Profile → Appearance picks light;
+   always when it picks dark (js/theme.js sets data-theme). */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --bg: #0b1416;
     --card: #132022;
     --text: #e6efee;
@@ -35,6 +37,24 @@
     --good-soft: #10301b;
   }
 }
+:root[data-theme="dark"] {
+  --bg: #0b1416;
+  --card: #132022;
+  --text: #e6efee;
+  --muted: #93a7a4;
+  --line: #22383a;
+  --accent: #2dd4bf;
+  --accent-ink: #062b27;
+  --accent-soft: #123a36;
+  --warn: #fbbf24;
+  --warn-soft: #3a2d0b;
+  --bad: #f87171;
+  --bad-soft: #3b1414;
+  --good: #4ade80;
+  --good-soft: #10301b;
+  color-scheme: dark;
+}
+:root[data-theme="light"] { color-scheme: light; }
 
 * { box-sizing: border-box; }
 html { -webkit-text-size-adjust: 100%; }
