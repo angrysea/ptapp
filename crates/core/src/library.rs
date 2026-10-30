@@ -63,6 +63,7 @@ const SEEDS: &[Seed] = &[
     Seed { id: "kb-suitcase-carry", name: "Kettlebell Suitcase Carry", muscles: &["core", "grip", "obliques"], equipment: &["kettlebell"], cues: &["One bell at your side", "Don't lean away from it", "Tall posture, steady steps"] },
     Seed { id: "kb-rack-carry", name: "Kettlebell Rack Carry", muscles: &["core", "upper back"], equipment: &["kettlebell"], cues: &["Bells in the rack, elbows tucked", "Ribs down, breathe behind the brace", "Short, steady steps"] },
     Seed { id: "kb-reverse-lunge", name: "Kettlebell Reverse Lunge", muscles: &["quads", "glutes"], equipment: &["kettlebell"], cues: &["Step back, front knee over the foot", "Back knee just above the floor", "Drive up through the front heel"] },
+    Seed { id: "back-extension", name: "Back Extension", muscles: &["lower back", "glutes", "hamstrings"], equipment: &["back extension bench", "bodyweight"], cues: &["Hips on the pad, ankles locked in", "Hinge down with a flat back", "Rise until the body is straight; don't over-arch"] },
     Seed { id: "plank", name: "Plank", muscles: &["core"], equipment: &["bodyweight"], cues: &["Squeeze glutes", "Ribs down", "Straight line head to heel"] },
     Seed { id: "dead-bug", name: "Dead Bug", muscles: &["core"], equipment: &["bodyweight"], cues: &["Lower back pressed down", "Exhale as you extend"] },
     Seed { id: "farmers-carry", name: "Farmer's Carry", muscles: &["grip", "core", "traps"], equipment: &["dumbbell", "kettlebell"], cues: &["Tall posture", "Short quick steps"] },

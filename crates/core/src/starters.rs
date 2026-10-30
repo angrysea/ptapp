@@ -14,6 +14,10 @@
 //!   a six-day split by body part: hypertrophy work that stresses time under
 //!   tension with a tempo on every lift (`tut`). A three-day version for
 //!   beginners and intermediates starts gentler (`tut_beginner`).
+//! * 12-week strength block (Mon/Wed/Fri): squat, deadlift and press, and
+//!   bench days loaded as a % of the client's 1RM, from volume through
+//!   strength and peak to a test week. Assigning it fills in the weights
+//!   from the client's maxes (strength.rs).
 //! * Strength for runners, 12 weeks, two days a week: single-leg strength,
 //!   the posterior chain, calves and core, heavier by phase and with jumps
 //!   in the last phase, light enough to sit beside the running.
@@ -67,8 +71,11 @@ fn program(name: &str, description: &str, weeks: u32, workouts: Vec<ProgramWorko
 /// Every starter program, in the order the app lists them. Each id is a
 /// fixed key (`starter-…`) that the API copies by; a coach's copy gets its own.
 pub fn starter_programs() -> Vec<Program> {
-    let mut all = vec![benchmark(), kettlebell_dumbbell(), bodyweight(), three_day(), push_pull(), upper_lower(), body_part(), runners()];
-    let keys = ["starter-benchmark", "starter-kettlebell-dumbbell", "starter-bodyweight", "starter-three-day", "starter-push-pull", "starter-upper-lower", "starter-body-part", "starter-runners"];
+    let mut all = vec![benchmark(), strength_block(), kettlebell_dumbbell(), bodyweight(), three_day(), push_pull(), upper_lower(), body_part(), runners()];
+    let keys = [
+        "starter-benchmark", "starter-strength-block", "starter-kettlebell-dumbbell", "starter-bodyweight", "starter-three-day",
+        "starter-push-pull", "starter-upper-lower", "starter-body-part", "starter-runners",
+    ];
     for (p, key) in all.iter_mut().zip(keys) {
         p.id = key.into();
     }
@@ -115,6 +122,95 @@ fn benchmark() -> Program {
         1,
         vec![ProgramWorkout { week: 1, day: 1, workout: day }],
         vec![],
+    )
+}
+
+// ---------------------------------------------------------------- 12-week strength block
+
+/// A week of the strength block: the main lift's sets, reps and % of 1RM
+/// (`None` in the test week), and the phase it's in.
+fn block_week(week: u32) -> (u32, &'static str, Option<f64>, &'static str) {
+    match week {
+        1 => (4, "8", Some(65.0), "volume"),
+        2 => (4, "7", Some(70.0), "volume"),
+        3 => (4, "6", Some(72.5), "volume"),
+        4 => (3, "5", Some(60.0), "easy week"),
+        5 => (5, "5", Some(75.0), "strength"),
+        6 => (5, "4", Some(80.0), "strength"),
+        7 => (5, "3", Some(82.5), "strength"),
+        8 => (3, "3", Some(65.0), "easy week"),
+        9 => (4, "3", Some(85.0), "peak"),
+        10 => (4, "2", Some(90.0), "peak"),
+        11 => (3, "1", Some(92.5), "peak"),
+        _ => (1, "1", None, "test"),
+    }
+}
+
+/// The lighter second lift of a day and the curls: (sets, reps, %).
+fn block_light(week: u32) -> ((u32, &'static str, f64), (u32, &'static str, f64)) {
+    match week {
+        1..=3 => ((3, "10", 60.0), (3, "10", 60.0)),
+        4 => ((2, "8", 55.0), (2, "10", 55.0)),
+        5..=7 => ((3, "8", 65.0), (3, "8", 70.0)),
+        8 => ((2, "8", 55.0), (2, "8", 55.0)),
+        _ => ((3, "6", 70.0), (4, "6", 75.0)),
+    }
+}
+
+fn strength_block() -> Program {
+    let pct = |item: Item, p: f64| Item { load_pct: Some(p), ..item };
+    let mut workouts = vec![];
+    for week in 1..=12 {
+        let (sets, reps, main_pct, phase) = block_week(week);
+        let ((ls, lr, lp), (cs, cr, cp)) = block_light(week);
+        let heavy = |id: &str| match main_pct {
+            Some(p) => pct(line(id, sets, reps, None, Some(240), &format!(
+                "{p}% of your 1RM ({phase}). Warm up first: the empty bar for 10, then about 40% for 5, 55% for 3 and 65% for 2."
+            )), p),
+            None => line(id, 1, "1", None, Some(240),
+                "Test day. Warm up: the bar for 10, then about 50% for 5, 70% for 3, 80% for 1 and 90% for 1. Then singles, adding 2.5-5 kg (5-10 lb) each time, until a rep slows down a lot. Expect a few percent over your old max. Use a spotter or safety bars."),
+        };
+        let light = |id: &str| pct(line(id, ls, lr, None, Some(120), &format!("Lighter work: {lp}% of your 1RM.")), lp);
+        let mut row = line("barbell-row", 3, "10", None, Some(90), "Add a little weight when all sets feel comfortable.");
+        row.progression = Some(crate::progression::ProgressionRule { max_rpe: Some(8.0), add_kg: Some(2.5), add_reps: None, cap_kg: None });
+        let test = week == 12;
+        let name = |day: &str| if test { format!("Week 12 (test) · {day}") } else { format!("Week {week} · {day}") };
+
+        let squat_day = if test {
+            vec![main(vec![heavy("back-squat")]), main(vec![pct(line("bench-press", 3, "5", None, Some(120), "Light, after the squat test."), 60.0)])]
+        } else {
+            vec![main(vec![heavy("back-squat")]), main(vec![light("bench-press")]), main(vec![row]), main(vec![line("plank", 3, "45s", None, Some(60), "")])]
+        };
+        let mut pull = main(vec![heavy("deadlift")]);
+        if !test {
+            pull.notes = "Drop one set if your lower back is still tired by Friday.".into();
+        }
+        let mut press_day = vec![pull, main(vec![heavy("overhead-press")])];
+        if !test {
+            press_day.push(main(vec![line("pull-up", 3, "AMRAP", None, Some(90), "Stop 1-2 reps short of failure.")]));
+            press_day.push(main(vec![line("back-extension", 3, "12", None, Some(60), "")]));
+        }
+        let bench_day = if test {
+            vec![main(vec![heavy("bench-press")]), main(vec![line("bicep-curl", 1, "1", None, Some(120), "Optional curl test: work up to a single.")])]
+        } else {
+            vec![
+                main(vec![heavy("bench-press")]),
+                main(vec![light("back-squat")]),
+                main(vec![pct(line("bicep-curl", cs, cr, None, Some(90), "Barbell curl."), cp)]),
+                main(vec![line("dip", 3, "8-12", None, Some(90), "Add weight when 3x12 feels easy.")]),
+            ]
+        };
+        for (day, label, blocks) in [(1, "Squat day", squat_day), (3, "Deadlift + press day", press_day), (5, "Bench day", bench_day)] {
+            workouts.push(ProgramWorkout { week, day, workout: workout(&name(label), "", blocks) });
+        }
+    }
+    let warmup = block(BlockKind::Flow, Phase::Warmup, vec![timed("treadmill-run", 5, Some(1))]);
+    program(
+        "12-week strength block (Mon/Wed/Fri)",
+        "Squat, deadlift, overhead press and bench press loaded as a % of the client's 1RM: record their maxes first (Progress › Maxes, or run the Strength benchmark) and assigning fills in the weights. Weeks 1-4 volume, 5-8 strength, 9-11 peak, week 12 test; weeks 4 and 8 are easy weeks. Assign starting on a Monday. Rest 3-5 min on main lifts, about 2 min on lighter lifts, 60-90 s on accessories. Missed reps on a main lift: repeat that week; missed twice: drop that lift 5%.",
+        12,
+        workouts,
+        vec![warmup],
     )
 }
 
@@ -623,7 +719,7 @@ mod tests {
     #[test]
     fn starters_are_valid_programs() {
         let all = starter_programs();
-        assert_eq!(all.len(), 8);
+        assert_eq!(all.len(), 9);
         for p in &all {
             p.validate().unwrap_or_else(|e| panic!("{}: {e}", p.name));
             let size = serde_json::to_vec(p).unwrap().len();
@@ -707,5 +803,23 @@ mod tests {
         let legs = |week: u32| p.workouts.iter().find(|w| w.week == week && w.day == 3).unwrap().workout.blocks[0].items[0].exercise_id.clone();
         assert_eq!((legs(4).as_str(), legs(5).as_str()), ("goblet-squat", "back-squat"));
         assert!(p.workouts.iter().filter(|w| w.week == 1).all(|w| !w.workout.notes.is_empty()), "week 1 explains the tempo");
+    }
+
+    #[test]
+    fn the_strength_block_climbs_in_percent_and_ends_with_a_test() {
+        let p = strength_block();
+        let squat = |week: u32| {
+            let w = &p.workouts.iter().find(|w| w.week == week && w.day == 1).unwrap().workout;
+            let it = &w.blocks[0].items[0];
+            assert_eq!(it.exercise_id, "back-squat");
+            (it.sets, it.reps.clone(), it.load_pct)
+        };
+        assert_eq!(squat(1), (4, "8".into(), Some(65.0)));
+        assert_eq!(squat(7), (5, "3".into(), Some(82.5)));
+        assert_eq!(squat(11), (3, "1".into(), Some(92.5)));
+        assert_eq!(squat(12), (1, "1".into(), None), "test week: no prescribed load");
+        let pcts: Vec<f64> = [1, 2, 3, 5, 6, 7, 9, 10, 11].iter().map(|w| squat(*w).2.unwrap()).collect();
+        assert!(pcts.windows(2).all(|w| w[0] < w[1]), "heavier every hard week: {pcts:?}");
+        assert!(squat(4).2 < squat(3).2 && squat(8).2 < squat(7).2, "easy weeks drop");
     }
 }

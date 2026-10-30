@@ -499,7 +499,7 @@ async fn full_client_journey() {
     // starter programs: listed for coaches, copied into the coach's own programs
     let (s, starters) = t.call("GET", "/programs/starters", Some("coach1"), None).await;
     assert_eq!(s, StatusCode::OK);
-    assert_eq!(starters.as_array().unwrap().len(), 8);
+    assert_eq!(starters.as_array().unwrap().len(), 9);
     assert_eq!(t.call("GET", "/programs/starters", Some("client1"), None).await.0, StatusCode::FORBIDDEN);
     let (s, bw) = t.call("POST", "/programs/starters/starter-bodyweight/copy", Some("coach1"), Some(json!({}))).await;
     assert_eq!(s, StatusCode::OK, "{bw}");
