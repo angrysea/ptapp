@@ -106,6 +106,8 @@ pub fn router(state: AppState) -> Router {
         .route("/exercises/{id}/demo-upload", post(exercises::demo_upload))
         .route("/exercises/{id}/demo-confirm", post(exercises::demo_confirm))
         .route("/programs", get(programs::list).post(programs::create))
+        .route("/programs/starters", get(programs::starters))
+        .route("/programs/starters/{key}/copy", post(programs::copy_starter))
         .route("/programs/{id}", get(programs::get_one).put(programs::update).delete(programs::remove))
         .route("/programs/{id}/copy", post(programs::copy))
         // clients

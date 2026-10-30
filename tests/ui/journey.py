@@ -786,6 +786,18 @@ with sync_playwright() as p:
     expect(coach.get_by_text("Saved")).to_be_visible()
     shot(coach, "16-automation")
 
+    # ---------------- starter programs: the coach copies the strength benchmark into their programs
+    coach.get_by_role("link", name="Programs").click()
+    bench = coach.locator(".card.starter", has_text="Strength benchmark (1RM estimate)")
+    expect(bench).to_contain_text("1 week · 1 workout")
+    shot(coach, "16a-starter-programs")
+    bench.get_by_role("button", name="Use this program").click()
+    expect(coach.get_by_text("Added to your programs")).to_be_visible()
+    expect(coach.get_by_label("Program name")).to_have_value("Strength benchmark (1RM estimate)")
+    coach.locator(".cal .day.has").first.click()
+    expect(coach.locator(".block-card", has_text="Stage 5 · Back Squat")).to_be_visible()
+    shot(coach, "16b-benchmark-workout")
+
     # ---------------- the admin suspends the coach, then lifts it
     admin.reload()
     admin.locator(".card.link", has_text=f"coach{RUN}@dev.local").click()

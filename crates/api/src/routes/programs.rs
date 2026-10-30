@@ -4,6 +4,7 @@ use axum::extract::{Path, State};
 use axum::Json;
 use chrono::Utc;
 use ptcore::model::{Block, Program};
+use ptcore::starters::starter_programs;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -95,6 +96,25 @@ pub async fn remove(State(st): State<AppState>, ctx: Ctx, Path(id): Path<String>
     let coach = ctx.require_coach()?;
     st.store.delete(&pk(coach), &sk(&id)).await?;
     Ok(Json(json!({ "ok": true })))
+}
+
+/// `GET /programs/starters`: the ready-made programs (ptcore::starters)
+/// a coach can start from.
+pub async fn starters(ctx: Ctx) -> ApiResult<Json<Vec<Program>>> {
+    ctx.require_coach()?;
+    Ok(Json(starter_programs()))
+}
+
+/// `POST /programs/starters/{key}/copy`: the coach's own copy of a starter
+/// program, to edit and assign like any other.
+pub async fn copy_starter(State(st): State<AppState>, ctx: Ctx, Path(key): Path<String>) -> ApiResult<Json<Program>> {
+    let coach = ctx.require_coach()?;
+    let mut p = starter_programs().into_iter().find(|p| p.id == key).ok_or(ApiError::NotFound("starter program"))?;
+    p.id = new_id();
+    normalize(&mut p);
+    p.validate().map_err(bad_request)?;
+    st.store.put(&pk(coach), &sk(&p.id), &p).await?;
+    Ok(Json(p))
 }
 
 #[derive(Deserialize)]

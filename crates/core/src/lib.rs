@@ -13,6 +13,7 @@ pub mod foodimport;
 pub mod nutrition;
 pub mod progression;
 pub mod schedule;
+pub mod starters;
 pub mod sessions;
 pub mod records;
 pub mod requests;

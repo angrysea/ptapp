@@ -30,7 +30,7 @@ const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 const EXTRA_PHASES = PHASES.filter(([k]) => k !== 'main');
 
 export async function renderPrograms() {
-  const list = await get('/programs', { cache: true });
+  const [list, starters] = await Promise.all([get('/programs', { cache: true }), get('/programs/starters', { cache: true }).catch(() => [])]);
   mount($app(),
     h('div', { class: 'spread page-head' }, h('h1', {}, 'Programs'), h('button', { class: 'primary', onclick: () => go('/programs/new') }, '+ New')),
     list.length === 0 && h('div', { class: 'card muted' }, 'No programs yet. Build one and assign it to clients from their Calendar tab.'),
@@ -47,6 +47,22 @@ export async function renderPrograms() {
             await del(`/programs/${p.id}`); renderPrograms();
           },
         }, 'Delete')))),
+    starters.length > 0 && [
+      h('h2', {}, 'Starter programs'),
+      h('p', { class: 'muted small' }, 'Ready-made programs to start from. “Use” puts a copy in your programs to edit and assign; weights are left for you to set per client.'),
+      starters.map((p) => h('div', { class: 'card starter' },
+        h('strong', {}, p.name),
+        h('div', { class: 'muted small' }, `${p.weeks} week${p.weeks === 1 ? '' : 's'} · ${p.workouts.length} workout${p.workouts.length === 1 ? '' : 's'}`),
+        h('p', { class: 'small' }, p.description),
+        h('button', {
+          class: 'small primary',
+          onclick: (e) => busy(e.currentTarget, async () => {
+            const copy = await post(`/programs/starters/${p.id}/copy`, {});
+            toast('Added to your programs');
+            go(`/programs/${copy.id}`);
+          }),
+        }, 'Use this program'))),
+    ],
   );
 }
 

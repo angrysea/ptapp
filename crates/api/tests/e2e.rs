@@ -496,6 +496,17 @@ async fn full_client_journey() {
     let mut steady = program.clone();
     steady["workouts"][0]["workout"]["blocks"][0]["kind"] = json!("steady");
     assert_eq!(t.call("POST", "/programs", Some("coach1"), Some(steady)).await.0, StatusCode::BAD_REQUEST);
+    // starter programs: listed for coaches, copied into the coach's own programs
+    let (s, starters) = t.call("GET", "/programs/starters", Some("coach1"), None).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(starters.as_array().unwrap().len(), 3);
+    assert_eq!(t.call("GET", "/programs/starters", Some("client1"), None).await.0, StatusCode::FORBIDDEN);
+    let (s, bw) = t.call("POST", "/programs/starters/starter-bodyweight/copy", Some("coach1"), Some(json!({}))).await;
+    assert_eq!(s, StatusCode::OK, "{bw}");
+    assert_eq!((bw["weeks"].as_u64(), bw["workouts"].as_array().unwrap().len()), (Some(12), 36));
+    assert!(!bw["workouts"][0]["workout"]["blocks"][0]["items"][0]["id"].as_str().unwrap().is_empty(), "the copy gets ids");
+    assert_eq!(t.call("POST", "/programs/starters/nope/copy", Some("coach1"), Some(json!({}))).await.0, StatusCode::NOT_FOUND);
+    t.call("DELETE", &format!("/programs/{}", bw["id"].as_str().unwrap()), Some("coach1"), None).await;
     let (s, copy) = t.call("POST", &format!("/programs/{pid}/copy"), Some("coach1"), Some(json!({}))).await;
     assert_eq!(s, StatusCode::OK);
     assert_eq!(copy["name"], "Base Strength (copy)");
