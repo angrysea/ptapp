@@ -12,7 +12,8 @@
 //!   variations and more volume instead of load.
 //! * Bodybuilding, 12 weeks, as a four-day push/pull or upper/lower split or
 //!   a six-day split by body part: hypertrophy work that stresses time under
-//!   tension with a tempo on every lift (`tut`).
+//!   tension with a tempo on every lift (`tut`). A three-day version for
+//!   beginners and intermediates starts gentler (`tut_beginner`).
 //! * Strength for runners, 12 weeks, two days a week: single-leg strength,
 //!   the posterior chain, calves and core, heavier by phase and with jumps
 //!   in the last phase, light enough to sit beside the running.
@@ -66,8 +67,8 @@ fn program(name: &str, description: &str, weeks: u32, workouts: Vec<ProgramWorko
 /// Every starter program, in the order the app lists them. Each id is a
 /// fixed key (`starter-…`) that the API copies by; a coach's copy gets its own.
 pub fn starter_programs() -> Vec<Program> {
-    let mut all = vec![benchmark(), kettlebell_dumbbell(), bodyweight(), push_pull(), upper_lower(), body_part(), runners()];
-    let keys = ["starter-benchmark", "starter-kettlebell-dumbbell", "starter-bodyweight", "starter-push-pull", "starter-upper-lower", "starter-body-part", "starter-runners"];
+    let mut all = vec![benchmark(), kettlebell_dumbbell(), bodyweight(), three_day(), push_pull(), upper_lower(), body_part(), runners()];
+    let keys = ["starter-benchmark", "starter-kettlebell-dumbbell", "starter-bodyweight", "starter-three-day", "starter-push-pull", "starter-upper-lower", "starter-body-part", "starter-runners"];
     for (p, key) in all.iter_mut().zip(keys) {
         p.id = key.into();
     }
@@ -424,6 +425,71 @@ fn upper_lower() -> Program {
     )
 }
 
+/// The beginner/intermediate weeks: fewer sets, easier efforts and a
+/// gentler tempo to learn the lifts, building to the 3-second lowering.
+fn tut_beginner(week: u32) -> Tut {
+    match week {
+        1 | 2 => Tut { sets: 2, reps: "12", iso_reps: "12-15", rpe: 6.0, tempo: "2-1-1-0", iso_tempo: "2-0-1-1" },
+        4 | 8 => Tut { sets: 2, reps: "10", iso_reps: "12", rpe: 6.0, tempo: "3-1-1-0", iso_tempo: "2-0-1-1" },
+        3 => Tut { sets: 3, reps: "10-12", iso_reps: "12-15", rpe: 7.0, tempo: "2-1-1-0", iso_tempo: "2-0-1-1" },
+        5..=7 => Tut { sets: 3, reps: "10-12", iso_reps: "12-15", rpe: 7.5, tempo: "3-1-1-0", iso_tempo: "2-0-1-1" },
+        12 => Tut { sets: 3, reps: "8-10", iso_reps: "10-12", rpe: 8.5, tempo: "3-1-1-0", iso_tempo: "3-0-1-1" },
+        _ => Tut { sets: if week == 9 { 3 } else { 4 }, reps: "8-10", iso_reps: "10-12", rpe: 8.0, tempo: "3-1-1-0", iso_tempo: "3-0-1-1" },
+    }
+}
+
+fn beginner_note(week: u32) -> &'static str {
+    match week {
+        1 => "Welcome! Two easy sets per exercise to learn each movement. Tempo 2-1-1-0 means 2 seconds lowering, a 1-second pause, 1 second up. Pick weights you could lift 4 more times; form first, weight later.",
+        3 => "Up to three sets. Still leave 3 reps in the tank.",
+        4 | 8 => "Lighter week: two sets, easy. Recovery is when you grow.",
+        5 => "Lowering slows to 3 seconds (3-1-1-0). Add weight when you hit the top of the rep range on every set.",
+        9 => "Heavier now: 8-10 reps, and four sets from next week. Keep the 3-second lowering.",
+        12 => "Last week: push close to failure with good form, then compare your weights to week 1.",
+        _ => "",
+    }
+}
+
+/// Three days for beginners and intermediates: chest & back, legs, then
+/// shoulders & arms, on Mon, Wed and Fri.
+fn three_day() -> Program {
+    let mut workouts = vec![];
+    for week in 1..=12 {
+        let t = tut_beginner(week);
+        // Goblet squats teach the pattern before the barbell comes in.
+        let squat = if week <= 4 { "goblet-squat" } else { "back-squat" };
+        let days = [
+            workout(&format!("Week {week} · Chest & back"), beginner_note(week), vec![
+                main(vec![compound(&t, "bench-press", "A dumbbell bench press works too"), compound(&t, "lat-pulldown", "")]),
+                main(vec![compound(&t, "incline-db-press", ""), compound(&t, "seated-cable-row", "")]),
+                superset(&t, isolation(&t, "db-fly", ""), isolation(&t, "face-pull", "")),
+            ]),
+            workout(&format!("Week {week} · Legs"), beginner_note(week), vec![
+                main(vec![compound(&t, squat, ""), compound(&t, "romanian-deadlift", "")]),
+                main(vec![compound(&t, "leg-press", ""), isolation(&t, "leg-curl", "")]),
+                main(vec![isolation(&t, "leg-extension", ""), isolation(&t, "calf-raise", "Full stretch at the bottom")]),
+                main(vec![line("plank", t.sets.min(3), "30-45s", None, Some(45), "")]),
+            ]),
+            workout(&format!("Week {week} · Shoulders & arms"), beginner_note(week), vec![
+                main(vec![compound(&t, "seated-db-shoulder-press", ""), isolation(&t, "lateral-raise", "")]),
+                superset(&t, isolation(&t, "bicep-curl", ""), isolation(&t, "triceps-pushdown", "")),
+                superset(&t, isolation(&t, "hammer-curl", ""), isolation(&t, "overhead-triceps-extension", "")),
+                main(vec![isolation(&t, "rear-delt-fly", ""), line("side-plank", t.sets.min(3), "20-30s per side", None, Some(45), "")]),
+            ]),
+        ];
+        for (day, w) in [1, 3, 5].into_iter().zip(days) {
+            workouts.push(ProgramWorkout { week, day, workout: w });
+        }
+    }
+    program(
+        "Bodybuilding 3-day for beginners & intermediates (12 weeks)",
+        "Three days a week (Mon, Wed, Fri): chest & back, legs, then shoulders & arms. Starts with two easy sets and a gentle tempo to learn the lifts, builds to three or four sets with a 3-second lowering, and moves from goblet squats to back squats in week 5. Weeks 4 and 8 are lighter.",
+        12,
+        workouts,
+        bodybuilding_defaults(),
+    )
+}
+
 /// Six days, one body part (or two small ones) a day, Sunday off.
 fn body_part() -> Program {
     split(
@@ -557,7 +623,7 @@ mod tests {
     #[test]
     fn starters_are_valid_programs() {
         let all = starter_programs();
-        assert_eq!(all.len(), 7);
+        assert_eq!(all.len(), 8);
         for p in &all {
             p.validate().unwrap_or_else(|e| panic!("{}: {e}", p.name));
             let size = serde_json::to_vec(p).unwrap().len();
@@ -609,7 +675,7 @@ mod tests {
     #[test]
     fn bodybuilding_lifts_all_have_a_tempo_that_slows_by_phase() {
         // Holds are timed, not tempo'd.
-        for p in [push_pull(), upper_lower(), body_part()] {
+        for p in [three_day(), push_pull(), upper_lower(), body_part()] {
             for pw in &p.workouts {
                 for it in pw.workout.blocks.iter().flat_map(|b| &b.items).filter(|it| !["plank", "side-plank", "hollow-hold"].contains(&it.exercise_id.as_str())) {
                     assert!(it.tempo.is_some(), "{} week {}: {} has no tempo", p.name, pw.week, it.exercise_name);
@@ -631,5 +697,15 @@ mod tests {
         assert_eq!(first(10), "squat-jump", "jumps come first in phase 3");
         assert_eq!(first(2), "goblet-squat");
         assert!(p.default_blocks.iter().all(|b| b.phase == Phase::Warmup), "runners do their own cardio");
+    }
+
+    #[test]
+    fn the_three_day_program_starts_gentle_and_squats_with_a_barbell_from_week_5() {
+        assert_eq!((tut_beginner(1).sets, tut_beginner(1).rpe), (2, 6.0));
+        assert!(tut_beginner(10).sets > tut_beginner(1).sets);
+        let p = three_day();
+        let legs = |week: u32| p.workouts.iter().find(|w| w.week == week && w.day == 3).unwrap().workout.blocks[0].items[0].exercise_id.clone();
+        assert_eq!((legs(4).as_str(), legs(5).as_str()), ("goblet-squat", "back-squat"));
+        assert!(p.workouts.iter().filter(|w| w.week == 1).all(|w| !w.workout.notes.is_empty()), "week 1 explains the tempo");
     }
 }
