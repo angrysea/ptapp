@@ -1983,6 +1983,28 @@ async fn assistant_coaches(t: &T) {
     assert!(progs.as_array().unwrap().iter().all(|p| p["clientId"].is_null() || p["clientId"] == "client1"), "only client1's and templates");
     assert_eq!(t.call("GET", "/clients/client1/logs", Some("asst1"), None).await.0, StatusCode::OK);
     assert!(!t.call("GET", "/clients/client1", Some("asst1"), None).await.1["intake"].is_null(), "with Health");
+    // security review: another client's program can't be assigned (or read) through client1
+    let (_, inv5) = t.call("POST", "/invites", Some("coach1"), Some(json!({ "email": "client5@dev.local", "clientName": "Five" }))).await;
+    assert_eq!(t.call("POST", &format!("/invites/{}/accept", inv5["code"].as_str().unwrap()), Some("client5"), Some(json!({ "consent": true }))).await.0, StatusCode::OK);
+    let item = json!({ "exerciseId": "back-squat", "exerciseName": "Back Squat", "sets": 3, "reps": "5", "loadKg": 100.0 });
+    let (s, other) = t
+        .call("POST", "/programs", Some("coach1"), Some(json!({ "name": "Five's", "weeks": 1, "clientId": "client5", "workouts": [{ "week": 1, "day": 1, "workout": { "name": "A", "blocks": [{ "kind": "straight", "items": [item] }] } }] })))
+        .await;
+    assert_eq!(s, StatusCode::OK, "{other}");
+    assert_eq!(t.call("GET", &format!("/programs/{}", other["id"].as_str().unwrap()), Some("asst1"), None).await.0, StatusCode::FORBIDDEN);
+    let start = (chrono::Utc::now().date_naive() + chrono::Duration::days(60)).to_string();
+    assert_eq!(t.call("POST", "/clients/client1/assignments", Some("asst1"), Some(json!({ "programId": other["id"], "startDate": start }))).await.0, StatusCode::FORBIDDEN);
+    // security review: without Messaging, only comments on workouts and videos, without attachments
+    t.call("PUT", "/team/asst1", Some("coach1"), Some(json!({ "perms": ["progress", "review"], "clients": ["client1"] }))).await;
+    let (s, thread) = t.call("GET", "/clients/client1/comments", Some("asst1"), None).await;
+    assert_eq!(s, StatusCode::OK);
+    assert!(thread.as_array().unwrap().iter().all(|c| (c["logId"].is_string() || c["videoId"].is_string()) && c["attachment"].is_null() && c["attachmentUrl"].is_null()), "{thread}");
+    assert_eq!(t.call("POST", "/clients/client1/comments", Some("asst1"), Some(json!({ "text": "Hi" }))).await.0, StatusCode::FORBIDDEN, "no Messaging");
+    // security review: a suspended head coach's assistants are shut out too
+    t.call("PUT", "/admin/coaches/coach1/suspended", Some("admin1"), Some(json!({ "suspended": true }))).await;
+    assert_eq!(t.call("GET", "/clients", Some("asst1"), None).await.0, StatusCode::FORBIDDEN);
+    t.call("PUT", "/admin/coaches/coach1/suspended", Some("admin1"), Some(json!({ "suspended": false }))).await;
+    assert_eq!(t.call("GET", "/clients", Some("asst1"), None).await.0, StatusCode::OK);
     // removed from the team: no access at all
     assert_eq!(t.call("DELETE", "/team/asst1", Some("coach1"), None).await.0, StatusCode::OK);
     assert_eq!(t.call("GET", "/clients", Some("asst1"), None).await.0, StatusCode::FORBIDDEN);

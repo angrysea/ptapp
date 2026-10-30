@@ -13,7 +13,7 @@ export const PERMS = [
   ['nutrition', 'Nutrition', 'Recipes, recipe books, meal plans, the food journal and nutrition targets.'],
   ['messaging', 'Messaging', 'Messages with the client, including the photos and voice notes they send.'],
   ['review', 'Video review', 'Set videos waiting for review, and video replies.'],
-  ['progress', 'Progress (view)', 'Workouts and logs, body metrics and photos, check-ins and habits. Read only.'],
+  ['progress', 'Progress (view)', 'Workouts and logs, body metrics and photos, check-ins, habits and the food journal. Read only.'],
   ['health', 'Health & intake', 'The intake questionnaire and health screening (PAR-Q, waiver).'],
 ];
 const permLabel = (p) => PERMS.find(([k]) => k === p)?.[1] ?? p;
@@ -26,6 +26,10 @@ function permBoxes(selected) {
   });
 }
 const picked = (boxes) => boxes.filter((b) => b.box.checked).map((b) => b.k);
+/** Tells every team card on screen to reload: the one that opened a sheet
+ * may have been replaced by a fresh render of the page meanwhile. */
+const TEAM_CHANGED = 'pt:team-changed';
+const changed = () => document.dispatchEvent(new Event(TEAM_CHANGED));
 
 /** Head coach's Profile card: the team, invitations, invite and edit. */
 export function teamCard() {
@@ -37,13 +41,13 @@ export function teamCard() {
     if (mine !== latest) return;
     const names = Object.fromEntries(roster.map((r) => [r.client.clientId, r.client.name]));
     mount(card,
-      h('div', { class: 'spread' }, h('h3', {}, 'Your team'), h('button', { class: 'small primary', onclick: () => inviteSheet(draw) }, '+ Invite assistant')),
+      h('div', { class: 'spread' }, h('h3', {}, 'Your team'), h('button', { class: 'small primary', onclick: () => inviteSheet() }, '+ Invite assistant')),
       h('p', { class: 'muted small' }, 'Assistant coaches help with the clients you assign them, for only what you allow. Clients see their name and title.'),
       team.members.length === 0 && team.invites.length === 0 && h('p', { class: 'muted small' }, 'No assistants yet.'),
       team.members.map((m) => h('div', { class: 'team-row' },
         h('div', { class: 'spread' },
           h('div', {}, h('strong', {}, m.name), ' ', h('span', { class: 'chip' }, m.title), h('div', { class: 'muted small' }, m.email)),
-          h('button', { class: 'small', onclick: () => memberSheet(m, roster, draw) }, 'Edit')),
+          h('button', { class: 'small', onclick: () => memberSheet(m, roster) }, 'Edit')),
         h('div', { class: 'small' }, m.perms.length ? m.perms.map(permLabel).join(' · ') : h('span', { class: 'muted' }, 'No permissions yet')),
         h('div', { class: 'muted small' }, m.clients.length ? `Clients: ${m.clients.map((c) => names[c] ?? c).join(', ')}` : 'No clients assigned yet'))),
       team.invites.map((i) => h('div', { class: 'spread small team-row' },
@@ -52,15 +56,20 @@ export function teamCard() {
           class: 'small ghost', onclick: async () => {
             if (!(await confirmSheet(`Cancel the invitation to ${i.email}?`, 'Cancel invitation'))) return;
             await api('DELETE', `/team/invites/${i.code}`);
-            draw();
+            changed();
           },
         }, 'Cancel'))));
   };
   draw().catch((e) => mount(card, h('h3', {}, 'Your team'), h('p', { class: 'muted small' }, e.message)));
+  const onChange = () => {
+    if (!card.isConnected) return document.removeEventListener(TEAM_CHANGED, onChange);
+    draw().catch(() => {});
+  };
+  document.addEventListener(TEAM_CHANGED, onChange);
   return card;
 }
 
-function inviteSheet(onDone) {
+function inviteSheet() {
   const email = h('input', { type: 'email', placeholder: 'name@example.com' });
   const name = h('input', { placeholder: 'Their name' });
   const title = h('input', { value: DEFAULT_TITLE, maxlength: 40, placeholder: DEFAULT_TITLE });
@@ -80,13 +89,13 @@ function inviteSheet(onDone) {
         const link = `${location.origin}${location.pathname}#/join/${inv.code}`;
         mount(result, h('p', { class: 'small' }, inv.emailed ? `Invitation emailed to ${inv.email}.` : 'Email isn’t set up here; share this link:', !inv.emailed && h('div', {}, h('input', { value: link, readonly: true, 'aria-label': 'Invitation link' }))));
         toast('Invitation sent');
-        onDone();
+        changed();
       }),
     }, 'Send invitation'),
     h('button', { class: 'ghost block', onclick: () => sh.close() }, 'Close'));
 }
 
-function memberSheet(m, roster, onDone) {
+function memberSheet(m, roster) {
   const title = h('input', { value: m.title, maxlength: 40 });
   const boxes = permBoxes(m.perms);
   const clientBoxes = roster.map((r) => {
@@ -105,7 +114,7 @@ function memberSheet(m, roster, onDone) {
         await put(`/team/${m.userId}`, { title: title.value, perms: picked(boxes), clients: clientBoxes.filter((c) => c.box.checked).map((c) => c.id) });
         toast('Saved');
         sh.close();
-        onDone();
+        changed();
       }),
     }, 'Save'),
     h('button', {
@@ -115,7 +124,7 @@ function memberSheet(m, roster, onDone) {
         await api('DELETE', `/team/${m.userId}`);
         toast(`${m.name} removed`);
         sh.close();
-        onDone();
+        changed();
       },
     }, 'Remove from team'),
     h('button', { class: 'ghost block', onclick: () => sh.close() }, 'Cancel'));

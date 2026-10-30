@@ -101,6 +101,10 @@ impl FromRequestParts<AppState> for Ctx {
                 .get(&format!("COACH#{}", profile.coach_id), &format!("ASSISTANT#{}", profile.user_id))
                 .await?
                 .ok_or(ApiError::Forbidden("you're no longer on this coach's team"))?;
+            let head: Option<Profile> = state.store.get(&format!("USER#{}", profile.coach_id), "PROFILE").await?;
+            if !head.is_some_and(|h| h.role == Role::Coach && h.suspended_at.is_none()) {
+                return Err(ApiError::Forbidden("your coach's account isn't active; contact them or PT Coach support"));
+            }
             Some(m)
         } else {
             None

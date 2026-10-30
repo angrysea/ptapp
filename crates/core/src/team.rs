@@ -20,7 +20,8 @@ pub enum Perm {
     Messaging,
     /// Set videos waiting for review, video replies.
     Review,
-    /// Read-only: workouts, logs, body metrics and photos, check-ins, habits.
+    /// Read-only: workouts, logs, body metrics and photos, check-ins, habits
+    /// and the food journal.
     Progress,
     /// The intake questionnaire and health screening.
     Health,

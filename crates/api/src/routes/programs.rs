@@ -74,7 +74,7 @@ fn visible(ctx: &Ctx, p: &Program) -> bool {
     p.client_id.as_deref().is_none_or(|c| ctx.sees_client(c))
 }
 
-fn check_visible(ctx: &Ctx, p: &Program) -> ApiResult<()> {
+pub fn check_visible(ctx: &Ctx, p: &Program) -> ApiResult<()> {
     if visible(ctx, p) { Ok(()) } else { Err(ApiError::Forbidden("this program belongs to a client who isn't assigned to you")) }
 }
 

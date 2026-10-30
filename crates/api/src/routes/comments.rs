@@ -14,7 +14,7 @@ use serde_json::{json, Value};
 use ptcore::credits::Service;
 use ptcore::team::Perm;
 use crate::auth::{client_scope_as, ClientScope, Ctx};
-use crate::error::{bad_request, ApiResult};
+use crate::error::{ApiError, bad_request, ApiResult};
 use crate::util::{
     audit, check_size, ext_for, new_id, presign_get, presign_put, s3_object_exists, untag, AUDIO_TYPES, IMAGE_TYPES, MAX_PHOTO_BYTES,
     MAX_VOICE_BYTES, PENDING_TAG,
@@ -33,7 +33,16 @@ fn attachment_prefix(scope: &crate::auth::ClientScope) -> String {
 pub async fn list(State(st): State<AppState>, ctx: Ctx, Path(cid): Path<String>) -> ApiResult<Json<Vec<Value>>> {
     let scope = client_scope_as(&st, &ctx, &cid, &[Perm::Messaging, Perm::Progress, Perm::Review]).await?;
     audit(&st, &ctx, &scope, "view-comments").await;
-    let comments: Vec<Comment> = st.store.query_prefix(&scope.pk(), "COMMENT#").await?;
+    let mut comments: Vec<Comment> = st.store.query_prefix(&scope.pk(), "COMMENT#").await?;
+    // The whole conversation (and what's attached) is for those who handle
+    // messages; an assistant with only Progress or Review sees the comments
+    // on workouts and videos, without attachments.
+    if ctx.is_assistant() && ctx.require(Perm::Messaging).is_err() {
+        comments.retain(|c| c.log_id.is_some() || c.video_id.is_some());
+        for c in &mut comments {
+            c.attachment = None;
+        }
+    }
     let out = try_join_all(comments.into_iter().map(|c| {
         let st = &st;
         async move {
@@ -100,6 +109,10 @@ pub async fn create(
     Json(body): Json<NewComment>,
 ) -> ApiResult<Json<Comment>> {
     let scope = client_scope_as(&st, &ctx, &cid, &[Perm::Messaging, Perm::Review]).await?;
+    // Without Messaging, an assistant (Review) only comments on a video or a workout.
+    if ctx.is_assistant() && ctx.require(Perm::Messaging).is_err() && (body.attachment.is_some() || (body.video_id.is_none() && body.log_id.is_none())) {
+        return Err(ApiError::Forbidden("your coach hasn't given you access to messaging this client"));
+    }
     let text = body.text.trim();
     if text.chars().count() > 4000 || (text.is_empty() && body.attachment.is_none()) {
         return Err(bad_request("comment must be 1-4000 characters"));

@@ -53,6 +53,8 @@ pub async fn assign(
         (None, Some(key)) => ptcore::starters::starter_programs().into_iter().find(|p| &p.id == key).ok_or(ApiError::NotFound("starter program"))?,
         _ => return Err(bad_request("pick one of your programs or a starter program")),
     };
+    // Another client's program is off limits to an assistant not assigned them.
+    super::programs::check_visible(&ctx, &program)?;
     let start = parse_date(&body.start_date)?;
     let end = end_date(start, program.weeks);
     // Two overlapping assignments would schedule the same dates twice and
