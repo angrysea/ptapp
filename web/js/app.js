@@ -19,6 +19,7 @@ import { onLive, startLive } from './realtime.js';
 import { disable as pushOff, resync as resyncPush } from './push.js';
 import { loadExercises, renderExercises } from './views/exercises.js';
 import { renderIntake, renderWaiver } from './views/intake.js';
+import { renderManual } from './views/manual.js';
 import { renderMetrics } from './views/metrics.js';
 import { captureInvite, renderOnboarding } from './views/onboarding.js';
 import { landing } from './views/landing.js';
@@ -72,6 +73,7 @@ async function boot() {
   const out = document.getElementById('signout');
   out.hidden = false;
   out.onclick = () => signOut().catch(errorToast);
+  document.getElementById('help').hidden = false;
 
   let me;
   try {
@@ -177,6 +179,8 @@ async function boot() {
     onLive(() => refreshMessageBadge());
   }
   route('/me', renderProfile);
+  route('/help', () => renderManual());
+  route('/help/:role', (role) => renderManual(role));
   route('/coaches', renderDirectory);
   route('/coaches/:id', renderCoachPage);
   route('/request/:id', renderRequest);

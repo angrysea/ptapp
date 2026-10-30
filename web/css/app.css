@@ -71,10 +71,17 @@ a { color: var(--accent); }
 }
 #sync { font-size: 0.8rem; background: rgba(0,0,0,.18); padding: 2px 10px; border-radius: 999px; }
 .top-right { display: flex; align-items: center; gap: 8px; }
-#signout { display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 40px; min-height: 0; padding: 0; margin: -8px -8px -8px 0;
+#signout, #help { display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 40px; min-height: 0; padding: 0; margin: -8px -8px -8px 0;
   background: transparent; border: 0; border-radius: 50%; color: var(--accent-ink); }
-#signout:hover, #signout:focus-visible { background: rgba(0,0,0,.18); }
-#signout[hidden] { display: none; }
+#help { margin-right: -4px; }
+#signout:hover, #signout:focus-visible, #help:hover, #help:focus-visible { background: rgba(0,0,0,.18); }
+#signout[hidden], #help[hidden] { display: none; }
+
+/* #/help: the user manual */
+.manual details > summary { cursor: pointer; font-weight: 600; padding: 4px 0; }
+.manual details[open] > summary { margin-bottom: 8px; }
+.manual ol, .manual ul { padding-left: 1.3em; }
+.manual li + li { margin-top: 6px; }
 
 main { max-width: 960px; margin: 0 auto; padding: 16px; }
 
