@@ -12,6 +12,7 @@ import { PHASES, distUnits, phaseOf, zoneInfo, zoneOptions } from '../cardio.js'
 import { $app, busy, confirmSheet, field, h, mount, num, select, sheet, toast, units } from '../ui.js';
 import { loadExercises } from './exercises.js';
 import { ruleEditor } from './progression.js';
+import { planningTabs } from './recipes.js';
 
 const KINDS = [['straight', 'Straight sets'], ['superset', 'Superset'], ['circuit', 'Circuit'], ['amrap', 'AMRAP'], ['emom', 'EMOM'], ['interval', 'Intervals'],
   ['steady', 'Steady state'], ['flow', 'Flow (once through)'], ['ramp', 'Ramp-up'], ['fortime', 'For time']];
@@ -37,6 +38,7 @@ export async function renderPrograms() {
   for (const p of list.filter((x) => x.clientId)) (byClient[p.clientName || 'Client'] ||= []).push(p);
   mount($app(),
     h('div', { class: 'spread page-head' }, h('h1', {}, 'Programs'), h('button', { class: 'primary', onclick: () => go('/programs/new') }, '+ New')),
+    planningTabs('/programs'),
     h('h2', {}, 'Your templates'),
     templates.length === 0 && h('div', { class: 'card muted' }, 'No templates yet. Build one, or start from a starter program below. Assigning one from a client’s Calendar tab gives that client their own copy to personalize.'),
     templates.map(programCard),

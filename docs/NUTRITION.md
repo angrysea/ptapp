@@ -183,3 +183,14 @@ estimate sheet from the coach's card.
   replaces rather than doubles.
 * Browser journey: the client logs a meal and imports a CSV; the coach sets
   targets and estimates by hand; Today's meters read 760 / 2,200 kcal.
+
+## Recipes, recipe books and meal plans
+
+`crates/core/src/recipes.rs`, `recipeimport.rs`; `crates/api/src/routes/recipes.rs`; `web/js/views/recipes.js`.
+
+* **Recipes** are ingredient lines (the journal's `Item`, so each can carry a USDA snapshot, grams, or numbers set by hand), steps, servings, times, tags and a source link. Per-serving calories and macros add up from the ingredients, unless set by hand (or stated by an imported page). Coaches match ingredients to USDA foods in the editor; clients, who can't search, type calories or per-serving numbers.
+* **Books** (`COACH#/BOOK#{id}`) file the coach's recipes (`COACH#/RECIPE#{id}`) and are shared with nobody, all clients, or chosen clients. Deleting a book leaves its recipes unfiled. Clients keep their own recipes (`CLIENT#/RECIPE#{id}`), which their coach can see.
+* **Import, by rules (no AI):** `POST /recipes/import` with `{text}` or `{url}` returns a draft to check; nothing is saved until it is. Text is split by its headings (Ingredients, Method, Notes…), or without headings by the shape of each line; fractions become decimals; servings and prep/cook times are read from their lines. A web page's schema.org Recipe (JSON-LD, which most recipe sites publish) is read field by field, including its stated nutrition; a page without it is reduced to text. **PDFs are read on the device** with pdf.js (`web/vendor/pdfjs-6.4.299/`, loaded only then) and only the text is sent.
+* **Link safety:** the API fetches a link only over http(s) on ports 80/443, only from hosts that resolve to public addresses (checked, then pinned, for each of up to four redirects, so neither DNS nor a redirect can point it at the Lambda's own network or the metadata service), within 10 seconds and 3 MB, HTML only.
+* **Meal plans** (`COACH#/MEALPLAN#{id}`) lay the coach's recipes out by week (1-12) and day, each meal a recipe and a number of servings, with each day's totals in the editor. Assigning one (`PUT /clients/{cid}/mealplan`) copies it to the client (`CLIENT#/MEALPLAN`) with the recipes it uses, from a start date; it repeats after its last week. The client's Meals card shows today's planned meals; "Log" writes a serving to the journal (through the outbox, so offline too), and each opens the recipe.
+* **Not yet:** cup and spoon weights for ingredients (add grams to count them), a shopping list, and photos on recipes.

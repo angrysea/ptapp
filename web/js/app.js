@@ -27,6 +27,7 @@ import { renderThread } from './views/comments.js';
 import { renderCheckin } from './views/checkins.js';
 import { renderAutomation } from './views/automation.js';
 import { coachHours, renderSchedule, renderSessions } from './views/sessions.js';
+import { renderMealPlanEditor, renderMealPlans, renderRecipeEditor, renderRecipes } from './views/recipes.js';
 import { renderReport } from './views/report.js';
 import { startUsage } from './usage.js';
 import { renderProfile, signOut } from './views/profile.js';
@@ -138,6 +139,10 @@ async function boot() {
     route('/c/:id/:tab/:focus', (id, tab, focus) => renderClient(id, tab, focus));
     route('/programs', renderPrograms);
     route('/programs/:id', renderProgramEditor);
+    route('/recipes', renderRecipes);
+    route('/recipes/:id', renderRecipeEditor);
+    route('/mealplans', renderMealPlans);
+    route('/mealplans/:id', renderMealPlanEditor);
     route('/exercises', renderExercises);
     route('/videos', renderVideoQueue);
     route('/messages', renderInbox);
@@ -159,6 +164,8 @@ async function boot() {
     route('/intake', renderIntake);
     route('/checkin', renderCheckin);
     route('/sessions', renderSessions);
+    route('/recipes', renderRecipes);
+    route('/recipes/:id', renderRecipeEditor);
     route('/report', () => renderReport(session.userId));
     route('/waiver', renderWaiver);
   }

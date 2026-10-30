@@ -52,6 +52,8 @@ When a coach reads intake, waiver, metrics or photos, an `AUDIT#` item is writte
 | `USER#{coach}` | `COACHPROFILE` | coach profile: private business details (legal name, phone, address, certification numbers, CPR, insurance) and the public profile; read only by the coach and admins |
 | `DIRECTORY` | `COACH#{coach}` | public copy of a complete, listed profile (no private fields); the only item the unauthenticated `/public/coaches` routes read |
 | `COACH#{coach}` | `EXERCISE#{id}` | custom exercise (built-ins are compiled into the binary) |
+| `COACH#{coach}` | `BOOK#{id}` / `RECIPE#{id}` / `MEALPLAN#{id}` | recipe books (shared with nobody, all or chosen clients), recipes, meal plans |
+| `CLIENT#{client}` | `RECIPE#{id}` / `MEALPLAN` | the client's own recipes; the meal plan they follow, with its recipes copied in |
 | `COACH#{coach}` | `PLAN#{id}` | a credit plan: credits per service (or unlimited) and how many days they last |
 | `COACH#{coach}` | `CREDIT_SETTINGS` | whether the coach requires credits |
 | `CLIENT#{client}` | `CREDIT#{id}` | credits of one service granted to the client (total or unlimited, used, expiry, plan) |
@@ -103,6 +105,9 @@ GET  /exercises POST /exercises  PUT|DELETE /exercises/{id}  POST /exercises/{id
 GET  /programs POST /programs    GET|PUT|DELETE /programs/{id}  POST /programs/{id}/copy
 GET  /clients                    GET /clients/{cid}
 GET|PUT  /clients/{cid}/intake   GET|POST /clients/{cid}/waiver   GET /clients/{cid}/dashboard?weeks=
+GET|POST /recipes   GET|PUT|DELETE /recipes/{rid}   POST /recipes/import {text|url}   GET|POST /recipes/books   PUT|DELETE /recipes/books/{bid}
+GET|POST /clients/{cid}/recipes   PUT|DELETE /clients/{cid}/recipes/{rid}   GET|POST /mealplans   GET|PUT|DELETE /mealplans/{id}
+GET|PUT|DELETE /clients/{cid}/mealplan   # today's planned meals; assign; remove
 GET|PUT  /credits/settings   GET|POST /plans   PUT|DELETE /plans/{id}           # service credits (coach)
 GET|POST /clients/{cid}/credits   POST /clients/{cid}/credits/plan   PUT|DELETE /clients/{cid}/credits/{gid}
 GET|POST /clients/{cid}/assignments   DELETE /clients/{cid}/assignments/{aid}   # POST {programId | starterKey, startDate}: copies for the client unless it's theirs

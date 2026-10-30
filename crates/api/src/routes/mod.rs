@@ -18,6 +18,7 @@ pub mod metrics;
 pub mod nutrition;
 pub mod notify;
 pub mod programs;
+pub mod recipes;
 pub mod records;
 pub mod requests;
 pub mod replies;

@@ -28,10 +28,11 @@ const G_PER_OZ: f64 = 28.349_523_125;
 const G_PER_LB: f64 = 453.592_37;
 
 /// How an item's calories came to be known.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum Basis {
     /// The client typed it; nothing estimated yet.
+    #[default]
     FreeText,
     /// The coach matched the line to a food and attached its snapshot.
     Searched,
@@ -117,6 +118,7 @@ pub struct Item {
     pub carbs: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fat: Option<f64>,
+    #[serde(default)]
     pub basis: Basis,
 }
 

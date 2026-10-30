@@ -13,6 +13,8 @@ pub mod model;
 pub mod foodimport;
 pub mod nutrition;
 pub mod progression;
+pub mod recipeimport;
+pub mod recipes;
 pub mod schedule;
 pub mod starters;
 pub mod sessions;

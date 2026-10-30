@@ -8,13 +8,14 @@
 
 import { api, enqueue, get, myOutbox, post, put } from '../api.js';
 import { addDays, busy, field, fmtDate, h, mount, num, select, sheet, toast, uid } from '../ui.js';
+import { mealPlanSheet, todaysPlan } from './recipes.js';
 
 const mealPath = (cid, id) => `/clients/${cid}/meals/${id}`;
 const MACROS = [['protein', 'Protein'], ['carbs', 'Carbs'], ['fat', 'Fat']];
 
 /** An item's kcal and macros the way the server counts them (nutrition.rs
  * `Item::macros`): a number set by hand wins, else the food scaled to grams. */
-function itemMacros(it) {
+export function itemMacros(it) {
   const f = it.food;
   const scaled = (per) => (f && it.grams && per != null ? per * it.grams / (f.perGrams || 100) : 0);
   return {
@@ -93,9 +94,12 @@ export async function todayCard(slot, me) {
     const meals = data.meals ?? [];
     const today = meals.filter((m) => m.date === data.today);
     const recent = meals.filter((m) => (m.date ?? '') >= addDays(data.today, -2)).slice(-5).reverse();
+    const plan = await todaysPlan(me, draw);
     mount(slot,
       h('div', { class: 'card' },
-        h('div', { class: 'spread' }, h('h3', {}, 'Meals'), h('button', { class: 'small ghost', onclick: () => logSheet(me, data.today, draw) }, '+ Log a meal')),
+        h('div', { class: 'spread' }, h('h3', {}, 'Meals'),
+          h('div', { class: 'row' }, h('a', { class: 'btn small ghost', href: '#/recipes' }, 'Recipes'), h('button', { class: 'small ghost', onclick: () => logSheet(me, data.today, draw) }, '+ Log a meal'))),
+        plan,
         (today.some((m) => m.items?.some(estimated)) || data.target) && todayMeters(today, data.target),
         data.target?.note && h('p', { class: 'small muted' }, `Coach: ${data.target.note}`),
         recent.length
@@ -200,6 +204,7 @@ export async function overviewCard(client) {
     mount(card,
       h('div', { class: 'spread' }, h('h3', {}, 'Food journal'),
         h('div', { class: 'row' },
+          h('button', { class: 'small ghost', onclick: () => mealPlanSheet(client, draw) }, 'Meal plan'),
           h('button', { class: 'small ghost', onclick: () => targetSheet(client.userId, t, draw) }, t ? 'Targets' : 'Set targets'),
           h('button', { class: 'small', onclick: () => estimate(client.userId, draw) }, 'Estimate'))),
       t && h('p', { class: 'small muted' }, 'Targets: ', [t.kcal && `${t.kcal} kcal`, ...MACROS.filter(([k]) => t[k] != null).map(([k, l]) => `${l} ${t[k]} g`)].filter(Boolean).join(' · '),

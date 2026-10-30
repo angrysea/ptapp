@@ -17,6 +17,22 @@ def tiny_png(w=8, h=8):
     return (signature + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
             + chunk(b"IDAT", zlib.compress(row * h)) + chunk(b"IEND", b""))
 
+def tiny_pdf(lines):
+    """A one-page PDF with each of `lines` on its own line (real text, so pdf.js reads it)."""
+    esc = lambda t: t.replace("\\", "\\\\").replace("(", "\(").replace(")", "\)")
+    text = "BT /F1 12 Tf 50 750 Td 16 TL " + " ".join(f"({esc(l)}) Tj T*" for l in lines) + " ET"
+    objs = ["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>",
+            f"<< /Length {len(text)} >>\nstream\n{text}\nendstream", "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"]
+    out, offsets = b"%PDF-1.4\n", []
+    for i, o in enumerate(objs, 1):
+        offsets.append(len(out))
+        out += f"{i} 0 obj\n{o}\nendobj\n".encode()
+    xref = len(out)
+    out += f"xref\n0 {len(objs) + 1}\n0000000000 65535 f \n".encode() + b"".join(f"{o:010d} 00000 n \n".encode() for o in offsets)
+    out += f"trailer\n<< /Size {len(objs) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode()
+    return out
+
 def watch(page, who):
     page.on("console", lambda m: m.type == "error" and "ERR_INTERNET_DISCONNECTED" not in m.text and errors.append(f"[{who}] console: {m.text}"))
     page.on("pageerror", lambda e: errors.append(f"[{who}] pageerror: {e}"))
@@ -829,6 +845,63 @@ with sync_playwright() as p:
     coach.locator(".cal .day.has").first.click()
     expect(coach.locator(".block-card", has_text="Stage 5 · Back Squat")).to_be_visible()
     shot(coach, "16b-benchmark-workout")
+
+    # ---------------- recipes and meal plans: import, a shared book, a plan for today, logged
+    coach.get_by_role("link", name="Programs").click()
+    coach.locator(".subtabs").get_by_role("button", name="Recipes").click()
+    expect(coach.get_by_role("heading", name="Recipes", exact=True)).to_be_visible()
+    coach.get_by_role("button", name="+ New recipe book").click()
+    coach.locator(".sheet").get_by_label("Name", exact=True).fill("Breakfasts")
+    coach.locator(".sheet").get_by_role("button", name="Save book").click()
+    expect(coach.get_by_text("Shared with all clients")).to_be_visible()
+    coach.get_by_role("button", name="Import").click()
+    coach.get_by_label("Recipe text").fill("Overnight oats\nServes 2\nIngredients\n- 100 g oats\n- 200 g milk\nMethod\n1. Mix and chill overnight.")
+    coach.get_by_role("button", name="Read recipe").click()
+    expect(coach.get_by_label("Title", exact=True)).to_have_value("Overnight oats")
+    coach.get_by_label("Calories of ingredient 1").fill("380")
+    coach.get_by_label("Calories of ingredient 2").fill("120")
+    expect(coach.locator(".card", has_text="Ingredients")).to_contain_text("Per serving: 250 kcal")
+    coach.get_by_label("Book").select_option(label="Breakfasts")
+    coach.get_by_role("button", name="Save recipe").click()
+    expect(coach.get_by_text("Recipe saved")).to_be_visible()
+    shot(coach, "16f-recipe")
+    coach.get_by_role("button", name="‹ Recipes").click()
+    coach.locator(".subtabs").get_by_role("button", name="Meal plans").click()
+    expect(coach.get_by_role("heading", name="Meal plans", exact=True)).to_be_visible()
+    coach.get_by_role("button", name="+ New", exact=True).click()
+    coach.get_by_label("Name", exact=True).fill("Lean week")
+    weekday = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][datetime.date.today().weekday()]
+    coach.get_by_role("button", name=f"+ Meal on {weekday}").click()
+    coach.locator(".sheet").get_by_label("Meal", exact=True).select_option("Breakfast")
+    coach.locator(".sheet").get_by_role("button", name="Add", exact=True).click()
+    expect(coach.locator(".plan-day", has_text=weekday)).to_contain_text("250 kcal")
+    coach.get_by_role("button", name="Save meal plan").click()
+    expect(coach.get_by_text("Meal plan saved")).to_be_visible()
+    coach.goto(coach.url.split("#")[0] + "#/c/client" + RUN + "/overview")
+    coach.locator(".card", has_text="Food journal").get_by_role("button", name="Meal plan").click()
+    coach.locator(".sheet").get_by_role("button", name="Assign").click()
+    expect(coach.get_by_text("Meal plan assigned")).to_be_visible()
+    # the client sees today's planned breakfast and logs it in a tap
+    client.get_by_role("link", name="Today").click()
+    plan = client.locator(".plan-today")
+    expect(plan).to_contain_text("Breakfast: Overnight oats × 1")
+    plan.get_by_role("button", name="Log").click()
+    expect(client.get_by_text("Logged to your food journal")).to_be_visible()
+    expect(client.locator(".meal-line", has_text="250 kcal")).to_contain_text("Breakfast")
+    shot(client, "16g-todays-plan")
+    # the shared book, and a PDF of their own read on the device
+    client.locator(".card", has_text="Meals").get_by_role("link", name="Recipes").click()
+    expect(client.locator(".card", has_text="Breakfasts")).to_contain_text("Overnight oats")
+    client.get_by_role("button", name="Import").click()
+    client.get_by_label("Import from").select_option("pdf")
+    client.get_by_label("PDF file").set_input_files(files=[{"name": "smoothie.pdf", "mimeType": "application/pdf", "buffer": tiny_pdf(["Banana smoothie", "Serves 1", "Ingredients", "- 1 banana", "- 250 g milk", "Method", "1. Blend until smooth."])}])
+    client.get_by_role("button", name="Read recipe").click()
+    expect(client.get_by_label("Title", exact=True)).to_have_value("Banana smoothie")
+    client.get_by_role("button", name="Save recipe").click()
+    expect(client.get_by_text("Recipe saved")).to_be_visible()
+    client.get_by_role("button", name="‹ Recipes").click()
+    expect(client.locator(".card", has_text="My recipes")).to_contain_text("Banana smoothie")
+    shot(client, "16h-client-recipes")
 
     # ---------------- service credits: a plan, required, granted; the client stops at zero
     coach.get_by_role("link", name="Profile").click()

@@ -391,6 +391,9 @@ table.checkins thead th { white-space: nowrap; }
 .meter > span { display: block; height: 100%; background: var(--good); }
 .meter.over > span { background: var(--warn); }
 .credit-row { margin: 6px 0; }
+.recipe-row { padding: 8px 0; border-bottom: 1px solid var(--line); }
+.plan-day { padding: 8px 0; border-bottom: 1px solid var(--line); }
+.plan-today { margin: 8px 0; padding: 8px; border-radius: 10px; background: var(--accent-soft); }
 .meal-line { display: block; text-align: left; margin: 4px 0; color: var(--muted); }
 
 /* Drawing over the review video (views/draw.js). */

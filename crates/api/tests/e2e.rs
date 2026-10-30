@@ -1561,6 +1561,7 @@ async fn journey() {
     t.call("PUT", "/admin/coaches/coach1/suspended", Some("admin1"), Some(json!({ "suspended": false }))).await;
     assert_eq!(t.text(&coach_feed).await.0, StatusCode::NOT_FOUND, "suspending removed the link; the coach makes a new one");
 
+    Box::pin(recipes_and_meal_plans(&t, local_today)).await;
     Box::pin(service_credits(&t, &s3, &bucket, local_today)).await;
 
     // --- security review: deleting a client's account removes the coach's copies of their sessions
@@ -1851,4 +1852,71 @@ async fn service_credits(t: &T, s3: &aws_sdk_s3::Client, bucket: &str, today: ch
     // enforcement off again: nothing is refused
     t.call("PUT", "/credits/settings", Some("coach1"), Some(json!({ "enforce": false }))).await;
     assert_eq!(send("after").await.0, StatusCode::OK);
+}
+
+/// Recipes: books shared with clients, imports (and links that must not be
+/// fetched), clients' own recipes, meal plans and what a client sees of one.
+async fn recipes_and_meal_plans(t: &T, today: chrono::NaiveDate) {
+    // a book shared with every client; clients can't make books
+    assert_eq!(t.call("POST", "/recipes/books", Some("client1"), Some(json!({ "name": "x" }))).await.0, StatusCode::FORBIDDEN);
+    let (s, book) = t.call("POST", "/recipes/books", Some("coach1"), Some(json!({ "name": "Breakfasts", "shared": { "with": "all" } }))).await;
+    assert_eq!(s, StatusCode::OK, "{book}");
+    // import from text gives a draft, nothing saved
+    let (s, draft) = t.call("POST", "/recipes/import", Some("coach1"), Some(json!({ "text": "Oat bowl\nServes 2\nIngredients\n- 100 g oats\n- 200 g milk\nMethod\n1. Mix and soak overnight." }))).await;
+    assert_eq!(s, StatusCode::OK, "{draft}");
+    assert_eq!((draft["recipe"]["title"].as_str(), draft["recipe"]["servings"].as_f64()), (Some("Oat bowl"), Some(2.0)));
+    assert_eq!(draft["recipe"]["ingredients"].as_array().unwrap().len(), 2);
+    // links that would reach the server itself or its network are refused
+    for url in ["http://127.0.0.1:9000/health", "http://169.254.169.254/latest/meta-data/", "http://localhost/", "ftp://example.com/r", "file:///etc/passwd", "http://user:pw@example.com/"] {
+        let (s, e) = t.call("POST", "/recipes/import", Some("coach1"), Some(json!({ "url": url }))).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "{url}: {e}");
+    }
+    // save it with USDA snapshots on the ingredients; macros per serving add up
+    let mut recipe = draft["recipe"].clone();
+    recipe["bookId"] = book["id"].clone();
+    recipe["ingredients"][0]["food"] = json!({ "fdcId": "1", "perGrams": 100.0, "kcalPer": 380.0, "proteinPer": 13.0 });
+    recipe["ingredients"][1]["food"] = json!({ "fdcId": "2", "perGrams": 100.0, "kcalPer": 60.0, "proteinPer": 3.0 });
+    let (s, oats) = t.call("POST", "/recipes", Some("coach1"), Some(recipe.clone())).await;
+    assert_eq!(s, StatusCode::OK, "{oats}");
+    let rid = oats["id"].as_str().unwrap().to_string();
+    let mut nobook = recipe.clone();
+    nobook["bookId"] = json!("nope");
+    assert_eq!(t.call("POST", "/recipes", Some("coach1"), Some(nobook)).await.0, StatusCode::BAD_REQUEST);
+
+    // the client sees the shared book; a client's own recipe is theirs, and their coach's to see
+    let (_, seen) = t.call("GET", "/clients/client1/recipes", Some("client1"), None).await;
+    assert_eq!(seen["books"][0]["recipes"][0]["title"], "Oat bowl", "{seen}");
+    let mine = json!({ "title": "Mum's chili", "servings": 4, "ingredients": [{ "text": "500 g beef" }], "steps": ["Simmer"] });
+    let (s, own) = t.call("POST", "/clients/client1/recipes", Some("client1"), Some(mine)).await;
+    assert_eq!(s, StatusCode::OK, "{own}");
+    let (_, coach_view) = t.call("GET", "/clients/client1/recipes", Some("coach1"), None).await;
+    assert_eq!(coach_view["mine"][0]["title"], "Mum's chili");
+    assert_eq!(t.call("GET", "/clients/client1/recipes", Some("coach2"), None).await.0, StatusCode::FORBIDDEN);
+    // shared with someone else only: the client no longer sees it
+    let (_, b2) = t.call("PUT", &format!("/recipes/books/{}", book["id"].as_str().unwrap()), Some("coach1"), Some(json!({ "name": "Breakfasts", "shared": { "with": "clients", "ids": ["client9"] } }))).await;
+    assert_eq!(b2["shared"]["with"], "clients");
+    assert_eq!(t.call("GET", "/clients/client1/recipes", Some("client1"), None).await.1["books"].as_array().unwrap().len(), 0);
+
+    // a meal plan: the oat bowl every day of week 1, with day totals
+    let days: Vec<Value> = (1..=7).map(|d| json!({ "week": 1, "day": d, "meals": [{ "label": "Breakfast", "recipeId": rid, "servings": 1.5 }] })).collect();
+    let (s, plan) = t.call("POST", "/mealplans", Some("coach1"), Some(json!({ "name": "Lean week", "weeks": 1, "days": days }))).await;
+    assert_eq!(s, StatusCode::OK, "{plan}");
+    let total = plan["dayTotals"][0]["total"]["kcal"].as_f64().unwrap();
+    assert!((total - 375.0).abs() < 0.01, "(380 + 120) / 2 servings × 1.5 = {total}");
+    let bad = json!({ "name": "x", "weeks": 1, "days": [{ "week": 1, "day": 1, "meals": [{ "label": "L", "recipeId": "missing", "servings": 1 }] }] });
+    assert_eq!(t.call("POST", "/mealplans", Some("coach1"), Some(bad)).await.0, StatusCode::BAD_REQUEST, "an unknown recipe");
+    // assigned: the client sees today's meals with the recipe, even after the coach deletes it
+    let pid = plan["plan"]["id"].as_str().unwrap();
+    assert_eq!(t.call("PUT", "/clients/client1/mealplan", Some("client1"), Some(json!({ "planId": pid, "startDate": today.to_string() }))).await.0, StatusCode::FORBIDDEN);
+    let (s, a) = t.call("PUT", "/clients/client1/mealplan", Some("coach1"), Some(json!({ "planId": pid, "startDate": today.to_string() }))).await;
+    assert_eq!(s, StatusCode::OK, "{a}");
+    t.call("DELETE", &format!("/recipes/{rid}"), Some("coach1"), None).await;
+    let (_, day) = t.call("GET", "/clients/client1/mealplan", Some("client1"), None).await;
+    assert_eq!(day["assigned"]["name"], "Lean week");
+    assert_eq!(day["meals"][0]["recipe"]["title"], "Oat bowl", "the plan carries its own copy: {day}");
+    assert_eq!(day["meals"][0]["perServing"]["kcal"].as_f64(), Some(250.0));
+    let (_, before) = t.call("GET", &format!("/clients/client1/mealplan?date={}", today - chrono::Duration::days(1)), Some("client1"), None).await;
+    assert_eq!(before["meals"].as_array().unwrap().len(), 0, "nothing before the start");
+    t.call("DELETE", "/clients/client1/mealplan", Some("coach1"), None).await;
+    assert!(t.call("GET", "/clients/client1/mealplan", Some("client1"), None).await.1["assigned"].is_null());
 }
