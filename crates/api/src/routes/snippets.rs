@@ -8,6 +8,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+use ptcore::team::Perm;
 use crate::auth::Ctx;
 use crate::error::{bad_request, ApiError, ApiResult};
 use crate::util::new_id;
@@ -57,14 +58,14 @@ fn sk(id: &str) -> String {
 
 /// `GET /snippets`, by name.
 pub async fn list(State(st): State<AppState>, ctx: Ctx) -> ApiResult<Json<Vec<Snippet>>> {
-    let coach = ctx.require_coach()?;
+    let coach = ctx.require_any(&[Perm::Messaging, Perm::Review])?;
     let mut all: Vec<Snippet> = st.store.query_prefix(&pk(coach), "SNIPPET#").await?;
     all.sort_by_key(|s| s.title.to_lowercase());
     Ok(Json(all))
 }
 
 pub async fn create(State(st): State<AppState>, ctx: Ctx, Json(body): Json<SnippetIn>) -> ApiResult<Json<Snippet>> {
-    let coach = ctx.require_coach()?;
+    let coach = ctx.require_any(&[Perm::Messaging, Perm::Review])?;
     let (title, text) = body.clean()?;
     let existing: Vec<Snippet> = st.store.query_prefix(&pk(coach), "SNIPPET#").await?;
     if existing.len() >= MAX_SNIPPETS {
@@ -76,7 +77,7 @@ pub async fn create(State(st): State<AppState>, ctx: Ctx, Json(body): Json<Snipp
 }
 
 pub async fn update(State(st): State<AppState>, ctx: Ctx, Path(id): Path<String>, Json(body): Json<SnippetIn>) -> ApiResult<Json<Snippet>> {
-    let coach = ctx.require_coach()?;
+    let coach = ctx.require_any(&[Perm::Messaging, Perm::Review])?;
     let mut s: Snippet = st.store.get(&pk(coach), &sk(&id)).await?.ok_or(ApiError::NotFound("snippet"))?;
     (s.title, s.text) = body.clean()?;
     s.updated_at = Utc::now();
@@ -85,7 +86,7 @@ pub async fn update(State(st): State<AppState>, ctx: Ctx, Path(id): Path<String>
 }
 
 pub async fn remove(State(st): State<AppState>, ctx: Ctx, Path(id): Path<String>) -> ApiResult<Json<Value>> {
-    let coach = ctx.require_coach()?;
+    let coach = ctx.require_any(&[Perm::Messaging, Perm::Review])?;
     if st.store.get::<Snippet>(&pk(coach), &sk(&id)).await?.is_none() {
         return Err(ApiError::NotFound("snippet"));
     }

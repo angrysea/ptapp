@@ -17,7 +17,8 @@ use ptcore::strength::resolve_workout;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use crate::auth::{client_scope, ClientScope, Ctx};
+use ptcore::team::Perm;
+use crate::auth::{client_scope_as, ClientScope, Ctx};
 use crate::routes::maxes::maxes_by_exercise;
 use crate::store::keyed;
 use crate::error::{bad_request, ApiError, ApiResult};
@@ -67,23 +68,36 @@ fn clear_ids(blocks: &mut [Block]) {
     }
 }
 
+/// Whether the caller may see this program: templates are the whole team's;
+/// a client's program, only the head coach's and that client's assistants'.
+fn visible(ctx: &Ctx, p: &Program) -> bool {
+    p.client_id.as_deref().is_none_or(|c| ctx.sees_client(c))
+}
+
+fn check_visible(ctx: &Ctx, p: &Program) -> ApiResult<()> {
+    if visible(ctx, p) { Ok(()) } else { Err(ApiError::Forbidden("this program belongs to a client who isn't assigned to you")) }
+}
+
 pub async fn list(State(st): State<AppState>, ctx: Ctx) -> ApiResult<Json<Vec<Program>>> {
-    let coach = ctx.require_coach()?;
+    let coach = ctx.require(Perm::Programming)?;
     let mut programs: Vec<Program> = st.store.query_prefix(&pk(coach), "PROGRAM#").await?;
+    programs.retain(|p| visible(&ctx, p));
     programs.sort_by_key(|p| std::cmp::Reverse(p.updated_at));
     Ok(Json(programs))
 }
 
 pub async fn get_one(State(st): State<AppState>, ctx: Ctx, Path(id): Path<String>) -> ApiResult<Json<Program>> {
-    let coach = ctx.require_coach()?;
-    st.store.get(&pk(coach), &sk(&id)).await?.map(Json).ok_or(ApiError::NotFound("program"))
+    let coach = ctx.require(Perm::Programming)?;
+    let p: Program = st.store.get(&pk(coach), &sk(&id)).await?.ok_or(ApiError::NotFound("program"))?;
+    check_visible(&ctx, &p)?;
+    Ok(Json(p))
 }
 
 pub async fn create(State(st): State<AppState>, ctx: Ctx, Json(mut p): Json<Program>) -> ApiResult<Json<Program>> {
-    let coach = ctx.require_coach()?;
+    let coach = ctx.require(Perm::Programming)?;
     // A program for one client must be for one of this coach's clients.
     p.client_name = match &p.client_id {
-        Some(cid) => Some(client_scope(&st, &ctx, cid).await?.client.name),
+        Some(cid) => Some(client_scope_as(&st, &ctx, cid, &[Perm::Programming]).await?.client.name),
         None => None,
     };
     p.id = new_id();
@@ -99,8 +113,9 @@ pub async fn update(
     Path(id): Path<String>,
     Json(mut p): Json<Program>,
 ) -> ApiResult<Json<Value>> {
-    let coach = ctx.require_coach()?;
+    let coach = ctx.require(Perm::Programming)?;
     let existing: Program = st.store.get(&pk(coach), &sk(&id)).await?.ok_or(ApiError::NotFound("program"))?;
+    check_visible(&ctx, &existing)?;
     p.id = id;
     // Who a program is for is set when it's made, not by an edit.
     (p.client_id, p.client_name) = (existing.client_id, existing.client_name);
@@ -109,7 +124,7 @@ pub async fn update(
     // A client's program: their upcoming workouts follow the edit. Checked
     // before saving, so a program that would no longer fit isn't saved.
     let scope = match &p.client_id {
-        Some(cid) => client_scope(&st, &ctx, cid).await.ok(),
+        Some(cid) => client_scope_as(&st, &ctx, cid, &[Perm::Programming]).await.ok(),
         None => None,
     };
     let plan = match &scope {
@@ -209,7 +224,10 @@ async fn apply_resync(st: &AppState, scope: &ClientScope, p: &Program, plan: Res
 }
 
 pub async fn remove(State(st): State<AppState>, ctx: Ctx, Path(id): Path<String>) -> ApiResult<Json<Value>> {
-    let coach = ctx.require_coach()?;
+    let coach = ctx.require(Perm::Programming)?;
+    if let Some(p) = st.store.get::<Program>(&pk(coach), &sk(&id)).await? {
+        check_visible(&ctx, &p)?;
+    }
     st.store.delete(&pk(coach), &sk(&id)).await?;
     Ok(Json(json!({ "ok": true })))
 }
@@ -217,14 +235,14 @@ pub async fn remove(State(st): State<AppState>, ctx: Ctx, Path(id): Path<String>
 /// `GET /programs/starters`: the ready-made programs (ptcore::starters)
 /// a coach can start from.
 pub async fn starters(ctx: Ctx) -> ApiResult<Json<Vec<Program>>> {
-    ctx.require_coach()?;
+    ctx.require(Perm::Programming)?;
     Ok(Json(starter_programs()))
 }
 
 /// `POST /programs/starters/{key}/copy`: the coach's own copy of a starter
 /// program, to edit and assign like any other.
 pub async fn copy_starter(State(st): State<AppState>, ctx: Ctx, Path(key): Path<String>) -> ApiResult<Json<Program>> {
-    let coach = ctx.require_coach()?;
+    let coach = ctx.require(Perm::Programming)?;
     let mut p = starter_programs().into_iter().find(|p| p.id == key).ok_or(ApiError::NotFound("starter program"))?;
     p.id = new_id();
     normalize(&mut p);
@@ -245,8 +263,9 @@ pub async fn copy(
     Path(id): Path<String>,
     Json(body): Json<CopyBody>,
 ) -> ApiResult<Json<Program>> {
-    let coach = ctx.require_coach()?;
+    let coach = ctx.require(Perm::Programming)?;
     let mut p: Program = st.store.get(&pk(coach), &sk(&id)).await?.ok_or(ApiError::NotFound("program"))?;
+    check_visible(&ctx, &p)?;
     p.id = new_id();
     p.name = body.name.filter(|n| !n.trim().is_empty()).unwrap_or_else(|| format!("{} (copy)", p.name));
     for pw in &mut p.workouts {

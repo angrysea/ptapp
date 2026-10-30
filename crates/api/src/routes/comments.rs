@@ -12,7 +12,8 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use ptcore::credits::Service;
-use crate::auth::{client_scope, ClientScope, Ctx};
+use ptcore::team::Perm;
+use crate::auth::{client_scope_as, ClientScope, Ctx};
 use crate::error::{bad_request, ApiResult};
 use crate::util::{
     audit, check_size, ext_for, new_id, presign_get, presign_put, s3_object_exists, untag, AUDIO_TYPES, IMAGE_TYPES, MAX_PHOTO_BYTES,
@@ -30,7 +31,7 @@ fn attachment_prefix(scope: &crate::auth::ClientScope) -> String {
 /// The thread, oldest first; messages with a photo or voice note carry a
 /// short-lived `attachmentUrl`.
 pub async fn list(State(st): State<AppState>, ctx: Ctx, Path(cid): Path<String>) -> ApiResult<Json<Vec<Value>>> {
-    let scope = client_scope(&st, &ctx, &cid).await?;
+    let scope = client_scope_as(&st, &ctx, &cid, &[Perm::Messaging, Perm::Progress, Perm::Review]).await?;
     audit(&st, &ctx, &scope, "view-comments").await;
     let comments: Vec<Comment> = st.store.query_prefix(&scope.pk(), "COMMENT#").await?;
     let out = try_join_all(comments.into_iter().map(|c| {
@@ -58,7 +59,7 @@ pub struct NewAttachment {
 /// `POST /clients/{cid}/attachments`: an upload URL for a photo or voice note
 /// to send in the thread. Unsent uploads keep the pending tag and expire.
 pub async fn attachment(State(st): State<AppState>, ctx: Ctx, Path(cid): Path<String>, Json(body): Json<NewAttachment>) -> ApiResult<Json<Value>> {
-    let scope = client_scope(&st, &ctx, &cid).await?;
+    let scope = client_scope_as(&st, &ctx, &cid, &[Perm::Messaging]).await?;
     let (types, max) = match body.kind {
         AttachmentKind::Photo => (IMAGE_TYPES, MAX_PHOTO_BYTES),
         AttachmentKind::Voice => (AUDIO_TYPES, MAX_VOICE_BYTES),
@@ -98,7 +99,7 @@ pub async fn create(
     Path(cid): Path<String>,
     Json(body): Json<NewComment>,
 ) -> ApiResult<Json<Comment>> {
-    let scope = client_scope(&st, &ctx, &cid).await?;
+    let scope = client_scope_as(&st, &ctx, &cid, &[Perm::Messaging, Perm::Review]).await?;
     let text = body.text.trim();
     if text.chars().count() > 4000 || (text.is_empty() && body.attachment.is_none()) {
         return Err(bad_request("comment must be 1-4000 characters"));
@@ -139,7 +140,7 @@ pub async fn create(
         id: new_id(),
         author_id: ctx.user_id().to_string(),
         author_role: ctx.profile.role,
-        author_name: ctx.profile.name.clone(),
+        author_name: ctx.display_name(),
         log_id,
         item_id,
         set_index,

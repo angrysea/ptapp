@@ -17,6 +17,8 @@ pub enum Role {
     Coach,
     Client,
     Admin,
+    /// On a head coach's team (team.rs); their profile's `coach_id` is the head coach.
+    Assistant,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -111,6 +113,11 @@ pub struct Invite {
     pub accepted_by: Option<String>,
     /// DynamoDB TTL (epoch seconds); unaccepted invites expire.
     pub ttl: i64,
+    /// Assistant invites: the title and permissions the assistant joins with.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub perms: Vec<crate::team::Perm>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -119,6 +126,8 @@ pub enum InviteKind {
     #[default]
     Client,
     Coach,
+    /// Joins a head coach's team (team.rs).
+    Assistant,
 }
 
 /// An admin's list of coaches (`ADMIN` / `COACH#{id}`).

@@ -7,6 +7,7 @@ use ptcore::model::{Exercise, Filming, Modality};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+use ptcore::team::Perm;
 use crate::auth::Ctx;
 use crate::error::{bad_request, ApiError, ApiResult};
 use crate::util::{check_size, ext_for, new_id, presign_get, presign_put, s3_object_exists, MAX_VIDEO_BYTES, PENDING_TAG, VIDEO_TYPES, untag};
@@ -69,7 +70,7 @@ fn clean(list: Vec<String>) -> Vec<String> {
 }
 
 pub async fn create(State(st): State<AppState>, ctx: Ctx, Json(body): Json<ExerciseIn>) -> ApiResult<Json<Exercise>> {
-    let coach = ctx.require_coach()?;
+    let coach = ctx.require(Perm::Programming)?;
     if body.name.trim().is_empty() {
         return Err(bad_request("name is required"));
     }
@@ -106,7 +107,7 @@ pub async fn update(
     Path(id): Path<String>,
     Json(body): Json<ExerciseIn>,
 ) -> ApiResult<Json<Exercise>> {
-    let coach = ctx.require_coach()?;
+    let coach = ctx.require(Perm::Programming)?;
     let mut ex = load_custom(&st, coach, &id).await?;
     if !body.name.trim().is_empty() {
         ex.name = body.name.trim().to_string();
@@ -130,7 +131,7 @@ async fn delete_object(st: &AppState, key: &str) {
 }
 
 pub async fn remove(State(st): State<AppState>, ctx: Ctx, Path(id): Path<String>) -> ApiResult<Json<Value>> {
-    let coach = ctx.require_coach()?;
+    let coach = ctx.require(Perm::Programming)?;
     let ex = load_custom(&st, coach, &id).await?;
     st.store.delete(&format!("COACH#{coach}"), &format!("EXERCISE#{id}")).await?;
     for k in ex.demo_key.iter().chain(&ex.pending_demo_key) {
@@ -154,7 +155,7 @@ pub async fn demo_upload(
     Path(id): Path<String>,
     Json(body): Json<DemoUpload>,
 ) -> ApiResult<Json<Value>> {
-    let coach = ctx.require_coach()?;
+    let coach = ctx.require(Perm::Programming)?;
     let mut ex = load_custom(&st, coach, &id).await?;
     let ext = ext_for(&body.content_type, VIDEO_TYPES)?;
     check_size(body.size, MAX_VIDEO_BYTES)?;
@@ -171,7 +172,7 @@ pub async fn demo_upload(
 /// Step 2: once the browser's PUT has succeeded, make the new video the demo
 /// and delete the one it replaces.
 pub async fn demo_confirm(State(st): State<AppState>, ctx: Ctx, Path(id): Path<String>) -> ApiResult<Json<Exercise>> {
-    let coach = ctx.require_coach()?;
+    let coach = ctx.require(Perm::Programming)?;
     let mut ex = load_custom(&st, coach, &id).await?;
     let pending = ex.pending_demo_key.clone().ok_or_else(|| bad_request("no demo upload is pending"))?;
     if !s3_object_exists(&st, &pending).await? {

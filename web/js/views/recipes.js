@@ -32,7 +32,7 @@ export const macroLine = (m) => `${Math.round(m.kcal)} kcal · P ${Math.round(m.
 
 /** Programs, Recipes and Meal plans, side by side for the coach. */
 export function planningTabs(active) {
-  const tabs = [['/programs', 'Programs'], ['/recipes', 'Recipes'], ['/mealplans', 'Meal plans']];
+  const tabs = [session.can('programming') && ['/programs', 'Programs'], session.can('nutrition') && ['/recipes', 'Recipes'], session.can('nutrition') && ['/mealplans', 'Meal plans']].filter(Boolean);
   return h('div', { class: 'subtabs' }, tabs.map(([p, l]) => h('button', { class: p === active ? 'active' : '', onclick: () => go(p) }, l)));
 }
 

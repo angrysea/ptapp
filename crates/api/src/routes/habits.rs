@@ -9,7 +9,8 @@ use ptcore::habits::{editable, streak, Habit, HabitKind, HabitLog, MAX_HABITS};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use crate::auth::{client_scope, Ctx};
+use ptcore::team::Perm;
+use crate::auth::{client_scope, client_scope_as, Ctx};
 use crate::error::{bad_request, ApiError, ApiResult};
 use crate::util::{new_id, parse_date};
 use crate::AppState;
@@ -28,7 +29,7 @@ pub struct DaysQuery {
 /// `GET /clients/{cid}/habits?days=14`: habits (archived too), each active
 /// one's streak, and the logs of the last `days` days.
 pub async fn list(State(st): State<AppState>, ctx: Ctx, Path(cid): Path<String>, Query(q): Query<DaysQuery>) -> ApiResult<Json<Value>> {
-    let scope = client_scope(&st, &ctx, &cid).await?;
+    let scope = client_scope_as(&st, &ctx, &cid, &[Perm::Progress, Perm::Nutrition]).await?;
     let pk = scope.pk();
     let today = scope.today();
     let days = q.days.unwrap_or(14).clamp(1, 90);

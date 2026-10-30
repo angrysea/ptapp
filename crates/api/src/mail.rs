@@ -30,6 +30,10 @@ pub async fn send_invite(st: &AppState, invite: &Invite) -> Result<bool, String>
     let (subject, what) = match invite.kind {
         InviteKind::Coach => ("You're invited to coach on PT Coach".to_string(), "set up a coach account on PT Coach".to_string()),
         InviteKind::Client => (format!("{} invited you to train on PT Coach", invite.coach_name), format!("train with {} on PT Coach", invite.coach_name)),
+        InviteKind::Assistant => (
+            format!("{} invited you to their coaching team on PT Coach", invite.coach_name),
+            format!("join {}'s coaching team on PT Coach as {}", invite.coach_name, invite.title.as_deref().unwrap_or(ptcore::team::DEFAULT_TITLE)),
+        ),
     };
     let hello = if invite.client_name.is_empty() { "Hi,".to_string() } else { format!("Hi {},", invite.client_name) };
     let plain = format!(

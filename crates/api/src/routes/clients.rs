@@ -10,7 +10,8 @@ use ptcore::stats::{adherence, strength_trends, weekly_volume};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use crate::auth::{client_scope, save_profile, ClientScope, Ctx};
+use ptcore::team::Perm;
+use crate::auth::{client_scope, client_scope_as, save_profile, ClientScope, Ctx};
 use crate::error::{bad_request, ApiError, ApiResult};
 use crate::util::{audit, new_id};
 use crate::AppState;
@@ -36,8 +37,11 @@ const ROSTER_CONCURRENCY: usize = 8;
 
 /// Roster with a 28-day adherence summary and flags the coach should act on.
 pub async fn roster(State(st): State<AppState>, ctx: Ctx) -> ApiResult<Json<Vec<Value>>> {
-    let coach = ctx.require_coach()?;
-    let entries: Vec<RosterEntry> = st.store.query_prefix(&format!("COACH#{coach}"), "CLIENT#").await?;
+    // The head coach's roster; an assistant (with any permission) sees the
+    // clients assigned to them.
+    let coach = ctx.require_any(&Perm::ALL)?;
+    let mut entries: Vec<RosterEntry> = st.store.query_prefix(&format!("COACH#{coach}"), "CLIENT#").await?;
+    entries.retain(|e| ctx.sees_client(&e.client_id));
     let threshold = super::alerts::settings(&st, coach).await?.missed_in_a_row;
     // Clients are summarized a few at a time (each takes five reads) so a big
     // roster doesn't fire hundreds of DynamoDB requests at once.
@@ -85,16 +89,18 @@ pub async fn roster(State(st): State<AppState>, ctx: Ctx) -> ApiResult<Json<Vec<
 }
 
 pub async fn detail(State(st): State<AppState>, ctx: Ctx, Path(cid): Path<String>) -> ApiResult<Json<Value>> {
-    let scope = client_scope(&st, &ctx, &cid).await?;
+    let scope = client_scope_as(&st, &ctx, &cid, &Perm::ALL).await?;
     let pk = scope.pk();
-    let intake: Option<Intake> = st.store.get(&pk, "INTAKE").await?;
-    let waiver = latest_waiver(&st, &pk).await?;
+    // Intake and health screening only for those who may see them.
+    let health = ctx.require(Perm::Health).is_ok() || !ctx.is_assistant();
+    let intake: Option<Intake> = if health { st.store.get(&pk, "INTAKE").await? } else { None };
+    let waiver = if health { latest_waiver(&st, &pk).await? } else { None };
     audit(&st, &ctx, &scope, "view-client").await;
     Ok(Json(json!({ "profile": scope.client, "intake": intake, "waiver": waiver })))
 }
 
 pub async fn get_intake(State(st): State<AppState>, ctx: Ctx, Path(cid): Path<String>) -> ApiResult<Json<Option<Intake>>> {
-    let scope = client_scope(&st, &ctx, &cid).await?;
+    let scope = client_scope_as(&st, &ctx, &cid, &[Perm::Health]).await?;
     audit(&st, &ctx, &scope, "view-intake").await;
     Ok(Json(st.store.get(&scope.pk(), "INTAKE").await?))
 }
@@ -128,7 +134,7 @@ pub async fn put_intake(
 }
 
 pub async fn get_waiver(State(st): State<AppState>, ctx: Ctx, Path(cid): Path<String>) -> ApiResult<Json<Option<Waiver>>> {
-    let scope = client_scope(&st, &ctx, &cid).await?;
+    let scope = client_scope_as(&st, &ctx, &cid, &[Perm::Health]).await?;
     audit(&st, &ctx, &scope, "view-waiver").await;
     Ok(Json(latest_waiver(&st, &scope.pk()).await?))
 }
@@ -189,7 +195,7 @@ pub async fn dashboard(
     Path(cid): Path<String>,
     Query(q): Query<DashQuery>,
 ) -> ApiResult<Json<Value>> {
-    let scope = client_scope(&st, &ctx, &cid).await?;
+    let scope = client_scope_as(&st, &ctx, &cid, &[Perm::Progress]).await?;
     audit(&st, &ctx, &scope, "view-dashboard").await;
     let weeks = q.weeks.unwrap_or(8).clamp(1, 26);
     // Fetch at least 28 days so the "last28" adherence is always a 28-day

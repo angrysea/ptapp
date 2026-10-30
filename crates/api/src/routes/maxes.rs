@@ -15,7 +15,8 @@ use ptcore::strength::{raised_maxes, resolve_workout, uses_pct_of, Max, MaxSourc
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use crate::auth::{client_scope, ClientScope, Ctx};
+use ptcore::team::Perm;
+use crate::auth::{client_scope_as, ClientScope, Ctx};
 use crate::error::{bad_request, ApiError, ApiResult};
 use crate::store::keyed;
 use crate::AppState;
@@ -84,7 +85,7 @@ pub async fn raise_from_log(st: &AppState, scope: &ClientScope, log: &WorkoutLog
 /// `GET /clients/{cid}/maxes`: recorded maxes, plus the best e1RM per
 /// exercise from the last six months of logs, to offer as estimates.
 pub async fn list(State(st): State<AppState>, ctx: Ctx, Path(cid): Path<String>) -> ApiResult<Json<Value>> {
-    let scope = client_scope(&st, &ctx, &cid).await?;
+    let scope = client_scope_as(&st, &ctx, &cid, &[Perm::Programming, Perm::Progress]).await?;
     let pk = scope.pk();
     let mut maxes: Vec<Max> = st.store.query_prefix(&pk, "MAX#").await?;
     maxes.sort_by_key(|m| m.exercise_name.to_lowercase());
@@ -117,7 +118,7 @@ pub async fn put(
     Path((cid, exercise_id)): Path<(String, String)>,
     Json(body): Json<MaxIn>,
 ) -> ApiResult<Json<Value>> {
-    let scope = client_scope(&st, &ctx, &cid).await?;
+    let scope = client_scope_as(&st, &ctx, &cid, &[Perm::Programming]).await?;
     if !(body.kg > 0.0 && body.kg < 1000.0) {
         return Err(bad_request("a max must be between 0 and 1000 kg"));
     }
@@ -142,7 +143,7 @@ pub async fn put(
 /// `DELETE /clients/{cid}/maxes/{exerciseId}`: upcoming %1RM loads of that
 /// exercise go back to "pick a weight".
 pub async fn remove(State(st): State<AppState>, ctx: Ctx, Path((cid, exercise_id)): Path<(String, String)>) -> ApiResult<Json<Value>> {
-    let scope = client_scope(&st, &ctx, &cid).await?;
+    let scope = client_scope_as(&st, &ctx, &cid, &[Perm::Programming]).await?;
     if st.store.get::<Max>(&scope.pk(), &max_sk(&exercise_id)).await?.is_none() {
         return Err(ApiError::NotFound("max"));
     }

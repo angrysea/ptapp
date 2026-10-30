@@ -14,7 +14,8 @@ use futures::stream::{self, StreamExt};
 use ptcore::model::{Comment, MessageThread, Role, RosterEntry};
 use serde_json::{json, Value};
 
-use crate::auth::{client_scope, ClientScope, Ctx};
+use ptcore::team::Perm;
+use crate::auth::{client_scope_as, ClientScope, Ctx};
 use crate::error::ApiResult;
 use crate::store::s;
 use crate::util::audit_client;
@@ -67,11 +68,21 @@ pub async fn on_message(st: &AppState, scope: &ClientScope, c: &Comment) {
     // A push notification too, for when the app isn't open; tapping it opens the thread.
     let url = if c.author_role == Role::Client { format!("#/c/{client}/messages") } else { "#/coach".to_string() };
     super::notify::notify_user(st, recipient, &c.author_name, &c.preview_text(), &url, &format!("thread-{client}")).await;
+    // Assistants who handle this client's messages hear about it too.
+    if c.author_role == Role::Client {
+        let team: Vec<ptcore::team::Member> = st.store.query_prefix(&format!("COACH#{coach}"), "ASSISTANT#").await.unwrap_or_default();
+        for m in team.iter().filter(|m| m.assigned(client) && m.can(ptcore::team::Perm::Messaging)) {
+            if let Some(rt) = &st.realtime {
+                rt.notify(&m.user_id, &json!({ "type": "message", "clientId": client })).await;
+            }
+            super::notify::notify_user(st, &m.user_id, &c.author_name, &c.preview_text(), &url, &format!("thread-{client}")).await;
+        }
+    }
 }
 
 /// `POST /clients/{cid}/messages/read`: the caller has seen the conversation.
 pub async fn mark_read(State(st): State<AppState>, ctx: Ctx, Path(cid): Path<String>) -> ApiResult<Json<Value>> {
-    let scope = client_scope(&st, &ctx, &cid).await?;
+    let scope = client_scope_as(&st, &ctx, &cid, &[Perm::Messaging]).await?;
     let (pk, sk) = thread_key(&scope.client.coach_id, &cid);
     let (unread, read_at) = if scope.by_coach { ("unreadCoach", "coachReadAt") } else { ("unreadClient", "clientReadAt") };
     st.store
@@ -115,9 +126,10 @@ pub async fn inbox(State(st): State<AppState>, ctx: Ctx) -> ApiResult<Json<Value
         let t: MessageThread = st.store.get(&pk, &sk).await?.unwrap_or_default();
         return Ok(Json(json!({ "unreadTotal": t.unread_client, "threads": [] })));
     }
-    let coach = ctx.require_coach()?.to_string();
+    let coach = ctx.require(Perm::Messaging)?.to_string();
     let pk = format!("COACH#{coach}");
-    let roster: Vec<RosterEntry> = st.store.query_prefix(&pk, "CLIENT#").await?;
+    let mut roster: Vec<RosterEntry> = st.store.query_prefix(&pk, "CLIENT#").await?;
+    roster.retain(|e| ctx.sees_client(&e.client_id));
     let threads: Vec<MessageThread> = st.store.query_prefix(&pk, "THREAD#").await?;
 
     // Every client gets a row (so the coach can start a conversation), with

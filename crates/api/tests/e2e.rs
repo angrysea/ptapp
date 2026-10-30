@@ -1562,6 +1562,7 @@ async fn journey() {
     assert_eq!(t.text(&coach_feed).await.0, StatusCode::NOT_FOUND, "suspending removed the link; the coach makes a new one");
 
     Box::pin(recipes_and_meal_plans(&t, local_today)).await;
+    Box::pin(assistant_coaches(&t)).await;
     Box::pin(service_credits(&t, &s3, &bucket, local_today)).await;
 
     // --- security review: deleting a client's account removes the coach's copies of their sessions
@@ -1919,4 +1920,71 @@ async fn recipes_and_meal_plans(t: &T, today: chrono::NaiveDate) {
     assert_eq!(before["meals"].as_array().unwrap().len(), 0, "nothing before the start");
     t.call("DELETE", "/clients/client1/mealplan", Some("coach1"), None).await;
     assert!(t.call("GET", "/clients/client1/mealplan", Some("client1"), None).await.1["assigned"].is_null());
+}
+
+/// Assistant coaches: invited by the head coach with a title and
+/// permissions, they reach only assigned clients and only granted work.
+async fn assistant_coaches(t: &T) {
+    // only the head coach manages the team
+    assert_eq!(t.call("POST", "/team/invites", Some("client1"), Some(json!({ "email": "asst1@dev.local" }))).await.0, StatusCode::FORBIDDEN);
+    let (s, inv) = t.call("POST", "/team/invites", Some("coach1"), Some(json!({ "email": "asst1@dev.local", "name": "Maria", "title": "Nutrition Coach", "perms": ["nutrition", "messaging", "nutrition"] }))).await;
+    assert_eq!(s, StatusCode::OK, "{inv}");
+    let code = inv["code"].as_str().unwrap().to_string();
+    let (_, team) = t.call("GET", "/team", Some("coach1"), None).await;
+    assert_eq!(team["invites"].as_array().unwrap().len(), 1);
+    let (_, client_invites) = t.call("GET", "/invites", Some("coach1"), None).await;
+    assert!(client_invites.as_array().unwrap().iter().all(|i| i["kind"] != "assistant"), "the team's invitations aren't client invitations");
+    let (s, me) = t.call("POST", &format!("/invites/{code}/accept"), Some("asst1"), Some(json!({ "consent": true }))).await;
+    assert_eq!(s, StatusCode::OK, "{me}");
+    assert_eq!((me["role"].as_str(), me["coachId"].as_str()), (Some("assistant"), Some("coach1")));
+    let (_, mine) = t.call("GET", "/me/team", Some("asst1"), None).await;
+    assert_eq!((mine["member"]["title"].as_str(), mine["member"]["perms"].clone()), (Some("Nutrition Coach"), json!(["nutrition", "messaging"])));
+    assert_eq!(t.call("GET", "/me", Some("asst1"), None).await.1["member"]["title"], "Nutrition Coach");
+
+    // nobody assigned yet: no clients, no client data
+    assert_eq!(t.call("GET", "/clients", Some("asst1"), None).await.1.as_array().unwrap().len(), 0);
+    assert_eq!(t.call("GET", "/clients/client1/meals", Some("asst1"), None).await.0, StatusCode::FORBIDDEN);
+    // the head coach assigns a client (only their own)
+    assert_eq!(t.call("PUT", "/team/asst1", Some("coach1"), Some(json!({ "title": "Nutrition Coach", "perms": ["nutrition", "messaging"], "clients": ["client9"] }))).await.0, StatusCode::BAD_REQUEST);
+    assert_ne!(t.call("PUT", "/team/asst1", Some("coach2"), Some(json!({ "perms": ["programming"], "clients": [] }))).await.0, StatusCode::OK, "another coach can't change coach1's assistant");
+    let (s, m) = t.call("PUT", "/team/asst1", Some("coach1"), Some(json!({ "title": " ", "perms": ["nutrition", "messaging"], "clients": ["client1"] }))).await;
+    assert_eq!(s, StatusCode::OK, "{m}");
+    assert_eq!(m["title"], "Assistant Coach", "a blank title is the default");
+    t.call("PUT", "/team/asst1", Some("coach1"), Some(json!({ "title": "Nutrition Coach", "perms": ["nutrition", "messaging"], "clients": ["client1"] }))).await;
+    let (_, roster) = t.call("GET", "/clients", Some("asst1"), None).await;
+    assert_eq!(roster.as_array().unwrap().iter().map(|r| r["client"]["clientId"].as_str().unwrap()).collect::<Vec<_>>(), vec!["client1"]);
+
+    // granted: nutrition and messaging, for client1
+    assert_eq!(t.call("GET", "/clients/client1/meals", Some("asst1"), None).await.0, StatusCode::OK);
+    assert_eq!(t.call("GET", "/recipes", Some("asst1"), None).await.0, StatusCode::OK, "the head coach's library");
+    let (s, c) = t.call("POST", "/clients/client1/comments", Some("asst1"), Some(json!({ "text": "Great job on your protein this week" }))).await;
+    assert_eq!(s, StatusCode::OK, "{c}");
+    assert_eq!(c["authorName"].as_str().unwrap(), format!("{} · Nutrition Coach", me["name"].as_str().unwrap()), "clients see the name and title");
+    let (_, thread) = t.call("GET", "/clients/client1/comments", Some("client1"), None).await;
+    assert!(thread.as_array().unwrap().iter().any(|x| x["authorName"].as_str().unwrap().ends_with("· Nutrition Coach")));
+    let (s, inbox) = t.call("GET", "/messages", Some("asst1"), None).await;
+    assert_eq!(s, StatusCode::OK, "{inbox}");
+    assert!(inbox["threads"].as_array().unwrap().iter().all(|th| th["clientId"] == "client1"), "{inbox}");
+    // not granted: programming, progress, reviews, health, or anything of the head coach's own
+    assert_eq!(t.call("GET", "/clients/client1/logs", Some("asst1"), None).await.0, StatusCode::FORBIDDEN, "no Progress");
+    assert_eq!(t.call("GET", "/programs", Some("asst1"), None).await.0, StatusCode::FORBIDDEN, "no Programming");
+    assert_eq!(t.call("GET", "/videos/queue", Some("asst1"), None).await.0, StatusCode::FORBIDDEN, "no Review");
+    assert_eq!(t.call("GET", "/clients/client1/intake", Some("asst1"), None).await.0, StatusCode::FORBIDDEN, "no Health");
+    let (_, detail) = t.call("GET", "/clients/client1", Some("asst1"), None).await;
+    assert!(detail["intake"].is_null() && detail["waiver"].is_null(), "the client page leaves out health information: {detail}");
+    assert!(!t.call("GET", "/clients/client1", Some("coach1"), None).await.1["intake"].is_null(), "the head coach still sees it");
+    for (m, p) in [("GET", "/team"), ("GET", "/invites"), ("PUT", "/credits/settings"), ("GET", "/alerts"), ("GET", "/plans")] {
+        assert_eq!(t.call(m, p, Some("asst1"), Some(json!({ "enforce": true }))).await.0, StatusCode::FORBIDDEN, "{m} {p} is the head coach's");
+    }
+    // more permissions: programming opens programs; client programs stay with their clients' assistants
+    t.call("PUT", "/team/asst1", Some("coach1"), Some(json!({ "title": "Nutrition Coach", "perms": ["nutrition", "messaging", "programming", "progress", "health"], "clients": ["client1"] }))).await;
+    let (s, progs) = t.call("GET", "/programs", Some("asst1"), None).await;
+    assert_eq!(s, StatusCode::OK);
+    assert!(progs.as_array().unwrap().iter().all(|p| p["clientId"].is_null() || p["clientId"] == "client1"), "only client1's and templates");
+    assert_eq!(t.call("GET", "/clients/client1/logs", Some("asst1"), None).await.0, StatusCode::OK);
+    assert!(!t.call("GET", "/clients/client1", Some("asst1"), None).await.1["intake"].is_null(), "with Health");
+    // removed from the team: no access at all
+    assert_eq!(t.call("DELETE", "/team/asst1", Some("coach1"), None).await.0, StatusCode::OK);
+    assert_eq!(t.call("GET", "/clients", Some("asst1"), None).await.0, StatusCode::FORBIDDEN);
+    assert_eq!(t.call("GET", "/clients/client1/meals", Some("asst1"), None).await.0, StatusCode::FORBIDDEN);
 }

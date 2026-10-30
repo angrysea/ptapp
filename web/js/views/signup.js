@@ -54,7 +54,7 @@ export async function renderInviteSignedIn(code, me) {
     return true;
   }
   if (!me.profile && inv.email.toLowerCase() === (me.email || '').toLowerCase()) return false;
-  const who = inv.kind === 'coach' ? 'a coach account' : `an account to train with ${inv.coachName}`;
+  const who = inv.kind === 'coach' ? 'a coach account' : inv.kind === 'assistant' ? `an account on ${inv.coachName}’s coaching team` : `an account to train with ${inv.coachName}`;
   shell(
     h('h1', {}, 'You’re signed in'),
     h('p', {}, `This invitation is for ${inv.email} to create ${who}, but this device is signed in as ${me.email}.`),
@@ -87,7 +87,9 @@ export async function renderInviteSignUp(code) {
     );
   }
   const asCoach = inv.kind === 'coach';
-  const intro = asCoach ? 'You’ve been invited to set up a coach account.' : `${inv.coachName} invited you to train with them.`;
+  const intro = asCoach ? 'You’ve been invited to set up a coach account.'
+    : inv.kind === 'assistant' ? `${inv.coachName} invited you to their coaching team as ${inv.title || 'Assistant Coach'}.`
+    : `${inv.coachName} invited you to train with them.`;
   const email = h('input', { type: 'email', value: inv.email, readonly: true, 'aria-readonly': 'true' });
 
   if (devMode()) {

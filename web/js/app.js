@@ -104,11 +104,12 @@ async function boot() {
   // Accounts made before the data agreement existed agree to it once.
   if (me.profile.role !== 'admin' && !me.profile.consentedAt) return renderConsent(me, () => location.reload());
   session.profile = me.profile;
-  // The header carries the coach's brand, for the coach and their clients alike.
-  const brand = session.isCoach ? me.profile : me.coach;
+  session.member = me.member ?? null;
+  // The header carries the coach's brand, for the coach, their assistants and their clients alike.
+  const brand = session.isHeadCoach ? me.profile : me.coach;
   if (brand) document.getElementById('title').textContent = brand.businessName || brand.name || 'Personal Training Coach';
   // Coaches fill in their profile before anything else (tasks/coaches).
-  if (session.isCoach && me.coachProfileComplete === false) return renderCoachSetup({ onboarding: true });
+  if (session.isHeadCoach && me.coachProfileComplete === false) return renderCoachSetup({ onboarding: true });
   // The server judges "today" (missed workouts, adherence) in the user's own
   // time zone, so keep it current; travel or a DST rule change updates it.
   const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -131,9 +132,18 @@ async function boot() {
     highlight = tabs([['/', '🧑‍🏫', 'Coaches'], ['/coaches', '🔎', 'Directory'], ['/me', '⚙️', 'Profile']]);
     route('/', renderAdmin);
   } else if (session.isCoach) {
-    highlight = tabs([['/', '👥', 'Clients'], ['/messages', '💬', 'Messages'], ['/videos', '🎥', 'Videos'], ['/programs', '🗓️', 'Programs'], ['/exercises', '🏋️', 'Exercises'], ['/me', '⚙️', 'Profile']]);
+    // An assistant's tabs follow what their head coach lets them do.
+    const can = (p) => session.can(p);
+    highlight = tabs([
+      ['/', '👥', 'Clients'],
+      can('messaging') && ['/messages', '💬', 'Messages'],
+      can('review') && ['/videos', '🎥', 'Videos'],
+      (can('programming') || can('nutrition')) && [can('programming') ? '/programs' : '/recipes', '🗓️', 'Programs'],
+      can('programming') && ['/exercises', '🏋️', 'Exercises'],
+      ['/me', '⚙️', 'Profile'],
+    ].filter(Boolean));
     refreshVideoBadge();
-    startUsage(); // time per client (Phase 2 exit gate)
+    if (session.isHeadCoach) startUsage(); // time per client (Phase 2 exit gate)
     route('/', renderRoster);
     route('/c/:id/report', (id) => renderReport(id)); // before /c/:id/:tab, which would match it too
     route('/c/:id', (id) => renderClient(id));
@@ -184,7 +194,7 @@ async function boot() {
   route('/coaches', renderDirectory);
   route('/coaches/:id', renderCoachPage);
   route('/request/:id', renderRequest);
-  if (session.isCoach) route('/coach-profile', () => renderCoachSetup());
+  if (session.isHeadCoach) route('/coach-profile', () => renderCoachSetup());
   start({ home: '/', afterRender: highlight });
 }
 

@@ -9,6 +9,7 @@ import { checkinSettingsCard } from './checkins.js';
 import { automationCard } from './automation.js';
 import { calendarCard } from './sessions.js';
 import { myCreditsCard, plansCard } from './credits.js';
+import { myRoleCard, teamCard } from './team.js';
 import { $app, busy, field, h, mount, passwordField, select, sheet, toast } from '../ui.js';
 
 /** Signs out from this device: warns about unsynced changes, then clears
@@ -189,6 +190,7 @@ export async function renderProfile() {
           toast('Saved');
         }),
       }, 'Save')),
+    p.role === 'assistant' && myRoleCard(),
     p.role === 'coach' && h('div', { class: 'card' },
       h('a', { class: 'btn block', href: '#/coach-profile' }, 'Edit coach profile'),
       h('div', { style: 'height:8px' }),
@@ -200,9 +202,10 @@ export async function renderProfile() {
       h('div', { style: 'height:8px' }),
       h('a', { class: 'btn block', href: '#/waiver' }, 'Health screening & waiver')),
     p.role === 'client' && myCreditsCard(p),
+    p.role === 'coach' && teamCard(),
     p.role === 'coach' && plansCard(),
     p.role !== 'admin' && notificationsCard(),
-    p.role !== 'admin' && calendarCard(),
+    (p.role === 'coach' || p.role === 'client') && calendarCard(), // sessions are the head coach's
     p.role === 'coach' && alertSettingsCard(),
     p.role === 'coach' && checkinSettingsCard(),
     p.role === 'coach' && automationCard(),

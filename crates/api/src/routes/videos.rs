@@ -31,7 +31,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use ptcore::credits::Service;
-use crate::auth::{client_scope, ClientScope, Ctx};
+use ptcore::team::Perm;
+use crate::auth::{client_scope, client_scope_as, ClientScope, Ctx};
 use crate::error::{bad_request, ApiError, ApiResult};
 use crate::util::{
     audit, audit_client, check_size, dated_id, ext_for, presign_get, presign_part, presign_put, s3_object_exists, s3_object_size,
@@ -372,8 +373,9 @@ pub struct ReviewOut {
 
 /// The coach's unreviewed videos across all their clients, oldest first.
 pub async fn queue(State(st): State<AppState>, ctx: Ctx) -> ApiResult<Json<Vec<ReviewOut>>> {
-    let coach = ctx.require_coach()?;
-    let entries: Vec<ReviewEntry> = st.store.query_prefix(&format!("COACH#{coach}"), "REVIEW#").await?;
+    let coach = ctx.require(Perm::Review)?;
+    let mut entries: Vec<ReviewEntry> = st.store.query_prefix(&format!("COACH#{coach}"), "REVIEW#").await?;
+    entries.retain(|e| ctx.sees_client(&e.client_id));
     let mut clients: Vec<&str> = entries.iter().map(|e| e.client_id.as_str()).collect();
     clients.sort_unstable();
     clients.dedup();
@@ -402,8 +404,8 @@ pub async fn reviewed(
     ctx: Ctx,
     Path((cid, vid)): Path<(String, String)>,
 ) -> ApiResult<Json<Video>> {
-    ctx.require_coach()?;
-    let scope = client_scope(&st, &ctx, &cid).await?;
+    ctx.require(Perm::Review)?;
+    let scope = client_scope_as(&st, &ctx, &cid, &[Perm::Review]).await?;
     Ok(Json(mark_reviewed(&st, &scope, &vid).await?))
 }
 
@@ -484,7 +486,7 @@ pub async fn list(
     Path(cid): Path<String>,
     Query(q): Query<ListQuery>,
 ) -> ApiResult<Json<Vec<VideoOut>>> {
-    let scope = client_scope(&st, &ctx, &cid).await?;
+    let scope = client_scope_as(&st, &ctx, &cid, &[Perm::Review, Perm::Progress, Perm::Messaging]).await?;
     audit(&st, &ctx, &scope, "view-videos").await;
     let mut videos: Vec<Video> = st.store.query_prefix(&scope.pk(), "VIDEO#").await?;
     let now = Utc::now();

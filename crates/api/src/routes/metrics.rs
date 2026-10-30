@@ -10,7 +10,8 @@ use ptcore::model::{Metric, MetricKind, Photo, PhotoPose, Role, SkinfoldRecord, 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::auth::{client_scope, Ctx};
+use ptcore::team::Perm;
+use crate::auth::{client_scope, client_scope_as, Ctx};
 use crate::error::{bad_request, ApiError, ApiResult};
 use crate::util::{audit, check_size, dated_id, ext_for, presign_get, presign_put, s3_object_exists, untag, IMAGE_TYPES, MAX_PHOTO_BYTES, PENDING_TAG};
 use crate::AppState;
@@ -26,7 +27,7 @@ pub async fn list(
     Path(cid): Path<String>,
     Query(f): Query<KindFilter>,
 ) -> ApiResult<Json<Vec<Metric>>> {
-    let scope = client_scope(&st, &ctx, &cid).await?;
+    let scope = client_scope_as(&st, &ctx, &cid, &[Perm::Progress]).await?;
     audit(&st, &ctx, &scope, "view-metrics").await;
     let all: Vec<Metric> = st.store.query_prefix(&scope.pk(), "METRIC#").await?;
     Ok(Json(all.into_iter().filter(|m| f.kind.is_none_or(|k| m.kind == k)).collect()))
@@ -179,7 +180,7 @@ pub struct PhotoOut {
 }
 
 pub async fn list_photos(State(st): State<AppState>, ctx: Ctx, Path(cid): Path<String>) -> ApiResult<Json<Vec<PhotoOut>>> {
-    let scope = client_scope(&st, &ctx, &cid).await?;
+    let scope = client_scope_as(&st, &ctx, &cid, &[Perm::Progress]).await?;
     audit(&st, &ctx, &scope, "view-photos").await;
     let photos: Vec<Photo> = st.store.query_prefix(&scope.pk(), "PHOTO#").await?;
     // Only confirmed photos are shown, so no per-photo S3 check is needed. A
@@ -301,7 +302,7 @@ pub struct Baseline {
 
 /// `GET /clients/{cid}/baseline`.
 pub async fn get_baseline(State(st): State<AppState>, ctx: Ctx, Path(cid): Path<String>) -> ApiResult<Json<Baseline>> {
-    let scope = client_scope(&st, &ctx, &cid).await?;
+    let scope = client_scope_as(&st, &ctx, &cid, &[Perm::Progress]).await?;
     Ok(Json(st.store.get(&scope.pk(), "BASELINE").await?.unwrap_or(Baseline { date: None, set_by: None })))
 }
 

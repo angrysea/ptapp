@@ -108,7 +108,7 @@ pub async fn list(State(st): State<AppState>, ctx: Ctx, Query(q): Query<ListQuer
     let pk = match ctx.profile.role {
         Role::Coach => format!("COACH#{}", ctx.user_id()),
         Role::Client => format!("CLIENT#{}", ctx.user_id()),
-        Role::Admin => return Err(ApiError::Forbidden("coaches and clients only")),
+        Role::Admin | Role::Assistant => return Err(ApiError::Forbidden("coaches and clients only")),
     };
     let all: Vec<Session> = st.store.query_between(&pk, &format!("SESSION#{}", from.to_rfc3339()), &format!("SESSION#{}{HIGH}", to.to_rfc3339()), true).await?;
     Ok(Json(all))

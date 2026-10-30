@@ -23,6 +23,7 @@ pub mod records;
 pub mod requests;
 pub mod replies;
 pub mod sessions;
+pub mod team;
 pub mod snippets;
 pub mod suggestions;
 pub mod usage;

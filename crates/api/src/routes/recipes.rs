@@ -16,7 +16,8 @@ use ptcore::recipes::{AssignedPlan, Book, MealPlan, Recipe};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use crate::auth::{client_scope, Ctx};
+use ptcore::team::Perm;
+use crate::auth::{client_scope_as, Ctx};
 use crate::error::{bad_request, ApiError, ApiResult};
 use crate::util::new_id;
 use crate::AppState;
@@ -47,7 +48,7 @@ fn draft_json(d: Draft) -> Value {
 
 /// `GET /recipes/books`: the coach's books.
 pub async fn list_books(State(st): State<AppState>, ctx: Ctx) -> ApiResult<Json<Vec<Book>>> {
-    let coach = ctx.require_coach()?;
+    let coach = ctx.require(Perm::Nutrition)?;
     let mut books: Vec<Book> = st.store.query_prefix(&coach_pk(coach), "BOOK#").await?;
     books.sort_by_key(|b| b.name.to_lowercase());
     Ok(Json(books))
@@ -55,7 +56,7 @@ pub async fn list_books(State(st): State<AppState>, ctx: Ctx) -> ApiResult<Json<
 
 /// `POST /recipes/books`.
 pub async fn create_book(State(st): State<AppState>, ctx: Ctx, Json(mut b): Json<Book>) -> ApiResult<Json<Book>> {
-    let coach = ctx.require_coach()?;
+    let coach = ctx.require(Perm::Nutrition)?;
     let existing: Vec<Book> = st.store.query_prefix(&coach_pk(coach), "BOOK#").await?;
     if existing.len() >= MAX_BOOKS {
         return Err(bad_request(format!("up to {MAX_BOOKS} recipe books")));
@@ -69,7 +70,7 @@ pub async fn create_book(State(st): State<AppState>, ctx: Ctx, Json(mut b): Json
 
 /// `PUT /recipes/books/{bid}`: rename, describe, or change who it's shared with.
 pub async fn update_book(State(st): State<AppState>, ctx: Ctx, Path(bid): Path<String>, Json(mut b): Json<Book>) -> ApiResult<Json<Book>> {
-    let coach = ctx.require_coach()?;
+    let coach = ctx.require(Perm::Nutrition)?;
     st.store.get::<Book>(&coach_pk(coach), &format!("BOOK#{bid}")).await?.ok_or(ApiError::NotFound("recipe book"))?;
     b.id = bid;
     b.validate().map_err(bad_request)?;
@@ -80,7 +81,7 @@ pub async fn update_book(State(st): State<AppState>, ctx: Ctx, Path(bid): Path<S
 
 /// `DELETE /recipes/books/{bid}`: the book goes; its recipes stay, unfiled.
 pub async fn delete_book(State(st): State<AppState>, ctx: Ctx, Path(bid): Path<String>) -> ApiResult<Json<Value>> {
-    let coach = ctx.require_coach()?;
+    let coach = ctx.require(Perm::Nutrition)?;
     let pk = coach_pk(coach);
     let recipes: Vec<Recipe> = st.store.query_prefix(&pk, "RECIPE#").await?;
     for mut r in recipes.into_iter().filter(|r| r.book_id.as_deref() == Some(bid.as_str())) {
@@ -95,7 +96,7 @@ pub async fn delete_book(State(st): State<AppState>, ctx: Ctx, Path(bid): Path<S
 
 /// `GET /recipes`: all the coach's recipes, by title.
 pub async fn list(State(st): State<AppState>, ctx: Ctx) -> ApiResult<Json<Vec<Recipe>>> {
-    let coach = ctx.require_coach()?;
+    let coach = ctx.require(Perm::Nutrition)?;
     let mut rs: Vec<Recipe> = st.store.query_prefix(&coach_pk(coach), "RECIPE#").await?;
     rs.sort_by_key(|r| r.title.to_lowercase());
     Ok(Json(rs))
@@ -103,7 +104,7 @@ pub async fn list(State(st): State<AppState>, ctx: Ctx) -> ApiResult<Json<Vec<Re
 
 /// `GET /recipes/{rid}`.
 pub async fn get_one(State(st): State<AppState>, ctx: Ctx, Path(rid): Path<String>) -> ApiResult<Json<Recipe>> {
-    let coach = ctx.require_coach()?;
+    let coach = ctx.require(Perm::Nutrition)?;
     st.store.get(&coach_pk(coach), &recipe_sk(&rid)).await?.map(Json).ok_or(ApiError::NotFound("recipe"))
 }
 
@@ -118,7 +119,7 @@ async fn check_book(st: &AppState, coach: &str, r: &Recipe) -> ApiResult<()> {
 
 /// `POST /recipes`.
 pub async fn create(State(st): State<AppState>, ctx: Ctx, Json(mut r): Json<Recipe>) -> ApiResult<Json<Recipe>> {
-    let coach = ctx.require_coach()?;
+    let coach = ctx.require(Perm::Nutrition)?;
     let existing: Vec<Recipe> = st.store.query_prefix(&coach_pk(coach), "RECIPE#").await?;
     if existing.len() >= MAX_RECIPES {
         return Err(bad_request(format!("up to {MAX_RECIPES} recipes")));
@@ -133,7 +134,7 @@ pub async fn create(State(st): State<AppState>, ctx: Ctx, Json(mut r): Json<Reci
 
 /// `PUT /recipes/{rid}`.
 pub async fn update(State(st): State<AppState>, ctx: Ctx, Path(rid): Path<String>, Json(mut r): Json<Recipe>) -> ApiResult<Json<Recipe>> {
-    let coach = ctx.require_coach()?;
+    let coach = ctx.require(Perm::Nutrition)?;
     st.store.get::<Recipe>(&coach_pk(coach), &recipe_sk(&rid)).await?.ok_or(ApiError::NotFound("recipe"))?;
     r.id = rid;
     r.validate().map_err(bad_request)?;
@@ -145,7 +146,7 @@ pub async fn update(State(st): State<AppState>, ctx: Ctx, Path(rid): Path<String
 
 /// `DELETE /recipes/{rid}`: plans already assigned keep their copy.
 pub async fn remove(State(st): State<AppState>, ctx: Ctx, Path(rid): Path<String>) -> ApiResult<Json<Value>> {
-    let coach = ctx.require_coach()?;
+    let coach = ctx.require(Perm::Nutrition)?;
     st.store.delete(&coach_pk(coach), &recipe_sk(&rid)).await?;
     Ok(Json(json!({ "deleted": rid })))
 }
@@ -156,7 +157,7 @@ pub async fn remove(State(st): State<AppState>, ctx: Ctx, Path(rid): Path<String
 /// (with their recipes) and the client's own recipes. The coach sees the
 /// same, as their client does.
 pub async fn for_client(State(st): State<AppState>, ctx: Ctx, Path(cid): Path<String>) -> ApiResult<Json<Value>> {
-    let scope = client_scope(&st, &ctx, &cid).await?;
+    let scope = client_scope_as(&st, &ctx, &cid, &[Perm::Nutrition]).await?;
     let cpk = coach_pk(&scope.client.coach_id);
     let books: Vec<Book> = st.store.query_prefix(&cpk, "BOOK#").await?;
     let shared: Vec<Book> = books.into_iter().filter(|b| b.shared.includes(&scope.client.user_id)).collect();
@@ -177,7 +178,7 @@ pub async fn for_client(State(st): State<AppState>, ctx: Ctx, Path(cid): Path<St
 /// `POST /clients/{cid}/recipes`: a recipe of the client's own (the client,
 /// or their coach for them).
 pub async fn create_own(State(st): State<AppState>, ctx: Ctx, Path(cid): Path<String>, Json(mut r): Json<Recipe>) -> ApiResult<Json<Recipe>> {
-    let scope = client_scope(&st, &ctx, &cid).await?;
+    let scope = client_scope_as(&st, &ctx, &cid, &[Perm::Nutrition]).await?;
     let existing: Vec<Recipe> = st.store.query_prefix(&scope.pk(), "RECIPE#").await?;
     if existing.len() >= MAX_RECIPES {
         return Err(bad_request(format!("up to {MAX_RECIPES} recipes")));
@@ -192,7 +193,7 @@ pub async fn create_own(State(st): State<AppState>, ctx: Ctx, Path(cid): Path<St
 
 /// `PUT /clients/{cid}/recipes/{rid}`.
 pub async fn update_own(State(st): State<AppState>, ctx: Ctx, Path((cid, rid)): Path<(String, String)>, Json(mut r): Json<Recipe>) -> ApiResult<Json<Recipe>> {
-    let scope = client_scope(&st, &ctx, &cid).await?;
+    let scope = client_scope_as(&st, &ctx, &cid, &[Perm::Nutrition]).await?;
     st.store.get::<Recipe>(&scope.pk(), &recipe_sk(&rid)).await?.ok_or(ApiError::NotFound("recipe"))?;
     r.id = rid;
     r.book_id = None;
@@ -204,7 +205,7 @@ pub async fn update_own(State(st): State<AppState>, ctx: Ctx, Path((cid, rid)): 
 
 /// `DELETE /clients/{cid}/recipes/{rid}`.
 pub async fn remove_own(State(st): State<AppState>, ctx: Ctx, Path((cid, rid)): Path<(String, String)>) -> ApiResult<Json<Value>> {
-    let scope = client_scope(&st, &ctx, &cid).await?;
+    let scope = client_scope_as(&st, &ctx, &cid, &[Perm::Nutrition]).await?;
     st.store.delete(&scope.pk(), &recipe_sk(&rid)).await?;
     Ok(Json(json!({ "deleted": rid })))
 }
@@ -334,7 +335,7 @@ fn plan_json(p: &MealPlan, recipes: &HashMap<String, Recipe>) -> Value {
 
 /// `GET /mealplans`.
 pub async fn list_plans(State(st): State<AppState>, ctx: Ctx) -> ApiResult<Json<Vec<MealPlan>>> {
-    let coach = ctx.require_coach()?;
+    let coach = ctx.require(Perm::Nutrition)?;
     let mut ps: Vec<MealPlan> = st.store.query_prefix(&coach_pk(coach), "MEALPLAN#").await?;
     ps.sort_by_key(|p| p.name.to_lowercase());
     Ok(Json(ps))
@@ -342,7 +343,7 @@ pub async fn list_plans(State(st): State<AppState>, ctx: Ctx) -> ApiResult<Json<
 
 /// `GET /mealplans/{id}`: the plan and each day's totals.
 pub async fn get_plan(State(st): State<AppState>, ctx: Ctx, Path(id): Path<String>) -> ApiResult<Json<Value>> {
-    let coach = ctx.require_coach()?;
+    let coach = ctx.require(Perm::Nutrition)?;
     let p: MealPlan = st.store.get(&coach_pk(coach), &plan_sk(&id)).await?.ok_or(ApiError::NotFound("meal plan"))?;
     let all: Vec<Recipe> = st.store.query_prefix(&coach_pk(coach), "RECIPE#").await?;
     let recipes: HashMap<String, Recipe> = all.into_iter().map(|r| (r.id.clone(), r)).collect();
@@ -351,7 +352,7 @@ pub async fn get_plan(State(st): State<AppState>, ctx: Ctx, Path(id): Path<Strin
 
 /// `POST /mealplans`.
 pub async fn create_plan(State(st): State<AppState>, ctx: Ctx, Json(mut p): Json<MealPlan>) -> ApiResult<Json<Value>> {
-    let coach = ctx.require_coach()?;
+    let coach = ctx.require(Perm::Nutrition)?;
     let existing: Vec<MealPlan> = st.store.query_prefix(&coach_pk(coach), "MEALPLAN#").await?;
     if existing.len() >= MAX_PLANS {
         return Err(bad_request(format!("up to {MAX_PLANS} meal plans")));
@@ -366,7 +367,7 @@ pub async fn create_plan(State(st): State<AppState>, ctx: Ctx, Json(mut p): Json
 
 /// `PUT /mealplans/{id}`: clients already following it keep their copy until it's assigned again.
 pub async fn update_plan(State(st): State<AppState>, ctx: Ctx, Path(id): Path<String>, Json(mut p): Json<MealPlan>) -> ApiResult<Json<Value>> {
-    let coach = ctx.require_coach()?;
+    let coach = ctx.require(Perm::Nutrition)?;
     st.store.get::<MealPlan>(&coach_pk(coach), &plan_sk(&id)).await?.ok_or(ApiError::NotFound("meal plan"))?;
     p.id = id;
     p.validate().map_err(bad_request)?;
@@ -378,7 +379,7 @@ pub async fn update_plan(State(st): State<AppState>, ctx: Ctx, Path(id): Path<St
 
 /// `DELETE /mealplans/{id}`.
 pub async fn delete_plan(State(st): State<AppState>, ctx: Ctx, Path(id): Path<String>) -> ApiResult<Json<Value>> {
-    let coach = ctx.require_coach()?;
+    let coach = ctx.require(Perm::Nutrition)?;
     st.store.delete(&coach_pk(coach), &plan_sk(&id)).await?;
     Ok(Json(json!({ "deleted": id })))
 }
@@ -397,8 +398,8 @@ pub struct AssignPlan {
 /// `PUT /clients/{cid}/mealplan`: the coach gives the client a plan from
 /// `startDate` (replacing any they had), with its recipes copied in.
 pub async fn assign(State(st): State<AppState>, ctx: Ctx, Path(cid): Path<String>, Json(body): Json<AssignPlan>) -> ApiResult<Json<Value>> {
-    let coach = ctx.require_coach()?.to_string();
-    let scope = client_scope(&st, &ctx, &cid).await?;
+    let coach = ctx.require(Perm::Nutrition)?.to_string();
+    let scope = client_scope_as(&st, &ctx, &cid, &[Perm::Nutrition]).await?;
     let plan: MealPlan = st.store.get(&coach_pk(&coach), &plan_sk(&body.plan_id)).await?.ok_or(ApiError::NotFound("meal plan"))?;
     let recipes = plan_recipes(&st, &coach, &plan).await?;
     let a = AssignedPlan { plan, recipes, start_date: body.start_date, assigned_at: Utc::now() };
@@ -408,8 +409,8 @@ pub async fn assign(State(st): State<AppState>, ctx: Ctx, Path(cid): Path<String
 
 /// `DELETE /clients/{cid}/mealplan`.
 pub async fn unassign(State(st): State<AppState>, ctx: Ctx, Path(cid): Path<String>) -> ApiResult<Json<Value>> {
-    ctx.require_coach()?;
-    let scope = client_scope(&st, &ctx, &cid).await?;
+    ctx.require(Perm::Nutrition)?;
+    let scope = client_scope_as(&st, &ctx, &cid, &[Perm::Nutrition]).await?;
     st.store.delete(&scope.pk(), ASSIGNED_SK).await?;
     Ok(Json(json!({ "removed": true })))
 }
@@ -422,7 +423,7 @@ pub struct DayQuery {
 /// `GET /clients/{cid}/mealplan?date=`: the client's plan, and the meals
 /// planned for the day (today by default) with their recipes and totals.
 pub async fn for_day(State(st): State<AppState>, ctx: Ctx, Path(cid): Path<String>, Query(q): Query<DayQuery>) -> ApiResult<Json<Value>> {
-    let scope = client_scope(&st, &ctx, &cid).await?;
+    let scope = client_scope_as(&st, &ctx, &cid, &[Perm::Nutrition]).await?;
     let date = q.date.unwrap_or_else(|| scope.today());
     let Some(a) = st.store.get::<AssignedPlan>(&scope.pk(), ASSIGNED_SK).await? else {
         return Ok(Json(json!({ "assigned": null, "date": date, "meals": [] })));

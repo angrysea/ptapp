@@ -66,13 +66,14 @@ async function renderJoin(code, me) {
   const name = h('input', { value: invite.clientName || '', autocomplete: 'name' });
   // The API only lets the invited address accept; say so up front.
   const wrongEmail = (me.email || '').toLowerCase() !== invite.email.toLowerCase();
-  const consent = consentField(asCoach);
+  const consent = consentField(asCoach || invite.kind === 'assistant'); // assistants handle clients' data like a coach
   const problem = h('p', { class: 'small', 'aria-live': 'polite' });
   mount($app(),
     h('h1', {}, asCoach ? `Coach on ${invite.coachName}` : `Join ${invite.coachName}`),
     h('div', { class: 'card' },
       h('p', {}, asCoach
         ? `You’ve been invited to set up a coach account for ${invite.email}.`
+        : invite.kind === 'assistant' ? `${invite.coachName} invited ${invite.email} to their coaching team as ${invite.title || 'Assistant Coach'}.`
         : `${invite.coachName} invited ${invite.email} to train with them.`),
       wrongEmail && h('p', { class: 'banner' },
         `You’re signed in as ${me.email}. Sign out and sign in with ${invite.email} to accept.`),

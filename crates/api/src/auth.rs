@@ -9,6 +9,7 @@ use axum::extract::FromRequestParts;
 use axum::http::request::Parts;
 use lambda_http::request::RequestContext;
 use ptcore::model::{Profile, Role};
+use ptcore::team::{Member, Perm};
 
 use crate::error::{ApiError, ApiResult};
 use crate::AppState;
@@ -76,6 +77,8 @@ impl<S: Send + Sync> FromRequestParts<S> for SourceIp {
 pub struct Ctx {
     pub caller: Caller,
     pub profile: Profile,
+    /// An assistant's team membership (title, permissions, assigned clients).
+    pub member: Option<Member>,
 }
 
 impl FromRequestParts<AppState> for Ctx {
@@ -91,7 +94,18 @@ impl FromRequestParts<AppState> for Ctx {
         if profile.suspended_at.is_some() {
             return Err(ApiError::Forbidden("this account is suspended; contact PT Coach support"));
         }
-        Ok(Ctx { caller, profile })
+        // An assistant acts only while they're on their head coach's team.
+        let member = if profile.role == Role::Assistant {
+            let m: Member = state
+                .store
+                .get(&format!("COACH#{}", profile.coach_id), &format!("ASSISTANT#{}", profile.user_id))
+                .await?
+                .ok_or(ApiError::Forbidden("you're no longer on this coach's team"))?;
+            Some(m)
+        } else {
+            None
+        };
+        Ok(Ctx { caller, profile, member })
     }
 }
 
@@ -112,12 +126,46 @@ impl Ctx {
         }
     }
 
+    /// The head coach only (never an assistant): their own id.
     pub fn require_coach(&self) -> ApiResult<&str> {
         if self.is_coach() {
             Ok(&self.profile.user_id)
         } else {
             Err(ApiError::Forbidden("coach only"))
         }
+    }
+
+    /// The head coach, or an assistant granted `perm`: the head coach's id,
+    /// whose business (partition) the work is done in.
+    pub fn require(&self, perm: Perm) -> ApiResult<&str> {
+        match &self.member {
+            _ if self.is_coach() => Ok(&self.profile.user_id),
+            Some(m) if m.can(perm) => Ok(&self.profile.coach_id),
+            Some(_) => Err(ApiError::Forbidden("your coach hasn't given you access to this")),
+            None => Err(ApiError::Forbidden("coach only")),
+        }
+    }
+
+    /// The head coach, or an assistant granted any of `perms`.
+    pub fn require_any(&self, perms: &[Perm]) -> ApiResult<&str> {
+        perms.iter().find_map(|p| self.require(*p).ok()).ok_or(ApiError::Forbidden("your coach hasn't given you access to this"))
+    }
+
+    pub fn is_assistant(&self) -> bool {
+        self.member.is_some()
+    }
+
+    /// Whether this caller may see `client_id` in team-wide lists (queues,
+    /// the inbox, the roster): the head coach sees every client, an
+    /// assistant only those assigned to them.
+    pub fn sees_client(&self, client_id: &str) -> bool {
+        self.member.as_ref().is_none_or(|m| m.assigned(client_id))
+    }
+
+    /// The name clients see on what this caller sends: an assistant's
+    /// carries their title.
+    pub fn display_name(&self) -> String {
+        self.member.as_ref().map(|m| m.display()).unwrap_or_else(|| self.profile.name.clone())
     }
 }
 
@@ -162,7 +210,25 @@ impl ClientScope {
     }
 }
 
-/// A client can see only their own data; a coach only their own clients' data.
+/// Like `client_scope`, and an assistant too: one granted any of `perms`
+/// for a client their head coach has assigned them.
+pub async fn client_scope_as(state: &AppState, ctx: &Ctx, client_id: &str, perms: &[Perm]) -> ApiResult<ClientScope> {
+    let Some(m) = &ctx.member else { return client_scope(state, ctx, client_id).await };
+    if !perms.iter().any(|p| m.can(*p)) {
+        return Err(ApiError::Forbidden("your coach hasn't given you access to this"));
+    }
+    if !m.assigned(client_id) {
+        return Err(ApiError::Forbidden("this client isn't assigned to you"));
+    }
+    let client: Profile = state.store.get(&format!("USER#{client_id}"), "PROFILE").await?.ok_or(ApiError::NotFound("client"))?;
+    if client.role == Role::Client && client.coach_id == ctx.profile.coach_id {
+        return Ok(ClientScope { client, by_coach: true });
+    }
+    Err(ApiError::Forbidden("not your client"))
+}
+
+/// A client can see only their own data; a coach only their own clients'
+/// data. Assistants are refused: routes they may use call `client_scope_as`.
 pub async fn client_scope(state: &AppState, ctx: &Ctx, client_id: &str) -> ApiResult<ClientScope> {
     if ctx.profile.role == Role::Client {
         if ctx.user_id() == client_id {

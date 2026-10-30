@@ -12,7 +12,8 @@ use ptcore::records::{new_records, PersonalRecord};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use crate::auth::{client_scope, Ctx};
+use ptcore::team::Perm;
+use crate::auth::{client_scope, client_scope_as, Ctx};
 use crate::error::{ApiError, ApiResult};
 use crate::store::keyed;
 use crate::AppState;
@@ -43,7 +44,7 @@ pub struct RecordsQuery {
 /// `GET /clients/{cid}/records[?log={id}]`: the client's current records,
 /// newest first.
 pub async fn list(State(st): State<AppState>, ctx: Ctx, Path(cid): Path<String>, Query(q): Query<RecordsQuery>) -> ApiResult<Json<Vec<PersonalRecord>>> {
-    let scope = client_scope(&st, &ctx, &cid).await?;
+    let scope = client_scope_as(&st, &ctx, &cid, &[Perm::Progress, Perm::Programming]).await?;
     let mut all: Vec<PersonalRecord> = st.store.query_prefix(&scope.pk(), "PR#").await?;
     if let Some(log) = &q.log {
         all.retain(|r| &r.log_id == log && !r.first);

@@ -13,7 +13,8 @@ use ptcore::nutrition::{Basis, Candidate, FoodSnap, Item, Meal, Saved, Target, M
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::auth::{client_scope, Ctx};
+use ptcore::team::Perm;
+use crate::auth::{client_scope, client_scope_as, Ctx};
 use crate::error::{bad_request, ApiError, ApiResult};
 use crate::store::keyed;
 use crate::util::{audit, new_id};
@@ -98,7 +99,7 @@ const TARGET_SK: &str = "NUTRITION_TARGET";
 /// `GET /clients/{cid}/meals?days=14`: whole meals, per-day kcal and macros,
 /// the coach's targets and the last 7 days' averages against them.
 pub async fn list(State(st): State<AppState>, ctx: Ctx, Path(cid): Path<String>, Query(q): Query<DaysQuery>) -> ApiResult<Json<Value>> {
-    let scope = client_scope(&st, &ctx, &cid).await?;
+    let scope = client_scope_as(&st, &ctx, &cid, &[Perm::Nutrition, Perm::Progress]).await?;
     audit(&st, &ctx, &scope, "read the food journal").await;
     let pk = scope.pk();
     let today = scope.today();
@@ -116,7 +117,7 @@ pub async fn list(State(st): State<AppState>, ctx: Ctx, Path(cid): Path<String>,
 
 /// `GET /clients/{cid}/nutrition/target`.
 pub async fn get_target(State(st): State<AppState>, ctx: Ctx, Path(cid): Path<String>) -> ApiResult<Json<Value>> {
-    let scope = client_scope(&st, &ctx, &cid).await?;
+    let scope = client_scope_as(&st, &ctx, &cid, &[Perm::Nutrition, Perm::Progress]).await?;
     let target: Option<Target> = st.store.get(&scope.pk(), TARGET_SK).await?;
     Ok(Json(json!({ "target": target })))
 }
@@ -124,7 +125,7 @@ pub async fn get_target(State(st): State<AppState>, ctx: Ctx, Path(cid): Path<St
 /// `PUT /clients/{cid}/nutrition/target`: the coach sets daily kcal and macro
 /// targets (any of them; all empty clears the targets).
 pub async fn put_target(State(st): State<AppState>, ctx: Ctx, Path(cid): Path<String>, Json(mut body): Json<Target>) -> ApiResult<Json<Value>> {
-    let scope = client_scope(&st, &ctx, &cid).await?;
+    let scope = client_scope_as(&st, &ctx, &cid, &[Perm::Nutrition]).await?;
     if !scope.by_coach {
         return Err(ApiError::Forbidden("the coach sets nutrition targets"));
     }
@@ -170,7 +171,7 @@ pub async fn import(State(st): State<AppState>, ctx: Ctx, Path(cid): Path<String
 /// normally use the PUT below through the outbox; this is the coach's path
 /// and the e2e shortcut.
 pub async fn create(State(st): State<AppState>, ctx: Ctx, Path(cid): Path<String>, Json(body): Json<MealIn>) -> ApiResult<Json<Meal>> {
-    let scope = client_scope(&st, &ctx, &cid).await?;
+    let scope = client_scope_as(&st, &ctx, &cid, &[Perm::Nutrition]).await?;
     if !editable(body.date, scope.today()) {
         return Err(bad_request("meals can be logged for today and the past week"));
     }
@@ -184,7 +185,7 @@ pub async fn create(State(st): State<AppState>, ctx: Ctx, Path(cid): Path<String
 /// like a habit day. If the new copy names a different date, the old-dated
 /// copy of this id is removed too, so one id never has two live copies.
 pub async fn put_meal(State(st): State<AppState>, ctx: Ctx, Path((cid, mid)): Path<(String, String)>, Json(body): Json<MealIn>) -> ApiResult<Json<Meal>> {
-    let scope = client_scope(&st, &ctx, &cid).await?;
+    let scope = client_scope_as(&st, &ctx, &cid, &[Perm::Nutrition]).await?;
     let pk = scope.pk();
     if !editable(body.date, scope.today()) {
         return Err(bad_request("meals can be logged for today and the past week"));
@@ -232,7 +233,7 @@ struct SearchCache {
 /// here — the browser must never hold the key — and repeats of the same words
 /// are answered from FOODCACHE# (the free tier allows ~1 000 lookups an hour).
 pub async fn search(State(st): State<AppState>, ctx: Ctx, Query(q): Query<SearchQuery>) -> ApiResult<Json<Value>> {
-    ctx.require_coach()?;
+    ctx.require(Perm::Nutrition)?;
     let raw = q.q.unwrap_or_default();
     let words: Vec<String> = raw.split_whitespace().map(|w| w.to_lowercase()).collect();
     if words.is_empty() || raw.trim().chars().count() > 80 {
@@ -280,7 +281,7 @@ pub struct FoodIn {
 
 /// `GET /foods`: the coach's saved staples.
 pub async fn list_foods(State(st): State<AppState>, ctx: Ctx) -> ApiResult<Json<Vec<Saved>>> {
-    let coach = ctx.require_coach()?;
+    let coach = ctx.require(Perm::Nutrition)?;
     let mut foods: Vec<Saved> = st.store.query_prefix(&format!("COACH#{coach}"), "FOOD#").await?;
     foods.sort_by_key(|f| f.created_at);
     Ok(Json(foods))
@@ -288,7 +289,7 @@ pub async fn list_foods(State(st): State<AppState>, ctx: Ctx) -> ApiResult<Json<
 
 /// `POST /foods`: save a staple, usually straight from a search candidate.
 pub async fn create_food(State(st): State<AppState>, ctx: Ctx, Json(body): Json<FoodIn>) -> ApiResult<Json<Saved>> {
-    let coach = ctx.require_coach()?;
+    let coach = ctx.require(Perm::Nutrition)?;
     let pk = format!("COACH#{coach}");
     let existing: Vec<Saved> = st.store.query_prefix(&pk, "FOOD#").await?;
     if existing.len() >= MAX_SAVED {
@@ -302,7 +303,7 @@ pub async fn create_food(State(st): State<AppState>, ctx: Ctx, Json(body): Json<
 
 /// `DELETE /foods/{fid}`.
 pub async fn remove_food(State(st): State<AppState>, ctx: Ctx, Path(fid): Path<String>) -> ApiResult<Json<Value>> {
-    let coach = ctx.require_coach()?;
+    let coach = ctx.require(Perm::Nutrition)?;
     let pk = format!("COACH#{coach}");
     let f: Option<Saved> = st.store.get(&pk, &food_sk(fid.as_str())).await?;
     let Some(x) = f else { return Err(ApiError::NotFound("food")); };

@@ -8,6 +8,7 @@ use axum::extract::{Path, State};
 use axum::Json;
 use chrono::Utc;
 use ptcore::model::{CoachEntry, Invite, InviteKind, Profile, Role, RosterEntry, UnitSystem};
+use ptcore::team::Member;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -26,7 +27,7 @@ pub const ADMIN_PK: &str = "ADMIN";
 /// client invites, the admin partition for coach invites.
 fn listing_pk(inv: &Invite) -> String {
     match inv.kind {
-        InviteKind::Client => format!("COACH#{}", inv.coach_id),
+        InviteKind::Client | InviteKind::Assistant => format!("COACH#{}", inv.coach_id),
         InviteKind::Coach => ADMIN_PK.to_string(),
     }
 }
@@ -48,6 +49,8 @@ pub fn new_invite(kind: InviteKind, coach_id: &str, coach_name: &str, email: &st
         created_at: now,
         accepted_by: None,
         ttl: now.timestamp() + INVITE_DAYS * 24 * 3600,
+        title: None,
+        perms: vec![],
     })
 }
 
@@ -111,7 +114,8 @@ pub async fn resend(State(st): State<AppState>, ctx: Ctx, Path(code): Path<Strin
 
 pub async fn list(State(st): State<AppState>, ctx: Ctx) -> ApiResult<Json<Vec<Invite>>> {
     let coach_id = ctx.require_coach()?;
-    Ok(Json(open_invites(&st, &format!("COACH#{coach_id}")).await?))
+    // Client invitations only; the team's are listed under /team.
+    Ok(Json(open_invites(&st, &format!("COACH#{coach_id}")).await?.into_iter().filter(|i| i.kind == InviteKind::Client).collect()))
 }
 
 pub async fn revoke(State(st): State<AppState>, ctx: Ctx, Path(code): Path<String>) -> ApiResult<Json<Value>> {
@@ -139,14 +143,14 @@ async fn open_invite(st: &AppState, code: &str) -> ApiResult<Invite> {
 /// it was sent to.
 pub async fn public(State(st): State<AppState>, Path(code): Path<String>) -> ApiResult<Json<Value>> {
     let inv = open_invite(&st, &code).await?;
-    Ok(Json(json!({ "kind": inv.kind, "coachName": inv.coach_name, "clientName": inv.client_name, "email": inv.email })))
+    Ok(Json(json!({ "kind": inv.kind, "coachName": inv.coach_name, "clientName": inv.client_name, "email": inv.email, "title": inv.title })))
 }
 
 /// Lets the join screen show "Join <coach>'s team" (or the coach-invite
 /// wording) before accepting.
 pub async fn peek(State(st): State<AppState>, _caller: Caller, Path(code): Path<String>) -> ApiResult<Json<Value>> {
     let inv = open_invite(&st, &code).await?;
-    Ok(Json(json!({ "kind": inv.kind, "coachName": inv.coach_name, "clientName": inv.client_name, "email": inv.email })))
+    Ok(Json(json!({ "kind": inv.kind, "coachName": inv.coach_name, "clientName": inv.client_name, "email": inv.email, "title": inv.title })))
 }
 
 #[derive(Deserialize)]
@@ -189,6 +193,8 @@ pub async fn accept(
     }
     let (role, coach_id) = match inv.kind {
         InviteKind::Client => (Role::Client, inv.coach_id.clone()),
+        // An assistant works in their head coach's business.
+        InviteKind::Assistant => (Role::Assistant, inv.coach_id.clone()),
         // Each coach is a tenant: coach_id is their own id.
         InviteKind::Coach => (Role::Coach, caller.sub.clone()),
     };
@@ -214,6 +220,19 @@ pub async fn accept(
         InviteKind::Client => {
             let roster = RosterEntry { client_id: caller.sub.clone(), name, email: profile.email.clone(), joined_at: now };
             keyed(&listing_pk(&inv), &format!("CLIENT#{}", caller.sub), &roster)?
+        }
+        // A team member, with the title and permissions they were invited with.
+        InviteKind::Assistant => {
+            let m = Member {
+                user_id: caller.sub.clone(),
+                name,
+                email: profile.email.clone(),
+                title: inv.title.clone().unwrap_or_else(|| ptcore::team::DEFAULT_TITLE.to_string()),
+                perms: inv.perms.clone(),
+                clients: vec![],
+                joined_at: now,
+            };
+            keyed(&listing_pk(&inv), &format!("ASSISTANT#{}", caller.sub), &m)?
         }
         InviteKind::Coach => {
             let entry = CoachEntry { coach_id: caller.sub.clone(), name, email: profile.email.clone(), joined_at: now, suspended_at: None };

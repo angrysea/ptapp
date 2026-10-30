@@ -11,7 +11,8 @@ use ptcore::model::Role;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use crate::auth::{client_scope, Ctx};
+use ptcore::team::Perm;
+use crate::auth::{client_scope, client_scope_as, Ctx};
 use crate::error::{bad_request, ApiError, ApiResult};
 use crate::util::parse_date;
 use crate::AppState;
@@ -54,7 +55,8 @@ pub async fn put_intake_template(State(st): State<AppState>, ctx: Ctx, Json(mut 
 /// `GET /checkin-template`: the coach's own questions, or a client's coach's.
 pub async fn get_template(State(st): State<AppState>, ctx: Ctx) -> ApiResult<Json<Template>> {
     let coach = match ctx.profile.role {
-        Role::Coach | Role::Client => ctx.profile.coach_id.clone(),
+        // An assistant's coach_id is their head coach: the team asks the same questions.
+        Role::Coach | Role::Client | Role::Assistant => ctx.profile.coach_id.clone(),
         Role::Admin => return Err(ApiError::Forbidden("coaches and clients only")),
     };
     Ok(Json(template_of(&st, &coach).await?))
@@ -75,7 +77,7 @@ pub async fn put_template(State(st): State<AppState>, ctx: Ctx, Json(mut t): Jso
 /// `GET /clients/{cid}/checkins`: this week's Monday, the questions to answer
 /// now, and the latest check-ins, newest first.
 pub async fn list(State(st): State<AppState>, ctx: Ctx, Path(cid): Path<String>) -> ApiResult<Json<Value>> {
-    let scope = client_scope(&st, &ctx, &cid).await?;
+    let scope = client_scope_as(&st, &ctx, &cid, &[Perm::Progress]).await?;
     let mut all: Vec<Checkin> = st.store.query_prefix(&scope.pk(), "CHECKIN#").await?;
     all.sort_by_key(|c| std::cmp::Reverse(c.week_start));
     all.truncate(WEEKS_SHOWN);

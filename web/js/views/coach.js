@@ -32,14 +32,15 @@ function ratingChip(n) {
 }
 
 export async function renderRoster() {
-  const [rows, invites, suggestions, requests] = await Promise.all([get('/clients', { cache: true }), get('/invites').catch(() => []), suggestionsCard(),
-    requestsCard({ onChange: renderRoster, emailResult })]);
-  const alerts = await alertsCard(); // after the roster, which files new missed-workout alerts
+  const head = session.isHeadCoach; // invitations, suggestions, requests and alerts are the head coach's
+  const [rows, invites, suggestions, requests] = await Promise.all([get('/clients', { cache: true }), head ? get('/invites').catch(() => []) : [], head ? suggestionsCard() : null,
+    head ? requestsCard({ onChange: renderRoster, emailResult }) : null]);
+  const alerts = head ? await alertsCard() : null; // after the roster, which files new missed-workout alerts
   rows.sort((a, b) => (b.painFlag - a.painFlag) || ((a.adherence.pct ?? 101) - (b.adherence.pct ?? 101)));
   mount($app(),
     h('div', { class: 'spread page-head' }, h('h1', {}, 'Clients'),
-      h('div', { class: 'row' }, h('a', { class: 'btn', href: '#/schedule' }, '📅 Schedule'), h('button', { class: 'primary', onclick: inviteSheet }, '+ Invite'))),
-    rows.length === 0 && h('div', { class: 'card muted' }, 'No clients yet. Invite your first client, or share your sign-up link below.'),
+      head && h('div', { class: 'row' }, h('a', { class: 'btn', href: '#/schedule' }, '📅 Schedule'), h('button', { class: 'primary', onclick: inviteSheet }, '+ Invite'))),
+    rows.length === 0 && h('div', { class: 'card muted' }, head ? 'No clients yet. Invite your first client, or share your sign-up link below.' : 'No clients are assigned to you yet. Your coach assigns them.'),
     alerts,
     suggestions,
     requests,
@@ -122,7 +123,13 @@ export async function renderClient(cid, tab = 'overview', focus = null) {
   try { detail = await get(`/clients/${cid}`, { cache: true }); } catch (e) { errorToast(e); return go('/'); }
   const client = detail.profile;
   const body = h('div');
-  const tabs = [['overview', 'Overview'], ['calendar', 'Calendar'], ['logs', 'Logs'], ['checkins', 'Check-ins'], ['metrics', 'Body'], ['intake', 'Intake'], ['messages', 'Messages']];
+  // An assistant sees the tabs their permissions cover.
+  const can = (...ps) => ps.some((p) => session.can(p));
+  const tabs = [
+    can('progress', 'nutrition') && ['overview', 'Overview'], can('programming') && ['calendar', 'Calendar'], can('progress', 'programming', 'review') && ['logs', 'Logs'],
+    can('progress') && ['checkins', 'Check-ins'], can('progress') && ['metrics', 'Body'], can('health') && ['intake', 'Intake'], can('messaging') && ['messages', 'Messages'],
+  ].filter(Boolean);
+  if (!tabs.some(([k]) => k === tab)) tab = tabs[0]?.[0] ?? 'overview';
   mount($app(),
     h('button', { class: 'ghost small', onclick: () => go('/') }, '‹ Clients'),
     h('h1', {}, client.name),
@@ -135,6 +142,8 @@ export async function renderClient(cid, tab = 'overview', focus = null) {
 }
 
 async function overview(el, client) {
+  // A nutrition assistant without Progress sees the food journal only.
+  if (!session.can('progress')) return mount(el, await overviewCard(client));
   const u = units(session.profile);
   const d = await get(`/clients/${client.userId}/dashboard?weeks=8`);
   const a = d.adherence;
@@ -159,9 +168,9 @@ async function overview(el, client) {
           d.checks.map((c) => h('tr', {}, h('td', {}, fmtDate(c.date)), h('td', {}, c.check.rpe ?? ''), h('td', {}, c.check.energy ?? ''),
             h('td', {}, c.check.sleep ?? ''), h('td', {}, c.check.soreness ?? ''),
             h('td', {}, c.check.pain ? h('span', { class: 'chip bad' }, c.check.painLocation || 'yes') : ''))))),
-    await clientCreditsCard(client),
+    session.isHeadCoach && await clientCreditsCard(client),
     await habitsCard(client),
-    await overviewCard(client),
+    (session.can('nutrition') || session.can('progress')) && await overviewCard(client),
   );
 }
 

@@ -20,16 +20,23 @@ pub async fn get_me(State(st): State<AppState>, caller: Caller) -> ApiResult<Jso
         Some(p) if p.role == Role::Coach => Some(super::coaches::complete(&st, &caller.sub).await?),
         _ => None,
     };
-    // A client's coach, for the header: their business name, else their name.
+    // A client's coach, for the header: their business name, else their name
+    // (an assistant's head coach too).
     let coach = match &profile {
-        Some(p) if p.role == Role::Client => st
+        Some(p) if p.role == Role::Client || p.role == Role::Assistant => st
             .store
             .get::<Profile>(&format!("USER#{}", p.coach_id), "PROFILE")
             .await?
             .map(|c| json!({ "name": c.name, "businessName": c.business_name })),
         _ => None,
     };
+    // An assistant's title, permissions and assigned clients, which shape the app.
+    let member = match &profile {
+        Some(p) if p.role == Role::Assistant => st.store.get::<ptcore::team::Member>(&format!("COACH#{}", p.coach_id), &format!("ASSISTANT#{}", p.user_id)).await?,
+        _ => None,
+    };
     Ok(Json(json!({
+        "member": member,
         "userId": caller.sub,
         "email": caller.email,
         "profile": profile,

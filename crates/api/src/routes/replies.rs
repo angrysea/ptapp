@@ -14,13 +14,14 @@ use axum::extract::{Path, State};
 use axum::Json;
 use chrono::Utc;
 use futures::future::try_join_all;
-use ptcore::model::{Comment, Reply, Role, VideoStatus};
+use ptcore::model::{Comment, Reply, VideoStatus};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use super::messages::on_message;
 use super::videos::{assemble, find, mark_reviewed, part_sizes, sign_parts, start_multipart, tag_reviewed, Complete, PartsQuery, PART_SIZE};
-use crate::auth::{client_scope, ClientScope, Ctx};
+use ptcore::team::Perm;
+use crate::auth::{client_scope, client_scope_as, ClientScope, Ctx};
 use crate::error::{bad_request, ApiError, ApiResult};
 use crate::util::{audit, check_size, ext_for, new_id, presign_get, VIDEO_TYPES};
 use crate::AppState;
@@ -37,7 +38,7 @@ fn reply_sk(id: &str) -> String {
 
 /// Only the client's coach replies.
 async fn coach_scope(st: &AppState, ctx: &Ctx, cid: &str) -> ApiResult<ClientScope> {
-    let scope = client_scope(st, ctx, cid).await?;
+    let scope = client_scope_as(st, ctx, cid, &[Perm::Review]).await?;
     if !scope.by_coach {
         return Err(ApiError::Forbidden("only the coach replies to videos"));
     }
@@ -168,8 +169,8 @@ async fn finish(st: &AppState, ctx: &Ctx, scope: &ClientScope, r: &mut Reply) ->
     let c = Comment {
         id: r.id.clone(),
         author_id: ctx.user_id().to_string(),
-        author_role: Role::Coach,
-        author_name: ctx.profile.name.clone(),
+        author_role: ctx.profile.role,
+        author_name: ctx.display_name(),
         log_id: Some(video.log_id.clone()),
         item_id: Some(video.item_id.clone()),
         set_index: Some(video.set_index),
@@ -199,7 +200,7 @@ pub struct ReplyOut {
 
 /// Sent replies, newest first, with playback URLs. The client and their coach.
 pub async fn list(State(st): State<AppState>, ctx: Ctx, Path(cid): Path<String>) -> ApiResult<Json<Vec<ReplyOut>>> {
-    let scope = client_scope(&st, &ctx, &cid).await?;
+    let scope = client_scope_as(&st, &ctx, &cid, &[Perm::Review, Perm::Messaging]).await?;
     audit(&st, &ctx, &scope, "view-replies").await;
     let mut replies: Vec<Reply> = st.store.query_prefix(&scope.pk(), "REPLY#").await?;
     replies.retain(|r| r.status == VideoStatus::Ready);

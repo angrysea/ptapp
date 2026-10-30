@@ -106,6 +106,12 @@ pub fn router(state: AppState) -> Router {
         .route("/exercises/{id}/demo-upload", post(exercises::demo_upload))
         .route("/exercises/{id}/demo-confirm", post(exercises::demo_confirm))
         .route("/programs", get(programs::list).post(programs::create))
+        // the head coach's team of assistant coaches
+        .route("/team", get(team::list))
+        .route("/team/invites", post(team::invite))
+        .route("/team/invites/{code}", delete(team::revoke_invite))
+        .route("/team/{uid}", put(team::update).delete(team::remove))
+        .route("/me/team", get(team::mine))
         // service credits: the coach's plans and settings, a client's grants and uses
         .route("/credits/settings", get(credits::get_settings).put(credits::put_settings))
         .route("/plans", get(credits::list_plans).post(credits::create_plan))

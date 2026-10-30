@@ -14,7 +14,8 @@ use ptcore::strength::resolve_workout;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::auth::{client_scope, Ctx};
+use ptcore::team::Perm;
+use crate::auth::{client_scope, client_scope_as, Ctx};
 use crate::error::{bad_request, ApiError, ApiResult};
 use crate::routes::maxes::{maxes_by_exercise, raise_from_log};
 use crate::routes::programs::copy_for_client;
@@ -45,8 +46,8 @@ pub async fn assign(
     Path(cid): Path<String>,
     Json(body): Json<AssignBody>,
 ) -> ApiResult<Json<Assignment>> {
-    let coach = ctx.require_coach()?.to_string();
-    let scope = client_scope(&st, &ctx, &cid).await?;
+    let coach = ctx.require(Perm::Programming)?.to_string();
+    let scope = client_scope_as(&st, &ctx, &cid, &[Perm::Programming]).await?;
     let mut program: Program = match (&body.program_id, &body.starter_key) {
         (Some(id), None) => st.store.get(&format!("COACH#{coach}"), &format!("PROGRAM#{id}")).await?.ok_or(ApiError::NotFound("program"))?,
         (None, Some(key)) => ptcore::starters::starter_programs().into_iter().find(|p| &p.id == key).ok_or(ApiError::NotFound("starter program"))?,
@@ -119,7 +120,7 @@ pub async fn assign(
 }
 
 pub async fn list_assignments(State(st): State<AppState>, ctx: Ctx, Path(cid): Path<String>) -> ApiResult<Json<Vec<Assignment>>> {
-    let scope = client_scope(&st, &ctx, &cid).await?;
+    let scope = client_scope_as(&st, &ctx, &cid, &[Perm::Programming, Perm::Progress]).await?;
     let mut a: Vec<Assignment> = st.store.query_prefix(&scope.pk(), "ASSIGN#").await?;
     a.sort_by_key(|x| std::cmp::Reverse(x.start_date));
     Ok(Json(a))
@@ -133,8 +134,8 @@ pub async fn unassign(
     ctx: Ctx,
     Path((cid, aid)): Path<(String, String)>,
 ) -> ApiResult<Json<Value>> {
-    ctx.require_coach()?;
-    let scope = client_scope(&st, &ctx, &cid).await?;
+    ctx.require(Perm::Programming)?;
+    let scope = client_scope_as(&st, &ctx, &cid, &[Perm::Programming]).await?;
     let pk = scope.pk();
     let today = scope.today();
     let from = format!("SCHED#{}", today + Duration::days(1));
@@ -183,7 +184,7 @@ pub async fn schedule(
     Path(cid): Path<String>,
     Query(r): Query<Range>,
 ) -> ApiResult<Json<Vec<ScheduledWorkout>>> {
-    let scope = client_scope(&st, &ctx, &cid).await?;
+    let scope = client_scope_as(&st, &ctx, &cid, &[Perm::Programming, Perm::Progress]).await?;
     audit(&st, &ctx, &scope, "view-schedule").await;
     let (from, to) = r.resolve(scope.today())?;
     let items = st
@@ -199,7 +200,7 @@ pub async fn logs(
     Path(cid): Path<String>,
     Query(r): Query<Range>,
 ) -> ApiResult<Json<Vec<WorkoutLog>>> {
-    let scope = client_scope(&st, &ctx, &cid).await?;
+    let scope = client_scope_as(&st, &ctx, &cid, &[Perm::Progress, Perm::Programming, Perm::Review]).await?;
     audit(&st, &ctx, &scope, "view-logs").await;
     let (from, to) = r.resolve(scope.today())?;
     let items = st

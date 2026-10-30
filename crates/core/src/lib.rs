@@ -22,3 +22,4 @@ pub mod records;
 pub mod requests;
 pub mod stats;
 pub mod strength;
+pub mod team;
