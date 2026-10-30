@@ -855,7 +855,7 @@ with sync_playwright() as p:
     coach.locator(".sheet").get_by_role("button", name="Save book").click()
     expect(coach.get_by_text("Shared with all clients")).to_be_visible()
     coach.get_by_role("button", name="Import").click()
-    coach.get_by_label("Recipe text").fill("Overnight oats\nServes 2\nIngredients\n- 100 g oats\n- 200 g milk\nMethod\n1. Mix and chill overnight.")
+    coach.get_by_label("Recipe text").fill("Overnight oats\nCreamy oats soaked overnight.\nServes 2\nIngredients\n- 100 g oats\n- 200 g milk\nMethod\n1. Mix and chill overnight.")
     coach.get_by_role("button", name="Read recipe").click()
     expect(coach.get_by_label("Title", exact=True)).to_have_value("Overnight oats")
     coach.get_by_label("Calories of ingredient 1").fill("380")
@@ -892,6 +892,7 @@ with sync_playwright() as p:
     # the shared book, and a PDF of their own read on the device
     client.locator(".card", has_text="Meals").get_by_role("link", name="Recipes").click()
     expect(client.locator(".card", has_text="Breakfasts")).to_contain_text("Overnight oats")
+    expect(client.locator(".card", has_text="Breakfasts").locator(".recipe-desc")).to_have_text("Creamy oats soaked overnight.")  # descriptions show in the list
     client.get_by_role("button", name="Import").click()
     client.get_by_label("Import from").select_option("pdf")
     client.get_by_label("PDF file").set_input_files(files=[{"name": "smoothie.pdf", "mimeType": "application/pdf", "buffer": tiny_pdf(["Banana smoothie", "Serves 1", "Ingredients", "- 1 banana", "- 250 g milk", "Method", "1. Blend until smooth."])}])

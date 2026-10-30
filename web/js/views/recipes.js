@@ -231,7 +231,8 @@ async function matchFood(it, onPick) {
 async function renderCoachRecipes() {
   const [books, recipes] = await Promise.all([get('/recipes/books'), get('/recipes')]);
   const card = (r) => h('div', { class: 'spread recipe-row', onclick: () => go(`/recipes/${r.id}`), style: 'cursor:pointer' },
-    h('div', {}, h('strong', {}, r.title), h('div', { class: 'muted small' }, `${r.servings} serving${r.servings === 1 ? '' : 's'} · ${macroLine(serving(r))}`)),
+    h('div', {}, h('strong', {}, r.title), r.description && h('div', { class: 'small recipe-desc' }, r.description),
+      h('div', { class: 'muted small' }, `${r.servings} serving${r.servings === 1 ? '' : 's'} · ${macroLine(serving(r))}`)),
     h('span', { class: 'muted' }, '›'));
   const shareText = (b) => (b.shared?.with === 'all' ? 'Shared with all clients' : b.shared?.with === 'clients' ? `Shared with ${b.shared.ids.length} client${b.shared.ids.length === 1 ? '' : 's'}` : 'Not shared');
   const unfiled = recipes.filter((r) => !r.bookId || !books.some((b) => b.id === r.bookId));
@@ -325,7 +326,8 @@ export async function logServing(r, servings, label) {
 async function renderClientRecipes() {
   const data = await get(`/clients/${session.userId}/recipes`, { cache: true });
   const row = (r, mine) => h('div', { class: 'spread recipe-row', style: 'cursor:pointer', onclick: () => (mine ? go(`/recipes/${r.id}`) : recipeSheet(r)) },
-    h('div', {}, h('strong', {}, r.title), h('div', { class: 'muted small' }, macroLine(serving(r)), ' per serving')),
+    h('div', {}, h('strong', {}, r.title), r.description && h('div', { class: 'small recipe-desc' }, r.description),
+      h('div', { class: 'muted small' }, macroLine(serving(r)), ' per serving')),
     h('span', { class: 'muted' }, mine ? 'Edit ›' : '›'));
   mount($app(),
     h('button', { class: 'ghost small', onclick: () => go('/') }, '‹ Today'),
