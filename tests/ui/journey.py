@@ -583,8 +583,9 @@ with sync_playwright() as p:
     client.get_by_role("link", name="Intake questionnaire").click()
     expect(client.get_by_role("heading", name="From your coach")).to_be_visible()
     client.get_by_label("Your main sport").fill("Powerlifting")
-    client.get_by_role("button", name="Save", exact=True).click()
-    expect(client.locator("#toast")).to_contain_text("Saved")
+    # wait for the save itself: an earlier "Saved" toast may still be showing
+    with client.expect_response(lambda r: r.url.endswith("/intake") and r.request.method == "PUT" and r.ok):
+        client.get_by_role("button", name="Save", exact=True).click()
     coach.goto(coach.url.split("#")[0] + "#/c/client" + RUN + "/intake")
     expect(coach.get_by_text("Powerlifting")).to_be_visible()
 
