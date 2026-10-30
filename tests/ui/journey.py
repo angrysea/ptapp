@@ -806,7 +806,13 @@ with sync_playwright() as p:
     bench = coach.locator(".card.starter", has_text="Strength benchmark (1RM estimate)")
     expect(bench).to_contain_text("1 week · 1 workout")
     shot(coach, "16a-starter-programs")
+    # Cancel creates nothing
     bench.get_by_role("button", name="Use this program").click()
+    coach.locator(".sheet").get_by_role("button", name="Cancel").click()
+    expect(coach.locator(".sheet")).to_have_count(0)
+    expect(coach.get_by_role("heading", name="Programs", exact=True)).to_be_visible()
+    bench.get_by_role("button", name="Use this program").click()
+    coach.locator(".sheet").get_by_role("button", name="Add to my programs").click()
     expect(coach.get_by_text("Added to your programs")).to_be_visible()
     expect(coach.get_by_label("Program name")).to_have_value("Strength benchmark (1RM estimate)")
     coach.locator(".cal .day.has").first.click()

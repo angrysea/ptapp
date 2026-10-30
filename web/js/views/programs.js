@@ -52,16 +52,29 @@ export async function renderPrograms() {
         h('strong', {}, p.name),
         h('div', { class: 'muted small' }, `${p.weeks} week${p.weeks === 1 ? '' : 's'} · ${p.workouts.length} workout${p.workouts.length === 1 ? '' : 's'}`),
         h('p', { class: 'small' }, p.description),
-        h('button', {
-          class: 'small primary',
-          onclick: (e) => busy(e.currentTarget, async () => {
-            const copy = await post(`/programs/starters/${p.id}/copy`, {});
-            toast('Added to your programs');
-            go(`/programs/${copy.id}`);
-          }),
-        }, 'Use this program'))),
+        h('button', { class: 'small primary', onclick: () => useStarter(p) }, 'Use this program'))),
     ],
   );
+}
+
+/** Confirms before a starter program becomes one of the coach's templates;
+ * Cancel leaves nothing behind. */
+function useStarter(p) {
+  const sh = sheet(
+    h('h2', {}, `Use “${p.name}”?`),
+    h('p', {}, 'This adds a copy to your templates, where you can edit it and assign it to clients.'),
+    h('p', { class: 'muted small' }, 'To give it to one client only, assign it from their Calendar tab instead: that makes a copy just for them.'),
+    h('div', { class: 'row' },
+      h('button', { class: 'grow', onclick: () => sh.close() }, 'Cancel'),
+      h('button', {
+        class: 'primary grow',
+        onclick: (e) => busy(e.currentTarget, async () => {
+          const copy = await post(`/programs/starters/${p.id}/copy`, {});
+          sh.close();
+          toast('Added to your programs');
+          go(`/programs/${copy.id}`);
+        }),
+      }, 'Add to my programs')));
 }
 
 /** One program in the list: open, duplicate, delete. */
