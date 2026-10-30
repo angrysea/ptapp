@@ -975,6 +975,9 @@ with sync_playwright() as p:
     expect(asst.locator('#tabs a[data-path="/recipes"]')).to_be_visible()
     expect(asst.locator('#tabs a[data-path="/videos"]')).to_have_count(0)
     expect(asst.locator('#tabs a[data-path="/exercises"]')).to_have_count(0)
+    asst.goto(BASE + "#/help")  # their own manual
+    expect(asst.get_by_text(re.compile("^You help your head coach"))).to_be_visible()
+    asst.go_back()
     # the head coach assigns Sam
     coach.reload()
     team.get_by_role("button", name="Edit").click()

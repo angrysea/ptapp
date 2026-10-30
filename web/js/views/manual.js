@@ -1,6 +1,6 @@
 // #/help: the user manual, one per role, opened from the ? in the header.
-// Coaches and clients see their own; admins see all three (they support
-// both). Plain data below, so the wording is easy to keep current.
+// Coaches, assistant coaches and clients see their own; admins see all of
+// them (they support everyone). Plain data below, so the wording is easy to keep current.
 
 import { go } from '../router.js';
 import { session } from '../session.js';
@@ -191,6 +191,68 @@ const MANUALS = {
           'Your coaching time (Profile) shows minutes per client per week.',
         ],
       },
+      {
+        title: 'Your team (assistant coaches)',
+        body: [
+          'Assistant coaches help with the clients you assign them, for only the work you allow. Clients see their name and title, e.g. “Maria · Nutrition Coach”.',
+          { steps: [
+            'On Profile, under Your team, tap + Invite assistant.',
+            'Enter their email and name, a title (Assistant Coach unless you change it), and tick what they can do. Send the invitation.',
+            'Once they’ve joined, tap Edit beside them and tick the clients they work with. Change their title or permissions here any time.',
+          ] },
+          'What each permission allows, for assigned clients only:',
+          { list: [
+            'Programming: your programs and starter programs, assigning them, clients’ programs and 1RMs, custom exercises.',
+            'Nutrition: recipes, recipe books, meal plans, the food journal and nutrition targets.',
+            'Messaging: the client’s messages, including photos and voice notes.',
+            'Video review: set videos waiting for review, and video replies.',
+            'Progress (view): workouts and logs, body metrics and photos, check-ins, habits and the food journal. Read only.',
+            'Health & intake: the intake questionnaire and health screening.',
+          ] },
+          'Assistants work in your library: what they make is yours. Billing, plans and credits, invitations, requests, alerts and your team stay with you. Remove from team ends their access at once; suspending your account suspends theirs too.',
+        ],
+      },
+    ],
+  },
+
+  assistant: {
+    title: 'Assistant coach manual',
+    intro: 'You help your head coach with the clients they assign you, for the work they’ve allowed. Your tabs depend on that; Profile shows your title, what you can do and how many clients you have.',
+    sections: [
+      {
+        title: 'Get started',
+        body: [
+          { steps: [
+            'Open the invitation email from your head coach and create your password.',
+            'Agree to the coach terms.',
+            'Install the app on your phone’s home screen (on iPhone: Safari → Share → Add to Home Screen) and turn on Notifications on Profile.',
+          ] },
+          'Until your head coach assigns you clients, your client list is empty.',
+        ],
+      },
+      {
+        title: 'What you can do',
+        body: [
+          'Your head coach picks your permissions and can change them any time:',
+          { list: [
+            'Programming: build and edit programs in your head coach’s library, assign them to your clients, and record their maxes.',
+            'Nutrition: recipes, recipe books and meal plans, your clients’ food journals and nutrition targets.',
+            'Messaging: message your clients from the Messages tab or a client’s Messages page. You’re notified when they write.',
+            'Video review: your clients’ set videos on the Videos tab; reply in writing or with a recorded video.',
+            'Progress (view): your clients’ workouts, logs, body data, check-ins, habits and food journal.',
+            'Health & intake: your clients’ intake questionnaire and health screening.',
+          ] },
+          'Without Messaging, you see only comments on workouts and videos, and can comment only there.',
+        ],
+      },
+      {
+        title: 'Working with clients',
+        body: [
+          'Clients tab lists your assigned clients. Tap one to open the pages your permissions allow. Clients see your messages and replies with your name and title.',
+          'What you make (programs, recipes, meal plans) belongs to your head coach’s business. Billing, plans, invitations and the team are theirs.',
+          'If your head coach removes you or their account is suspended, your access ends.',
+        ],
+      },
     ],
   },
 
@@ -289,7 +351,7 @@ const MANUALS = {
   },
 };
 
-const ROLES = [['admin', 'Admin manual'], ['coach', 'Coach manual'], ['client', 'Client manual']];
+const ROLES = [['admin', 'Admin manual'], ['coach', 'Coach manual'], ['assistant', 'Assistant manual'], ['client', 'Client manual']];
 
 function block(item) {
   if (typeof item === 'string') return h('p', {}, item);
@@ -297,7 +359,7 @@ function block(item) {
   return h('ul', {}, item.list.map((s) => h('li', {}, s)));
 }
 
-/** Coaches and clients get their own manual; admins can open any of the three. */
+/** Everyone gets their own manual; admins can open any of them. */
 export function renderManual(role) {
   const own = session.profile.role;
   const pick = own === 'admin' && MANUALS[role] ? role : own;
