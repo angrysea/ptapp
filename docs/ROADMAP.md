@@ -29,7 +29,7 @@ Status legend: ✅ done in MVP · 🟡 partial · ⬜ not started
 | AI | AI-6/AI-7 (whenever AI ships) | AI-1…AI-5 ⬜ |
 | Body metrics | BM-1 ✅ · BM-2 ✅ · BM-3 ✅ · BM-4 ✅ · BM-7 ✅ · BM-8 ✅ | BM-5 ✅ · BM-6 ✅ (US Navy tape estimate; DEXA/BIA/scale readings) |
 | Messaging | MS-1 ✅ (live via AppSync Events, polling fallback; coach inbox; text only) · MS-2 ✅ (Web Push; iPhone needs the Home Screen app) | MS-3 ✅ (messages link to the workout, set or video) · MS-4 ✅ (reminders and scheduled messages, hourly sweep) · MS-5 ✅ (coach's hours on the client's Messages screen and when booking) · MS-6 ⬜ |
-| Business | BZ-1 ⬜ | BZ-2 ✅ (availability, booking, private calendar feed) · BZ-3 ✅ (habits with streaks) · BZ-4 ⬜ · BZ-5 ⬜ · BZ-6 ✅ (printable progress report; PDF via the browser) |
+| Business | BZ-1 ⬜ | BZ-2 ✅ (availability, booking, private calendar feed) · BZ-3 ✅ (habits with streaks) · BZ-4 ✅ (food journal with coach estimates from USDA search, macro targets, 7-day averages, Cronometer/MyFitnessPal CSV import; docs/NUTRITION.md) · BZ-5 ⬜ · BZ-6 ✅ (printable progress report; PDF via the browser) |
 | NFRs | privacy ✅ (private photos, tenant checks, per-user offline cache, data agreement at sign-up) · audit log ✅ · offline ✅ · upload size limits ✅ · CI ✅ (tests on every push; deploys run locally) · backups ✅ (PITR + daily AWS Backup, 35 days; restore tested 2026-10-28, see DEPLOY.md) · MFA ⏸ (deferred by decision, 2026-10-28) · alarms ✅ (email) · export/delete ✅ (clients, self-service; admins suspend or delete coaches) · video retention ✅ (lifecycle on reviewed videos and replies) | |
 
 ---
@@ -155,7 +155,7 @@ Use the server-side render approach from the BRD: the browser records an **edit 
 |---|---|
 | **Native apps** | Wrap the PWA with **Capacitor** for App Store / Play: same web code, plus native camera, background upload, APNs/FCM push and HealthKit / Health Connect plugins. Prototype the video editor in the wrapper early; go native only if it can't perform (BRD stack note). |
 | **LG-8 Wearables** | Capacitor Health plugins read steps, HR and sleep daily → `CLIENT#/HEALTH#{date}`; feeds habits and AI-4. |
-| **BZ-4 Nutrition** | Macro targets `CLIENT#/NUTRITION_TARGET`, daily log `FOOD#{date}`; CSV import from Cronometer/MyFitnessPal exports (their APIs are restricted). |
+| **BZ-4 Nutrition** ✅ | Built (docs/NUTRITION.md). The daily log became the meal journal (`CLIENT#/MEAL#{date}#{id}`, item lines with amounts) instead of a `FOOD#{date}` day item; the coach estimates items from USDA FoodData Central search or saved staples, or types the numbers. Macro targets `CLIENT#/NUTRITION_TARGET` (kcal, protein, carbs, fat, a note) show as meters on the client's Today and against the 7-day averages on the coach's Overview. CSV import (`ptcore::foodimport`) reads Cronometer's Food & Recipe Entries and MyFitnessPal's Nutrition export by header name, for the last 90 days. Not built: per-food cup/tablespoon weights, nutrition in the progress report, and wearable or app sync beyond file import (see LG-8). |
 | **WB-7 Group programs** | `COACH#/GROUP#{id}` with members; assign = fan-out materialize per member (SQS for large groups). |
 | **MS-6 Group chat** | Threads become first-class: `THREAD#{id}` with members; WebSocket fan-out to members. |
 | **BZ-5 Branded app** | `COACH#/BRAND` (logo, colors) → CSS variables at boot. A custom domain per coach via CloudFront + ACM; a per-coach Capacitor build for true white-label. |
@@ -168,5 +168,5 @@ Use the server-side render approach from the BRD: the browser records an **edit 
 1. **Single coach vs. SaaS.** Built multi-tenant (one coach = one tenant). Decide whether coaches pay you (Phase 1b, BZ-1). Coach onboarding is admin-gated already (1b hardening); a SaaS plan would add a subscription check to it.
 2. **Where local AI runs.** The design assumes a GPU box pulling from SQS (Phase 3).
 3. **Lifts for form review.** Pick 3-5 before Phase 3; start labeling clips in Phase 1b.
-4. **Nutrition in scope?** Phase 4 by default.
+4. **Nutrition in scope?** Answered: yes, as a coach-reviewed food journal with targets and file import (BZ-4, built ahead of Phase 4). Meal plans and recipe building remain out of scope.
 5. **Native vs cross-platform.** Currently a PWA, with Capacitor in Phase 4 if store distribution or native APIs are needed sooner.

@@ -7,7 +7,7 @@
 import { get } from '../api.js';
 import { distUnits } from '../cardio.js';
 import { session } from '../session.js';
-import { $app, addDays, barChart, fmtDate, h, lineChart, mount, round, select, todayIso, units } from '../ui.js';
+import { $app, addDays, barChart, fmtDate, h, isoDate, lineChart, mount, round, select, todayIso, units } from '../ui.js';
 
 const WEEKS = [[4, 'Last 4 weeks'], [8, 'Last 8 weeks'], [12, 'Last 12 weeks'], [26, 'Last 6 months']];
 const avg = (xs) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
@@ -44,7 +44,8 @@ export async function renderReport(cid, weeks = 8) {
   // the period's start; logs come back for 90 days at most)
   const habitFrom = addDays(todayIso(), -(Math.min(days, 90) - 1));
   const habitRows = habits.habits.filter((x) => x.active).map((hb) => {
-    const since = [habitFrom, hb.createdAt.slice(0, 10)].sort().at(-1);
+    // the local day it was added: its UTC date is tomorrow on a US evening
+    const since = [habitFrom, isoDate(new Date(hb.createdAt))].sort().at(-1);
     const span = Math.round((Date.parse(todayIso()) - Date.parse(since)) / 864e5) + 1;
     const met = habits.logs.filter((l) => l.habitId === hb.id && l.date >= since && l.value >= hb.target - 1e-9).length;
     return { name: hb.name, met, span, pct: Math.round((met / span) * 100) };

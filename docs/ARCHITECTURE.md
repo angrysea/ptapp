@@ -65,7 +65,8 @@ When a coach reads intake, waiver, metrics or photos, an `AUDIT#` item is writte
 | `CLIENT#{client}` | `PHOTO#{date}-{rand}` | photo record; S3 key `media/{coach}/{client}/photos/…` |
 | `CLIENT#{client}` | `VIDEO#{date}-{rand}` | set video (log, item, set index), status uploading/ready; S3 keys `media/{coach}/{client}/videos/{id}.{mp4,mov,webm}` and `.jpg` poster, uploaded as a multipart upload in 8 MiB parts |
 | `CLIENT#{client}` | `AUDIT#{rfc3339}#{rand}` | coach access log, `ttl` 1 year |
-| `CLIENT#{client}` | `MEAL#{date}#{id}` | food journal: whole meal (item lines with parsed grams and food snapshots); per-day kcal computed on read, `updatedAt` server-stamped |
+| `CLIENT#{client}` | `MEAL#{date}#{id}` | food journal: whole meal (item lines with parsed grams, food snapshots, or numbers set by hand or imported); per-day kcal and macros computed on read, `updatedAt` server-stamped; imported meals have ids `imp{yyyymmdd}{meal}{part}` so a re-import replaces them |
+| `CLIENT#{client}` | `NUTRITION_TARGET` | coach's daily kcal / protein / carbs / fat targets and a note |
 | `COACH#{coach}` | `FOOD#{id}` | coach's saved staple food, usually with a snapshot ("their usual lunch") |
 | `FOODCACHE#{query}` | `CACHE` | food-search results from the USDA proxy, `ttl` 30 days |
 
@@ -102,7 +103,8 @@ GET|POST /clients/{cid}/assignments   DELETE /clients/{cid}/assignments/{aid}
 GET  /clients/{cid}/schedule?from&to  GET /clients/{cid}/logs?from&to  PUT /clients/{cid}/logs/{lid}
 GET|POST /clients/{cid}/comments
 GET|POST /clients/{cid}/metrics?kind=  DELETE /clients/{cid}/metrics/{mid}
-GET|POST /clients/{cid}/meals          PUT|DELETE /clients/{cid}/meals/{mid}   # food journal
+GET|POST /clients/{cid}/meals          PUT|DELETE /clients/{cid}/meals/{mid}   # food journal (+ targets, 7-day averages)
+POST /clients/{cid}/meals/import       GET|PUT /clients/{cid}/nutrition/target    # CSV import; coach-set targets
 GET  /foods/search?q=                  GET|POST /foods  DELETE /foods/{fid}    # USDA proxy + coach staples
 GET|POST /clients/{cid}/photos         DELETE /clients/{cid}/photos/{pid}
 GET|POST /clients/{cid}/videos?logId=  DELETE /clients/{cid}/videos/{vid}

@@ -476,6 +476,40 @@ with sync_playwright() as p:
     coach.emulate_media(media="screen")
     coach.get_by_role("link", name="‹ Back").click()
 
+    # ---------------- nutrition (BZ-4): a meal, an imported diary, targets, an estimate by hand
+    client.get_by_role("link", name="Today").click()
+    client.get_by_role("button", name="+ Log a meal").click()
+    client.get_by_label("One item per line").fill("chicken 12oz\nrice")
+    client.get_by_role("button", name="Save meal").click()
+    expect(client.locator(".meal-line").first).to_contain_text("not estimated yet")
+    yesterday = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
+    client.get_by_role("button", name="Import from Cronometer or MyFitnessPal").click()
+    client.locator(".sheet input[type=file]").set_input_files(files=[{
+        "name": "servings.csv", "mimeType": "text/csv",
+        "buffer": f"Day,Time,Group,Food Name,Amount,Energy (kcal),Carbs (g),Fat (g),Protein (g)\n{yesterday},8:00 AM,Breakfast,\"Oats, rolled\",40.00 g,150,27,2.5,5\n".encode(),
+    }])
+    client.locator(".sheet").get_by_role("button", name="Import", exact=True).click()
+    expect(client.locator(".sheet")).to_contain_text("Imported 1 meal over 1 day")
+    client.locator(".sheet").get_by_role("button", name="Close").click()
+    expect(client.locator(".meal-line", has_text="Breakfast")).to_contain_text("150 kcal")
+    expect(client.locator("#sync")).to_be_hidden(timeout=15000)
+    coach.reload()
+    coach.get_by_role("button", name="Set targets").click()
+    coach.get_by_label("Calories (kcal)").fill("2200")
+    coach.get_by_label("Protein (g)").fill("160")
+    coach.get_by_role("button", name="Save", exact=True).click()
+    expect(coach.get_by_text("Targets: 2200 kcal · Protein 160 g")).to_be_visible()
+    coach.get_by_role("button", name="Estimate", exact=True).click()
+    coach.get_by_label("Calories for chicken").fill("560")
+    coach.get_by_label("Calories for rice").fill("200")
+    coach.locator(".sheet").get_by_role("button", name="Save", exact=True).click()
+    expect(coach.get_by_text("Meal saved")).to_be_visible()
+    shot(coach, "10f-nutrition-coach")
+    client.reload()
+    expect(client.locator(".meter-row", has_text="Calories")).to_contain_text("760 / 2,200 kcal")
+    expect(client.locator(".meter-row", has_text="Protein")).to_contain_text("0 / 160 g")
+    shot(client, "10f-nutrition-today")
+
     # ---------------- body fat from tape (BM-6): the US Navy estimate
     client.get_by_role("link", name="Progress").click()
     client.get_by_role("button", name="Body fat").click()

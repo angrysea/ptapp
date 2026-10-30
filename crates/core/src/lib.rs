@@ -9,6 +9,7 @@ pub mod coach;
 pub mod habits;
 pub mod library;
 pub mod model;
+pub mod foodimport;
 pub mod nutrition;
 pub mod progression;
 pub mod schedule;

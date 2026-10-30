@@ -381,6 +381,12 @@ table.checkins thead th { white-space: nowrap; }
 .dot { width: 14px; height: 14px; border-radius: 50%; background: var(--line); }
 .dot.part { background: var(--warn-soft); border: 1px solid var(--warn); }
 .dot.on { background: var(--good); }
+/* food journal: totals against the coach's targets */
+.meters { display: grid; gap: 6px; margin: 8px 0; }
+.meter { height: 8px; border-radius: 999px; background: var(--line); overflow: hidden; }
+.meter > span { display: block; height: 100%; background: var(--good); }
+.meter.over > span { background: var(--warn); }
+.meal-line { display: block; text-align: left; margin: 4px 0; color: var(--muted); }
 
 /* Drawing over the review video (views/draw.js). */
 .draw-bar { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; margin: 6px 0; }

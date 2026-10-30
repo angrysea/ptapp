@@ -8,12 +8,14 @@ use axum::extract::{Path, Query, State};
 use axum::Json;
 use chrono::{DateTime, Duration, NaiveDate, Utc};
 use ptcore::habits::{editable, EDITABLE_DAYS};
-use ptcore::nutrition::{Basis, Candidate, FoodSnap, Item, Meal, Saved, MAX_CANDIDATES, MAX_SAVED, normalize_fdc, totals};
+use ptcore::foodimport;
+use ptcore::nutrition::{Basis, Candidate, FoodSnap, Item, Meal, Saved, Target, MAX_CANDIDATES, MAX_SAVED, normalize_fdc, summary, totals};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::auth::{client_scope, Ctx};
 use crate::error::{bad_request, ApiError, ApiResult};
+use crate::store::keyed;
 use crate::util::{audit, new_id};
 use crate::AppState;
 
@@ -63,6 +65,10 @@ pub struct ItemIn {
     #[serde(default)]
     protein: Option<f64>,
     #[serde(default)]
+    carbs: Option<f64>,
+    #[serde(default)]
+    fat: Option<f64>,
+    #[serde(default)]
     basis: Option<Basis>,
 }
 
@@ -79,13 +85,18 @@ fn to_meal(body: MealIn, id: String) -> Meal {
             food: b.food,
             kcal: b.kcal,
             protein: b.protein,
+            carbs: b.carbs,
+            fat: b.fat,
             basis: b.basis.unwrap_or(Basis::FreeText),
         }).collect(),
         updated_at: Utc::now(),
     }
 }
 
-/// `GET /clients/{cid}/meals?days=14`: whole meals plus per-day kcal.
+const TARGET_SK: &str = "NUTRITION_TARGET";
+
+/// `GET /clients/{cid}/meals?days=14`: whole meals, per-day kcal and macros,
+/// the coach's targets and the last 7 days' averages against them.
 pub async fn list(State(st): State<AppState>, ctx: Ctx, Path(cid): Path<String>, Query(q): Query<DaysQuery>) -> ApiResult<Json<Value>> {
     let scope = client_scope(&st, &ctx, &cid).await?;
     audit(&st, &ctx, &scope, "read the food journal").await;
@@ -93,9 +104,66 @@ pub async fn list(State(st): State<AppState>, ctx: Ctx, Path(cid): Path<String>,
     let today = scope.today();
     let days = q.days.unwrap_or(14).clamp(1, 90);
     let since = today - Duration::days(days - 1);
-    let meals = meals_since(&st, &pk, since).await?;
-    let totals_map: serde_json::Map<String, Value> = totals(&meals).iter().map(|(d, k)| (d.to_string(), json!(k))).collect();
-    Ok(Json(json!({ "today": today, "meals": meals, "totals": totals_map })))
+    // The week's averages need 7 days even when fewer are listed.
+    let mut meals = meals_since(&st, &pk, today - Duration::days(days.max(7) - 1)).await?;
+    let target: Option<Target> = st.store.get(&pk, TARGET_SK).await?;
+    let week = summary(&totals(&meals), today, 7, target.as_ref());
+    meals.retain(|m| m.date >= since);
+    let day_totals = totals(&meals);
+    let totals_map: serde_json::Map<String, Value> = day_totals.iter().map(|(d, m)| (d.to_string(), json!(m))).collect();
+    Ok(Json(json!({ "today": today, "meals": meals, "totals": totals_map, "target": target, "week": week })))
+}
+
+/// `GET /clients/{cid}/nutrition/target`.
+pub async fn get_target(State(st): State<AppState>, ctx: Ctx, Path(cid): Path<String>) -> ApiResult<Json<Value>> {
+    let scope = client_scope(&st, &ctx, &cid).await?;
+    let target: Option<Target> = st.store.get(&scope.pk(), TARGET_SK).await?;
+    Ok(Json(json!({ "target": target })))
+}
+
+/// `PUT /clients/{cid}/nutrition/target`: the coach sets daily kcal and macro
+/// targets (any of them; all empty clears the targets).
+pub async fn put_target(State(st): State<AppState>, ctx: Ctx, Path(cid): Path<String>, Json(mut body): Json<Target>) -> ApiResult<Json<Value>> {
+    let scope = client_scope(&st, &ctx, &cid).await?;
+    if !scope.by_coach {
+        return Err(ApiError::Forbidden("the coach sets nutrition targets"));
+    }
+    body.validate().map_err(bad_request)?;
+    if body == Target::default() {
+        st.store.delete(&scope.pk(), TARGET_SK).await?;
+        return Ok(Json(json!({ "target": null })));
+    }
+    body.updated_at = Some(Utc::now());
+    st.store.put(&scope.pk(), TARGET_SK, &body).await?;
+    Ok(Json(json!({ "target": body })))
+}
+
+#[derive(Deserialize)]
+pub struct ImportIn {
+    csv: String,
+}
+
+/// CSV text accepted in one import.
+const MAX_IMPORT_BYTES: usize = 1_500_000;
+
+/// `POST /clients/{cid}/meals/import` `{csv}`: a Cronometer or MyFitnessPal
+/// export (ptcore::foodimport) becomes meals for the last 90 days. Imported
+/// meals have stable ids, so importing an overlapping export again replaces
+/// them; meals typed in the app are left alone.
+pub async fn import(State(st): State<AppState>, ctx: Ctx, Path(cid): Path<String>, Json(body): Json<ImportIn>) -> ApiResult<Json<Value>> {
+    let scope = client_scope(&st, &ctx, &cid).await?;
+    if body.csv.len() > MAX_IMPORT_BYTES {
+        return Err(bad_request("that file is over 1.5 MB; export a shorter date range"));
+    }
+    let out = foodimport::import(&body.csv, scope.today()).map_err(bad_request)?;
+    if out.meals.is_empty() {
+        return Err(bad_request(format!("nothing to import from the last {} days ({} rows skipped)", foodimport::MAX_DAYS_BACK, out.skipped)));
+    }
+    let pk = scope.pk();
+    let items = out.meals.iter().map(|m| keyed(&pk, &meal_sk(m.date, m.id.as_str()), m)).collect::<ApiResult<Vec<_>>>()?;
+    st.store.batch_put(items).await?;
+    let days: std::collections::BTreeSet<NaiveDate> = out.meals.iter().map(|m| m.date).collect();
+    Ok(Json(json!({ "source": out.source, "meals": out.meals.len(), "days": days.len(), "skipped": out.skipped })))
 }
 
 /// `POST /clients/{cid}/meals`: a fresh meal, server-assigned id. Clients

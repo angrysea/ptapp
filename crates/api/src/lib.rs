@@ -153,7 +153,9 @@ pub fn router(state: AppState) -> Router {
         .route("/clients/{cid}/habits/{hid}/days/{date}", put(habits::log_day))
         // food journal: client writes meals, coach searches and estimates
         .route("/clients/{cid}/meals", get(nutrition::list).post(nutrition::create))
+        .route("/clients/{cid}/meals/import", post(nutrition::import))
         .route("/clients/{cid}/meals/{mid}", put(nutrition::put_meal).delete(nutrition::remove))
+        .route("/clients/{cid}/nutrition/target", get(nutrition::get_target).put(nutrition::put_target))
         .route("/foods/search", get(nutrition::search))
         .route("/foods", get(nutrition::list_foods).post(nutrition::create_food))
         .route("/foods/{fid}", delete(nutrition::remove_food))

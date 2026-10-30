@@ -1386,8 +1386,13 @@ async fn full_client_journey() {
     }))).await;
     assert_eq!(est["items"].as_array().unwrap().len(), 2);
     let (_, ms) = t.call("GET", "/clients/client1/meals?days=7", Some("coach1"), None).await;
-    let total: f64 = ms["totals"].get(day(0)).unwrap().as_f64().unwrap_or(0.0);
+    let total: f64 = ms["totals"][day(0)]["kcal"].as_f64().unwrap_or(0.0);
     assert!(total > 760.0 && total < 762.0, "165 kcal/100 g × 340.2 g + 200 = {total}");
+    assert_eq!(ms["week"]["logged"], 1, "the week's summary counts logged days");
+    assert!(ms["target"].is_null(), "no targets set yet");
+    // targets and CSV import, in their own future: inline, the journey's
+    // future outgrows the test thread's stack
+    Box::pin(nutrition_targets_and_import(&t, &day)).await;
     assert_eq!(t.call("GET", "/clients/client1/meals", Some("coach2"), None).await.0, StatusCode::FORBIDDEN, "another coach's client");
     // food search: coach-only, and it says so when the key is off
     assert_eq!(t.call("GET", "/foods/search?q=chicken+breast", Some("client1"), None).await.0, StatusCode::FORBIDDEN);
@@ -1576,4 +1581,43 @@ async fn full_client_journey() {
     assert_eq!(t.call("POST", "/admin/clients/client4/move", Some("admin1"), Some(json!({ "coachId": "coach1" }))).await.0, StatusCode::BAD_REQUEST);
     let (_, r1) = t.call("GET", "/clients", Some("coach1"), None).await;
     assert!(r1.as_array().unwrap().iter().any(|r| r["client"]["clientId"] == "client4"), "coach1 keeps the client");
+}
+
+/// BZ-4: the coach's nutrition targets and importing a Cronometer export.
+/// Expects client1's lunch from the journey on `day(0)` (761 kcal).
+async fn nutrition_targets_and_import(t: &T, day: &dyn Fn(i64) -> String) {
+    // nutrition targets: the coach sets them, the client reads them with the journal
+    assert_eq!(t.call("PUT", "/clients/client1/nutrition/target", Some("client1"), Some(json!({ "kcal": 2000 }))).await.0, StatusCode::FORBIDDEN, "only the coach sets targets");
+    assert_eq!(t.call("PUT", "/clients/client1/nutrition/target", Some("coach1"), Some(json!({ "kcal": 50 }))).await.0, StatusCode::BAD_REQUEST, "an implausible target");
+    let (s, tg) = t.call("PUT", "/clients/client1/nutrition/target", Some("coach1"), Some(json!({ "kcal": 800, "protein": 150, "note": " protein first " }))).await;
+    assert_eq!(s, StatusCode::OK, "{tg}");
+    assert_eq!(tg["target"]["note"], "protein first");
+    let (_, ms) = t.call("GET", "/clients/client1/meals?days=1", Some("client1"), None).await;
+    assert_eq!(ms["target"]["protein"], 150.0);
+    assert_eq!(ms["week"]["onTarget"], 1, "761 kcal is within 10% of 800");
+    assert_eq!(t.call("PUT", "/clients/client1/nutrition/target", Some("coach2"), Some(json!({ "kcal": 2000 }))).await.0, StatusCode::FORBIDDEN, "another coach");
+    let (_, cleared) = t.call("PUT", "/clients/client1/nutrition/target", Some("coach1"), Some(json!({}))).await;
+    assert!(cleared["target"].is_null(), "all empty clears the targets");
+    // import a Cronometer export: rows group into meals, a re-import replaces them
+    let csv = format!("Day,Time,Group,Food Name,Amount,Energy (kcal),Carbs (g),Fat (g),Protein (g)
+{d1},8:00 AM,Breakfast,\"Oats, rolled\",40.00 g,150,27,2.5,5
+{d1},8:01 AM,Breakfast,Milk,1.00 cup,103,12,2.4,8
+{d2},12:00 PM,Lunch,Apple,182 g,95,25,0.3,0.5
+2020-01-01,1:00 PM,Lunch,Too old,1 g,1,0,0,0
+", d1 = day(1), d2 = day(2));
+    let (s, imp) = t.call("POST", "/clients/client1/meals/import", Some("client1"), Some(json!({ "csv": csv }))).await;
+    assert_eq!(s, StatusCode::OK, "{imp}");
+    assert_eq!((imp["source"].as_str(), imp["meals"].as_i64(), imp["days"].as_i64(), imp["skipped"].as_i64()), (Some("cronometer"), Some(2), Some(2), Some(1)));
+    t.call("POST", "/clients/client1/meals/import", Some("client1"), Some(json!({ "csv": csv }))).await;
+    let (_, ms) = t.call("GET", "/clients/client1/meals?days=7", Some("coach1"), None).await;
+    let imported: Vec<&Value> = ms["meals"].as_array().unwrap().iter().filter(|m| m["items"][0]["basis"] == "imported").collect();
+    assert_eq!(imported.len(), 2, "importing again replaced, not doubled");
+    assert_eq!(ms["totals"][day(1)]["protein"].as_f64(), Some(13.0), "imported macros count");
+    assert_eq!(t.call("POST", "/clients/client1/meals/import", Some("client1"), Some(json!({ "csv": "Food,Calories
+x,1
+" }))).await.0, StatusCode::BAD_REQUEST, "no date column");
+    assert_eq!(t.call("POST", "/clients/client1/meals/import", Some("coach2"), Some(json!({ "csv": csv }))).await.0, StatusCode::FORBIDDEN);
+    for m in &imported {
+        t.call("DELETE", &format!("/clients/client1/meals/{}", m["id"].as_str().unwrap()), Some("client1"), None).await;
+    }
 }
