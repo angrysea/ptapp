@@ -102,6 +102,10 @@ pub struct Session {
     pub notes: String,
     pub status: SessionStatus,
     pub created_at: DateTime<Utc>,
+    /// The credit grant the booking used (routes/credits.rs), returned if
+    /// it's cancelled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credit_grant: Option<String>,
 }
 
 impl Session {
@@ -271,6 +275,7 @@ mod tests {
             notes: String::new(),
             status,
             created_at: Utc::now(),
+            credit_grant: None,
         }
     }
 

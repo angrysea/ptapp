@@ -14,6 +14,7 @@ use ptcore::sessions::{ics, open_slots, Availability, Event, Session, SessionSta
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+use ptcore::credits::Service;
 use crate::auth::{client_scope, ClientScope, Ctx};
 use crate::error::{bad_request, ApiError, ApiResult};
 use crate::store::keyed;
@@ -152,9 +153,18 @@ pub async fn book(State(st): State<AppState>, ctx: Ctx, Path(cid): Path<String>,
     // One booking per start time, even if two arrive at once.
     // The lock expires a day after the session (DynamoDB TTL).
     let lock = json!({ "at": now, "ttl": (body.start + Duration::days(1)).timestamp() });
-    if !st.store.put_new(&format!("COACH#{}", coach.user_id), &format!("SLOTLOCK#{}", body.start.to_rfc3339()), &lock).await? {
+    let lock_sk = format!("SLOTLOCK#{}", body.start.to_rfc3339());
+    if !st.store.put_new(&format!("COACH#{}", coach.user_id), &lock_sk, &lock).await? {
         return Err(ApiError::Conflict(json!({ "message": "that time was just taken; pick another" })));
     }
+    // A booking uses a session credit; with none, the slot is let go again.
+    let credit_grant = match super::credits::spend(&st, &scope, Service::Session, "Session booked", true).await {
+        Ok(g) => g,
+        Err(e) => {
+            st.store.delete(&format!("COACH#{}", coach.user_id), &lock_sk).await?;
+            return Err(e);
+        }
+    };
     let s = Session {
         id: new_id()[..12].to_string(),
         client_id: scope.client.user_id.clone(),
@@ -168,6 +178,7 @@ pub async fn book(State(st): State<AppState>, ctx: Ctx, Path(cid): Path<String>,
         notes,
         status: SessionStatus::Booked,
         created_at: now,
+        credit_grant,
     };
     save(&st, &s).await?;
     tell_other(&st, &scope, &coach, &s, "Session booked").await;
@@ -198,6 +209,9 @@ pub async fn cancel(State(st): State<AppState>, ctx: Ctx, Path((cid, sid)): Path
     }
     s.status = SessionStatus::Cancelled;
     save(&st, &s).await?;
+    if let Some(g) = &s.credit_grant {
+        super::credits::refund(&st, &scope, g, Service::Session, "Session cancelled").await?;
+    }
     st.store.delete(&format!("COACH#{}", s.coach_id), &format!("SLOTLOCK#{}", s.start.to_rfc3339())).await?;
     let coach = profile(&st, &s.coach_id).await?;
     tell_other(&st, &scope, &coach, &s, "Session cancelled").await;

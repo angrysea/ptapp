@@ -8,6 +8,7 @@ import { session } from '../session.js';
 import { busy, fmtDate, fmtDateTime, h, mount, sheet, shrinkImage, toast } from '../ui.js';
 import { playReply, playVideo } from '../videos.js';
 import { markRead } from './messages.js';
+import { guard } from './credits.js';
 import { snippetTools } from './snippets.js';
 import { dismissPrompt, enable as pushOn, prefetchKey, shouldPrompt } from '../push.js';
 
@@ -120,6 +121,7 @@ export async function renderThread(el, clientId, logsById = {}) {
   // ---- photos and voice notes (they need a connection: they upload first)
   const pending = h('div'); // a recorded voice note waiting to be sent
   const sendMessage = async (attachment) => {
+    if (!(await guard(clientId, attachment?.kind === 'photo' ? 'photoReview' : 'message'))) return;
     await post(`/clients/${clientId}/comments`, { text: text.value, ...(attachment && { attachment }) });
     text.value = '';
     await draw();
@@ -129,13 +131,14 @@ export async function renderThread(el, clientId, logsById = {}) {
   photoPick.addEventListener('change', () => busy(photoBtn, async () => {
     const f = photoPick.files?.[0];
     photoPick.value = '';
-    if (!f) return;
+    if (!f || !(await guard(clientId, 'photoReview'))) return; // before the upload, not after
     await sendMessage(await upload(clientId, 'photo', await shrinkImage(f, 1600)));
   }).catch((e) => toast(e.message, 'error')));
 
   let rec = null;
   const voiceBtn = h('button', { class: 'small', 'aria-label': 'Record a voice note', onclick: () => (rec ? rec.stop() : startVoice()) }, '🎤 Voice');
   async function startVoice() {
+    if (!(await guard(clientId, 'message'))) return;
     let stream;
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
@@ -218,7 +221,7 @@ export function commentOn(clientId, logId, setIndex, itemId, videoId) {
         h('button', {
           class: 'primary grow',
           onclick: (e) => busy(e.currentTarget, async () => {
-            if (!text.value.trim()) return;
+            if (!text.value.trim() || !(await guard(clientId, 'message'))) return;
             await post(`/clients/${clientId}/comments`, videoId ? { text: text.value, videoId } : { text: text.value, logId, setIndex: setIndex ?? null, itemId: itemId ?? null });
             sent = true;
             sh.close();

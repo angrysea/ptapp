@@ -49,8 +49,20 @@ impl T {
     }
 }
 
-#[tokio::test]
-async fn full_client_journey() {
+/// The journey is one long async function; in a debug build its future
+/// outgrows a test thread's default stack, so it runs on a thread of its own
+/// with room to spare.
+#[test]
+fn full_client_journey() {
+    std::thread::Builder::new()
+        .stack_size(64 * 1024 * 1024)
+        .spawn(|| tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(journey()))
+        .unwrap()
+        .join()
+        .unwrap_or_else(|e| std::panic::resume_unwind(e));
+}
+
+async fn journey() {
     let Ok(endpoint) = std::env::var("E2E_ENDPOINT") else {
         eprintln!("E2E_ENDPOINT not set; skipping");
         return;
@@ -1415,6 +1427,7 @@ async fn full_client_journey() {
     // future outgrows the test thread's stack
     Box::pin(nutrition_targets_and_import(&t, &day)).await;
     Box::pin(client_programs_and_maxes(&t, local_today)).await;
+    Box::pin(service_credits(&t, &s3, &bucket, local_today)).await;
     assert_eq!(t.call("GET", "/clients/client1/meals", Some("coach2"), None).await.0, StatusCode::FORBIDDEN, "another coach's client");
     // food search: coach-only, and it says so when the key is off
     assert_eq!(t.call("GET", "/foods/search?q=chicken+breast", Some("client1"), None).await.0, StatusCode::FORBIDDEN);
@@ -1720,4 +1733,111 @@ async fn client_programs_and_maxes(t: &T, today: chrono::NaiveDate) {
     for id in [a["id"].as_str().unwrap(), again["id"].as_str().unwrap(), st["id"].as_str().unwrap()] {
         t.call("DELETE", &format!("/clients/client1/assignments/{id}"), Some("coach1"), None).await;
     }
+}
+
+/// Service credits: plans, grants, and each service stopping at zero once
+/// the coach enforces credits; a review uses the credit an upload held, a
+/// cancelled session gives its credit back, programming is only counted.
+async fn service_credits(t: &T, s3: &aws_sdk_s3::Client, bucket: &str, today: chrono::NaiveDate) {
+    let balance = |c: &Value, service: &str| c["balances"].as_array().unwrap().iter().find(|b| b["service"] == service).unwrap().clone();
+    let credits = || t.call("GET", "/clients/client1/credits", Some("coach1"), None);
+    let send = |text: &str| {
+        let body = json!({ "text": text });
+        t.call("POST", "/clients/client1/comments", Some("client1"), Some(body))
+    };
+    // before enforcement nothing is refused
+    assert_eq!(send("before credits").await.0, StatusCode::OK);
+    let held = balance(&credits().await.1, "videoReview")["held"].as_u64().unwrap();
+
+    // plans: the coach's, validated
+    assert_eq!(t.call("POST", "/plans", Some("client1"), Some(json!({ "name": "x", "lines": [{ "service": "message", "quantity": 1 }] }))).await.0, StatusCode::FORBIDDEN);
+    assert_eq!(t.call("POST", "/plans", Some("coach1"), Some(json!({ "name": "x", "lines": [] }))).await.0, StatusCode::BAD_REQUEST);
+    let (s, plan) = t.call("POST", "/plans", Some("coach1"), Some(json!({
+        "name": "Starter month", "validDays": 30,
+        "lines": [
+            { "service": "message", "quantity": 2 },
+            { "service": "videoReview", "quantity": held + 1 },
+            { "service": "session", "quantity": 1 },
+            { "service": "programming", "quantity": null }
+        ]
+    }))).await;
+    assert_eq!(s, StatusCode::OK, "{plan}");
+    let (_, on) = t.call("PUT", "/credits/settings", Some("coach1"), Some(json!({ "enforce": true }))).await;
+    assert_eq!(on["enforce"], true);
+
+    // enforced with nothing granted: a message is refused with 402
+    let (s, no) = send("no credits").await;
+    assert_eq!((s, no["code"].as_str()), (StatusCode::PAYMENT_REQUIRED, Some("no-credits")), "{no}");
+    assert_eq!(t.call("POST", "/clients/client1/comments", Some("coach1"), Some(json!({ "text": "coach replies are free" }))).await.0, StatusCode::OK);
+
+    // the coach grants the plan; it lasts 30 days counting today
+    assert_eq!(t.call("POST", "/clients/client1/credits/plan", Some("client1"), Some(json!({ "planId": plan["id"] }))).await.0, StatusCode::FORBIDDEN);
+    let (s, granted) = t.call("POST", "/clients/client1/credits/plan", Some("coach1"), Some(json!({ "planId": plan["id"] }))).await;
+    assert_eq!(s, StatusCode::OK, "{granted}");
+    assert_eq!(granted.as_array().unwrap().len(), 4);
+    assert_eq!(granted[0]["expiresOn"], (today + chrono::Duration::days(29)).to_string());
+    let (_, c) = credits().await;
+    assert_eq!((balance(&c, "message")["remaining"].as_u64(), balance(&c, "programming")["remaining"].is_null()), (Some(2), true), "{c}");
+
+    // messages: two, then out
+    assert_eq!(send("one").await.0, StatusCode::OK);
+    assert_eq!(send("two").await.0, StatusCode::OK);
+    assert_eq!(send("three").await.0, StatusCode::PAYMENT_REQUIRED);
+    let (_, c) = t.call("GET", "/clients/client1/credits", Some("client1"), None).await;
+    assert_eq!((balance(&c, "message")["remaining"].as_u64(), balance(&c, "message")["available"].as_bool()), (Some(0), Some(false)));
+    assert!(c["history"].as_array().unwrap().iter().any(|e| e["reason"] == "Message sent" && e["change"] == -1));
+
+    // video reviews: an upload holds the one free credit, so a second is refused
+    let video = |log: &str| json!({ "logId": log, "itemId": "credit-item", "setIndex": 0, "exerciseId": "back-squat", "exerciseName": "Back Squat", "contentType": "video/mp4", "size": 5, "durationSec": 12.0 });
+    let (s, v1) = t.call("POST", "/clients/client1/videos", Some("client1"), Some(video("log-credit-1"))).await;
+    assert_eq!(s, StatusCode::OK, "{v1}");
+    assert_eq!(t.call("POST", "/clients/client1/videos", Some("client1"), Some(video("log-credit-2"))).await.0, StatusCode::PAYMENT_REQUIRED, "the only credit is held");
+    // upload it, and the coach's review uses the held credit
+    let (vid, key) = (v1["video"]["id"].as_str().unwrap().to_string(), v1["video"]["key"].as_str().unwrap().to_string());
+    let upload_id = s3.list_multipart_uploads().bucket(bucket).prefix(&key).send().await.unwrap().uploads()[0].upload_id().unwrap().to_string();
+    let out = s3.upload_part().bucket(bucket).key(&key).upload_id(&upload_id).part_number(1).body(vec![7u8; 5].into()).send().await.unwrap();
+    let (s, done) = t.call("POST", &format!("/clients/client1/videos/{vid}/complete"), Some("client1"), Some(json!({ "parts": [{ "n": 1, "etag": out.e_tag().unwrap() }] }))).await;
+    assert_eq!(s, StatusCode::OK, "{done}");
+    let before = balance(&credits().await.1, "videoReview")["remaining"].as_u64().unwrap();
+    let (s, r) = t.call("POST", &format!("/clients/client1/videos/{vid}/reviewed"), Some("coach1"), None).await;
+    assert_eq!(s, StatusCode::OK, "{r}");
+    t.call("POST", &format!("/clients/client1/videos/{vid}/reviewed"), Some("coach1"), None).await; // repeating uses nothing more
+    let after = balance(&credits().await.1, "videoReview")["remaining"].as_u64().unwrap();
+    assert_eq!(before - after, 1, "one review, one credit");
+
+    // sessions: one booked, the next refused; cancelling gives it back
+    let book = |start: &str| t.call("POST", "/clients/client1/sessions", Some("coach1"), Some(json!({ "start": start, "minutes": 30 })));
+    let (s, s1) = book("2027-03-03T15:00:00Z").await;
+    assert_eq!(s, StatusCode::OK, "{s1}");
+    let (s, none) = book("2027-03-04T15:00:00Z").await;
+    assert_eq!(s, StatusCode::PAYMENT_REQUIRED, "{none}");
+    assert!(none["error"].as_str().unwrap().contains("grant them"), "the coach is told how to fix it");
+    t.call("POST", &format!("/clients/client1/sessions/{}/cancel", s1["id"].as_str().unwrap()), Some("coach1"), None).await;
+    let (s, s2) = book("2027-03-04T15:00:00Z").await;
+    assert_eq!(s, StatusCode::OK, "the cancelled session's credit came back: {s2}");
+    t.call("POST", &format!("/clients/client1/sessions/{}/cancel", s2["id"].as_str().unwrap()), Some("coach1"), None).await;
+
+    // programming is counted, never refused
+    let start = today + chrono::Duration::days(250);
+    let (s, a) = t.call("POST", "/clients/client1/assignments", Some("coach1"), Some(json!({ "starterKey": "starter-benchmark", "startDate": start.to_string() }))).await;
+    assert_eq!(s, StatusCode::OK, "{a}");
+    t.call("DELETE", &format!("/clients/client1/assignments/{}", a["id"].as_str().unwrap()), Some("coach1"), None).await;
+    let (_, c) = credits().await;
+    assert!(c["history"].as_array().unwrap().iter().any(|e| e["service"] == "programming" && e["change"] == -1));
+
+    // the coach adds unlimited messages by hand, then sets them to have expired yesterday
+    assert_eq!(t.call("POST", "/clients/client1/credits", Some("coach1"), Some(json!({ "service": "message", "quantity": 0 }))).await.0, StatusCode::BAD_REQUEST);
+    let (s, unl) = t.call("POST", "/clients/client1/credits", Some("coach1"), Some(json!({ "service": "message", "quantity": null, "note": "Unlimited this month" }))).await;
+    assert_eq!(s, StatusCode::OK, "{unl}");
+    assert_eq!(send("now unlimited").await.0, StatusCode::OK);
+    let gid = unl["id"].as_str().unwrap();
+    let yesterday = (today - chrono::Duration::days(1)).to_string();
+    let (s, e) = t.call("PUT", &format!("/clients/client1/credits/{gid}"), Some("coach1"), Some(json!({ "expiresOn": yesterday }))).await;
+    assert_eq!(s, StatusCode::OK, "{e}");
+    assert_eq!(send("expired").await.0, StatusCode::PAYMENT_REQUIRED, "expired credits don't count");
+    assert_eq!(t.call("DELETE", &format!("/clients/client1/credits/{gid}"), Some("coach1"), None).await.0, StatusCode::OK);
+
+    // enforcement off again: nothing is refused
+    t.call("PUT", "/credits/settings", Some("coach1"), Some(json!({ "enforce": false }))).await;
+    assert_eq!(send("after").await.0, StatusCode::OK);
 }

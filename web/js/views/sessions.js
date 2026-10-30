@@ -8,6 +8,7 @@ import cfg from '../config.js';
 import { go } from '../router.js';
 import { session } from '../session.js';
 import { $app, busy, confirmSheet, field, h, mount, select, sheet, toast } from '../ui.js';
+import { guard } from './credits.js';
 
 const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 const dayLabel = (iso) => new Date(iso).toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' });
@@ -179,6 +180,7 @@ export async function renderSessions() {
           class: 'small',
           onclick: async (e) => {
             const btn = e.currentTarget; // gone from the event once we await
+            if (!(await guard(me.userId, 'session'))) return;
             if (!(await confirmSheet(`Book ${day}, ${timeLabel(t)}?`, 'Book'))) return;
             await busy(btn, async () => {
               try {

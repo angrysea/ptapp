@@ -22,6 +22,7 @@ import { alertsCard } from './alerts.js';
 import { checkinsTab } from './checkins.js';
 import { habitsCard } from './habits.js';
 import { overviewCard } from './meals.js';
+import { clientCreditsCard } from './credits.js';
 import { requestsCard } from './joinrequests.js';
 
 /** The client's 1-5 rating of a workout; bad ones stand out. */
@@ -158,6 +159,7 @@ async function overview(el, client) {
           d.checks.map((c) => h('tr', {}, h('td', {}, fmtDate(c.date)), h('td', {}, c.check.rpe ?? ''), h('td', {}, c.check.energy ?? ''),
             h('td', {}, c.check.sleep ?? ''), h('td', {}, c.check.soreness ?? ''),
             h('td', {}, c.check.pain ? h('span', { class: 'chip bad' }, c.check.painLocation || 'yes') : ''))))),
+    await clientCreditsCard(client),
     await habitsCard(client),
     await overviewCard(client),
   );

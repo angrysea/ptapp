@@ -11,6 +11,8 @@ pub enum ApiError {
     NotFound(&'static str),
     /// Carries the current server copy so offline clients can reconcile.
     Conflict(Value),
+    /// Out of credits for a service (routes/credits.rs): 402 with a message.
+    PaymentRequired(String),
     Internal(String),
 }
 
@@ -28,6 +30,7 @@ impl IntoResponse for ApiError {
             ApiError::Forbidden(m) => (StatusCode::FORBIDDEN, json!({ "error": m })),
             ApiError::NotFound(m) => (StatusCode::NOT_FOUND, json!({ "error": format!("{m} not found") })),
             ApiError::Conflict(current) => (StatusCode::CONFLICT, json!({ "error": "conflict", "current": current })),
+            ApiError::PaymentRequired(m) => (StatusCode::PAYMENT_REQUIRED, json!({ "error": m, "code": "no-credits" })),
             ApiError::Internal(m) => {
                 tracing::error!(error = %m, "internal error");
                 (StatusCode::INTERNAL_SERVER_ERROR, json!({ "error": "internal error" }))

@@ -30,6 +30,7 @@ use ptcore::model::{ReviewEntry, Video, VideoStatus};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+use ptcore::credits::Service;
 use crate::auth::{client_scope, ClientScope, Ctx};
 use crate::error::{bad_request, ApiError, ApiResult};
 use crate::util::{
@@ -220,6 +221,8 @@ pub async fn create(
     Json(body): Json<NewVideo>,
 ) -> ApiResult<Json<Value>> {
     let scope = client_owned(&st, &ctx, &cid).await?;
+    // Each video awaiting review holds a review credit (routes/credits.rs).
+    super::credits::require(&st, &scope, Service::VideoReview).await?;
     check_id("logId", &body.log_id)?;
     check_id("itemId", &body.item_id)?;
     let ext = ext_for(&body.content_type, VIDEO_TYPES)?;
@@ -405,6 +408,8 @@ pub async fn mark_reviewed(st: &AppState, scope: &ClientScope, vid: &str) -> Api
     if v.reviewed_at.is_none() {
         v.reviewed_at = Some(Utc::now());
         st.store.put(&scope.pk(), &video_sk(&v.id), &v).await?;
+        // The review is delivered: the credit the upload held is used.
+        super::credits::spend(st, scope, Service::VideoReview, &format!("Video reviewed: {}", v.exercise_name), false).await?;
     }
     st.store.delete(&format!("COACH#{}", scope.client.coach_id), &review_sk(&v)).await?;
     let keys: Vec<&str> = std::iter::once(v.key.as_str()).chain(v.poster_key.as_deref()).collect();

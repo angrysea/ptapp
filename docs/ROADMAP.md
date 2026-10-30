@@ -29,7 +29,7 @@ Status legend: ✅ done in MVP · 🟡 partial · ⬜ not started
 | AI | AI-6/AI-7 (whenever AI ships) | AI-1…AI-5 ⬜ |
 | Body metrics | BM-1 ✅ · BM-2 ✅ · BM-3 ✅ · BM-4 ✅ · BM-7 ✅ · BM-8 ✅ | BM-5 ✅ · BM-6 ✅ (US Navy tape estimate; DEXA/BIA/scale readings) |
 | Messaging | MS-1 ✅ (live via AppSync Events, polling fallback; coach inbox; text only) · MS-2 ✅ (Web Push; iPhone needs the Home Screen app) | MS-3 ✅ (messages link to the workout, set or video) · MS-4 ✅ (reminders and scheduled messages, hourly sweep) · MS-5 ✅ (coach's hours on the client's Messages screen and when booking) · MS-6 ⬜ |
-| Business | BZ-1 ⬜ | BZ-2 ✅ (availability, booking, private calendar feed) · BZ-3 ✅ (habits with streaks) · BZ-4 ✅ (food journal with coach estimates from USDA search, macro targets, 7-day averages, Cronometer/MyFitnessPal CSV import; docs/NUTRITION.md) · BZ-5 ⬜ · BZ-6 ✅ (printable progress report; PDF via the browser) |
+| Business | BZ-1 🟡 (service credits and plans built: coaches grant plans by hand and can require credits; Stripe purchase still to come) | BZ-2 ✅ (availability, booking, private calendar feed) · BZ-3 ✅ (habits with streaks) · BZ-4 ✅ (food journal with coach estimates from USDA search, macro targets, 7-day averages, Cronometer/MyFitnessPal CSV import; docs/NUTRITION.md) · BZ-5 ⬜ · BZ-6 ✅ (printable progress report; PDF via the browser) |
 | NFRs | privacy ✅ (private photos, tenant checks, per-user offline cache, data agreement at sign-up) · audit log ✅ · offline ✅ · upload size limits ✅ · CI ✅ (tests on every push; deploys run locally) · backups ✅ (PITR + daily AWS Backup, 35 days; restore tested 2026-10-28, see DEPLOY.md) · MFA ⏸ (deferred by decision, 2026-10-28) · alarms ✅ (email) · export/delete ✅ (clients, self-service; admins suspend or delete coaches) · video retention ✅ (lifecycle on reviewed videos and replies) | |
 
 ---
@@ -77,6 +77,9 @@ Use the server-side render approach from the BRD: the browser records an **edit 
 * Voice notes: `MediaRecorder` → presigned PUT → `kind: voice`.
 
 ### 4. Stripe subscriptions (BZ-1)
+
+**Built first: service credits** (`crates/core/src/credits.rs`, `routes/credits.rs`, `web/js/views/credits.js`). A coach's plans (`COACH#/PLAN#{id}`) bundle credits per service (messages, photo reviews, video reviews, sessions, programs), each a number or unlimited, for a number of days or with no expiry. Granting a plan to a client writes one grant per service (`CLIENT#/CREDIT#{id}`, expiry editable); uses and refunds go in a ledger (`CLIENT#/LEDGER#`). A client's message (or photo) uses a credit when sent, a set video holds one from upload and uses it when the coach reviews it, a booking uses one and a cancellation gives it back, and an assigned program is counted but never refused. Enforcement is per coach (`COACH#/CREDIT_SETTINGS`, off until they turn on "Require credits"); refusals are 402 with `code: no-credits`. Stripe's job is now only to grant a plan on purchase and renewal, the same call the coach makes by hand.
+
 
 * Coach config: `COACH#{coach}/PLAN#{id}` with name, price and trial days, mirrored to a Stripe Product/Price. Use **Stripe Connect (Express)** so client payments go to the coach's account, with an optional application fee as your SaaS revenue.
 * `POST /billing/checkout` (client) → Stripe Checkout Session (mode `subscription`, `trial_period_days`) → redirect.

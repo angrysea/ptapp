@@ -106,6 +106,13 @@ pub fn router(state: AppState) -> Router {
         .route("/exercises/{id}/demo-upload", post(exercises::demo_upload))
         .route("/exercises/{id}/demo-confirm", post(exercises::demo_confirm))
         .route("/programs", get(programs::list).post(programs::create))
+        // service credits: the coach's plans and settings, a client's grants and uses
+        .route("/credits/settings", get(credits::get_settings).put(credits::put_settings))
+        .route("/plans", get(credits::list_plans).post(credits::create_plan))
+        .route("/plans/{id}", put(credits::update_plan).delete(credits::delete_plan))
+        .route("/clients/{cid}/credits", get(credits::get_client).post(credits::grant_credits))
+        .route("/clients/{cid}/credits/plan", post(credits::grant_plan))
+        .route("/clients/{cid}/credits/{gid}", put(credits::edit_grant).delete(credits::revoke))
         .route("/programs/starters", get(programs::starters))
         .route("/programs/starters/{key}/copy", post(programs::copy_starter))
         .route("/programs/{id}", get(programs::get_one).put(programs::update).delete(programs::remove))

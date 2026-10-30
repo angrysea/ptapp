@@ -21,6 +21,7 @@ import { commentOn } from './comments.js';
 import { checkinCard } from './checkins.js';
 import { habitTiles } from './habits.js';
 import { todayCard } from './meals.js';
+import { guard } from './credits.js';
 import { nextSessionCard } from './sessions.js';
 
 // A finished workout the server refused for good (not a 409, which means a
@@ -309,7 +310,7 @@ export async function renderWorkout(date, schedId) {
           }),
         }, r.seenAt ? '🎙 Coach reply' : '🎙 Coach reply · new'))]),
       pending.filter((u) => u.set.itemId === it.id).map(uploadChip),
-      h('button', { class: 'small ghost', onclick: () => addVideo(it) }, '🎥 Add video'));
+      h('button', { class: 'small ghost', onclick: async () => { if (await guard(me.userId, 'videoReview')) addVideo(it); } }, '🎥 Add video'));
     bars.push(Object.assign(draw, { el: bar }));
     draw();
     return bar;

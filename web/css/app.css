@@ -390,6 +390,7 @@ table.checkins thead th { white-space: nowrap; }
 .meter { height: 8px; border-radius: 999px; background: var(--line); overflow: hidden; }
 .meter > span { display: block; height: 100%; background: var(--good); }
 .meter.over > span { background: var(--warn); }
+.credit-row { margin: 6px 0; }
 .meal-line { display: block; text-align: left; margin: 4px 0; color: var(--muted); }
 
 /* Drawing over the review video (views/draw.js). */

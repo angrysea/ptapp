@@ -11,6 +11,7 @@ use ptcore::model::{About, Attachment, AttachmentKind, Comment};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
+use ptcore::credits::Service;
 use crate::auth::{client_scope, ClientScope, Ctx};
 use crate::error::{bad_request, ApiResult};
 use crate::util::{
@@ -119,6 +120,13 @@ pub async fn create(
             return Err(bad_request("the attachment hasn't finished uploading"));
         }
         untag(&st, &a.key).await?;
+    }
+    // A client's message uses a message credit; one with a photo, a photo
+    // review. Taken before it's stored, so running out stops the send.
+    if !scope.by_coach {
+        let photo = body.attachment.as_ref().is_some_and(|a| a.kind == AttachmentKind::Photo);
+        let (service, what) = if photo { (Service::PhotoReview, "Photo sent") } else { (Service::Message, "Message sent") };
+        super::credits::spend(&st, &scope, service, what, true).await?;
     }
     // A message about a set video is anchored to that video's set.
     let (mut log_id, mut item_id, mut set_index) = (body.log_id, body.item_id, body.set_index);

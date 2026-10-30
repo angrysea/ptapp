@@ -114,6 +114,7 @@ pub async fn assign(
         items.push(keyed(&pk, &format!("SCHED#{date}#{}", sw.id), &sw)?);
     }
     st.store.batch_put(items).await?;
+    super::credits::spend(&st, &scope, ptcore::credits::Service::Programming, &format!("Program assigned: {}", program.name), false).await?;
     Ok(Json(assignment))
 }
 
