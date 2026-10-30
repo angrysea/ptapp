@@ -39,6 +39,23 @@ const SEEDS: &[Seed] = &[
     Seed { id: "leg-curl", name: "Leg Curl", muscles: &["hamstrings"], equipment: &["machine"], cues: &["Hips down", "Slow eccentric"] },
     Seed { id: "calf-raise", name: "Calf Raise", muscles: &["calves"], equipment: &["machine", "bodyweight"], cues: &["Full stretch at the bottom", "Pause at the top"] },
     Seed { id: "kettlebell-swing", name: "Kettlebell Swing", muscles: &["glutes", "hamstrings"], equipment: &["kettlebell"], cues: &["Hike it back", "Snap the hips", "Bell floats to chest height"] },
+    Seed { id: "kb-single-arm-swing", name: "Single-arm Kettlebell Swing", muscles: &["glutes", "hamstrings", "core"], equipment: &["kettlebell"], cues: &["Square shoulders; don't let the bell twist you", "Free hand guards the hip", "Snap the hips, the arm just guides"] },
+    Seed { id: "kb-deadlift", name: "Kettlebell Deadlift", muscles: &["glutes", "hamstrings", "back"], equipment: &["kettlebell"], cues: &["Bell between your feet, under your hips", "Hips back, flat back", "Stand tall and squeeze glutes"] },
+    Seed { id: "kb-single-leg-deadlift", name: "Single-leg Kettlebell Deadlift", muscles: &["hamstrings", "glutes", "balance"], equipment: &["kettlebell"], cues: &["Hips stay square to the floor", "Back leg and torso move as one", "Soft standing knee"] },
+    Seed { id: "kb-clean", name: "Kettlebell Clean", muscles: &["glutes", "hamstrings", "upper back"], equipment: &["kettlebell"], cues: &["Bell stays close, like zipping a jacket", "Hand goes around the bell, not over it", "Land in the rack softly: wrist straight, elbow tucked"] },
+    Seed { id: "kb-press", name: "Kettlebell Press", muscles: &["shoulders", "triceps", "core"], equipment: &["kettlebell"], cues: &["Start from a solid rack", "Squeeze glutes and grip", "Bicep by the ear at lockout"] },
+    Seed { id: "kb-push-press", name: "Kettlebell Push Press", muscles: &["shoulders", "triceps", "legs"], equipment: &["kettlebell"], cues: &["Short dip, knees forward", "Drive with the legs, then press", "Lock out overhead"] },
+    Seed { id: "kb-snatch", name: "Kettlebell Snatch", muscles: &["glutes", "hamstrings", "shoulders"], equipment: &["kettlebell"], cues: &["Hike back like a swing", "Pull high, then punch through at the top", "Bell rolls around the hand; no slamming the forearm"] },
+    Seed { id: "turkish-get-up", name: "Turkish Get-up", muscles: &["shoulders", "core", "full body"], equipment: &["kettlebell"], cues: &["Eyes on the bell the whole way up", "Arm locked, knuckles to the ceiling", "Slow: every step is its own position"] },
+    Seed { id: "kb-front-squat", name: "Kettlebell Front Squat", muscles: &["quads", "glutes", "core"], equipment: &["kettlebell"], cues: &["Bells in the rack, elbows tucked", "Stay tall as you sit down", "Knees out over toes"] },
+    Seed { id: "kb-thruster", name: "Kettlebell Thruster", muscles: &["quads", "glutes", "shoulders"], equipment: &["kettlebell"], cues: &["Squat with the bells in the rack", "Use the drive up to press overhead", "One smooth movement"] },
+    Seed { id: "kb-row", name: "Kettlebell Row", muscles: &["lats", "upper back"], equipment: &["kettlebell"], cues: &["Hinge with a flat back", "Pull the elbow to the hip", "No twisting"] },
+    Seed { id: "kb-windmill", name: "Kettlebell Windmill", muscles: &["obliques", "shoulders", "hamstrings"], equipment: &["kettlebell"], cues: &["Bell locked out overhead, eyes on it", "Push the hip out toward the bell side", "Slide the free hand down the inside of the leg"] },
+    Seed { id: "kb-halo", name: "Kettlebell Halo", muscles: &["shoulders", "upper back"], equipment: &["kettlebell"], cues: &["Hold the bell upside down by the horns", "Circle close around the head", "Ribs down, don't arch"] },
+    Seed { id: "kb-high-pull", name: "Kettlebell High Pull", muscles: &["glutes", "upper back", "shoulders"], equipment: &["kettlebell"], cues: &["Swing, then pull the elbow high and back", "Bell stays close to the body", "Hips do the work"] },
+    Seed { id: "kb-suitcase-carry", name: "Kettlebell Suitcase Carry", muscles: &["core", "grip", "obliques"], equipment: &["kettlebell"], cues: &["One bell at your side", "Don't lean away from it", "Tall posture, steady steps"] },
+    Seed { id: "kb-rack-carry", name: "Kettlebell Rack Carry", muscles: &["core", "upper back"], equipment: &["kettlebell"], cues: &["Bells in the rack, elbows tucked", "Ribs down, breathe behind the brace", "Short, steady steps"] },
+    Seed { id: "kb-reverse-lunge", name: "Kettlebell Reverse Lunge", muscles: &["quads", "glutes"], equipment: &["kettlebell"], cues: &["Step back, front knee over the foot", "Back knee just above the floor", "Drive up through the front heel"] },
     Seed { id: "plank", name: "Plank", muscles: &["core"], equipment: &["bodyweight"], cues: &["Squeeze glutes", "Ribs down", "Straight line head to heel"] },
     Seed { id: "dead-bug", name: "Dead Bug", muscles: &["core"], equipment: &["bodyweight"], cues: &["Lower back pressed down", "Exhale as you extend"] },
     Seed { id: "farmers-carry", name: "Farmer's Carry", muscles: &["grip", "core", "traps"], equipment: &["dumbbell", "kettlebell"], cues: &["Tall posture", "Short quick steps"] },
@@ -84,7 +101,7 @@ fn modality(id: &str) -> Modality {
     match id {
         "rowing-erg" | "assault-bike" | "jump-rope" | "treadmill-run" | "incline-walk" | "outdoor-run" | "brisk-walk"
         | "stationary-bike" | "elliptical" | "stair-climber" | "ski-erg" | "swim" => Modality::Cardio,
-        "worlds-greatest-stretch" | "cat-cow" | "leg-swing" | "band-pull-apart" => Modality::Mobility,
+        "worlds-greatest-stretch" | "cat-cow" | "leg-swing" | "band-pull-apart" | "kb-halo" => Modality::Mobility,
         _ => Modality::Strength,
     }
 }
@@ -101,7 +118,12 @@ fn filming(id: &str) -> Option<Filming> {
         "pull-up" | "lat-pulldown" | "seated-cable-row" => (CameraAngle::Side, 2.5, "Whole movement in frame, top to bottom."),
         "push-up" | "dip" => (CameraAngle::Side, 2.0, "Phone low, at shoulder height, so body line and depth show."),
         "walking-lunge" | "bulgarian-split-squat" | "step-up" => (CameraAngle::Front, 3.0, "Phone at knee height so knee tracking shows."),
-        "kettlebell-swing" => (CameraAngle::Side, 3.0, "Phone at hip height so the hinge shows."),
+        "kettlebell-swing" | "kb-single-arm-swing" | "kb-deadlift" | "kb-clean" | "kb-snatch" | "kb-high-pull" => (CameraAngle::Side, 3.0, "Phone at hip height so the hinge shows."),
+        "kb-single-leg-deadlift" => (CameraAngle::Side, 2.5, "Phone at hip height so your back and hips show."),
+        "kb-press" | "kb-push-press" => (CameraAngle::Side, 2.5, "Phone at chest height so the lockout shows."),
+        "turkish-get-up" | "kb-windmill" => (CameraAngle::Diagonal, 3.0, "Whole body in frame, lying down to standing."),
+        "kb-front-squat" | "kb-thruster" => (CameraAngle::Diagonal, 3.0, "Phone at hip height so depth and knee travel both show."),
+        "kb-reverse-lunge" => (CameraAngle::Front, 3.0, "Phone at knee height so knee tracking shows."),
         "lateral-raise" => (CameraAngle::Front, 2.5, "Phone at shoulder height."),
         _ => return None,
     };
@@ -140,5 +162,19 @@ mod tests {
         assert_eq!(modality("rowing-erg"), super::Modality::Cardio);
         assert_eq!(modality("incline-walk"), super::Modality::Cardio);
         assert_eq!(modality("back-squat"), super::Modality::Strength);
+    }
+
+    #[test]
+    fn kettlebell_lifts_are_in_the_library() {
+        let all = super::builtin_exercises();
+        let kb: Vec<_> = all.iter().filter(|e| e.equipment.iter().any(|q| q == "kettlebell")).collect();
+        assert!(kb.len() >= 18, "{} kettlebell exercises", kb.len());
+        for e in &kb {
+            assert!(!e.cues.is_empty(), "{} has cues", e.id);
+            if let Some(f) = &e.filming {
+                assert!(f.validate().is_ok(), "{}", e.id);
+            }
+        }
+        assert_eq!(all.iter().find(|e| e.id == "kb-halo").unwrap().modality, super::Modality::Mobility);
     }
 }
