@@ -262,6 +262,7 @@ async function estimate(cid, onDone) {
   const pick = select(meals.map((m) => [m.id, `${m.label || 'Meal'} · ${fmtDate(m.date)}`]), meals[meals.length - 1].id);
   const rows = h('div');
   let pending = []; // per item: { get: () => the item to save, keep: () => a staple to save or null }
+  let searchOff = null; // the API's message when food search isn't set up
   let saved = false;
 
   async function show() {
@@ -274,7 +275,8 @@ async function estimate(cid, onDone) {
       const ws = words(it.text);
       const mine = staples.filter((s) => s.snap && words(s.name).some((w) => ws.includes(w)))
         .map((s) => ({ staple: true, name: s.name, fdcId: s.snap.fdcId, grams: s.snap.perGrams, kcal: s.snap.kcalPer, protein: s.snap.proteinPer, carbs: s.snap.carbsPer, fat: s.snap.fatPer }));
-      const found = await api('GET', `/foods/search?q=${encodeURIComponent(it.text)}`).catch(() => ({ candidates: [] }));
+      const found = searchOff ? { candidates: [] } : await api('GET', `/foods/search?q=${encodeURIComponent(it.text)}`).catch(() => ({ candidates: [] }));
+      searchOff ||= found.off ?? null;
       const cands = [...mine, ...(found.candidates ?? []).slice(0, 5)];
       const choice = select([['', 'No match'], ...cands.map((c, i) => [String(i), `${c.staple ? '★ ' : ''}${c.name}${c.kcal != null ? ` · ${Math.round(c.kcal)} kcal/${Math.round(c.grams ?? 100)} g` : ''}`])], cands.length ? '0' : '', { 'aria-label': `Food for ${it.text}` });
       const grams = h('input', { type: 'number', inputmode: 'decimal', min: 0, step: 'any', value: it.grams != null ? Math.round(it.grams) : '', placeholder: 'grams', 'aria-label': `Grams of ${it.text}`, style: 'width:90px' });
@@ -296,7 +298,7 @@ async function estimate(cid, onDone) {
         },
       };
     }));
-    mount(rows, pending.map((p) => p.row));
+    mount(rows, searchOff && h('p', { class: 'small muted' }, searchOff), pending.map((p) => p.row));
   }
 
   pick.addEventListener('change', show);

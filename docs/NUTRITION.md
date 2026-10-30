@@ -112,7 +112,7 @@ differences. Check one real file from each app before relying on it.
 
 * `/foods/search` is the only place USDA is touched: server-side fetch with
   the key from the Lambda environment (`FDC_API_KEY`, a template parameter
-  defaulting to empty — empty turns search off with a clear message). The
+  defaulting to empty — empty turns search off: the answer is `{candidates: [], off: "…"}` with a 200, and the estimate sheet shows the message once). The
   browser never sees it — FoodData Central deactivates any key found in
   published code.
 * Coach flow mirrors what they already do with programs: read the client's

@@ -264,6 +264,9 @@ button.info::after { content: ''; position: absolute; inset: -12px; }
 table.scale { width: 100%; border-collapse: collapse; margin: 8px 0; }
 table.scale th, table.scale td { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--line); }
 table.scale td:first-child { font-weight: 700; white-space: nowrap; }
+table.scale td { overflow-wrap: anywhere; vertical-align: top; }
+/* an info sheet never runs wider than the screen; anything that still can't fit scrolls sideways */
+.sheet { overflow-x: auto; }
 
 /* The client's note on an exercise and their 1-5 workout rating (workout.js), and how the coach sees them (coach.js). */
 textarea.exnote { min-height: 0; margin-top: 8px; font-size: 0.9rem; }
@@ -355,9 +358,10 @@ button.reply.new { background: var(--accent); color: var(--accent-ink); }
 .checkin-due { border-left: 4px solid var(--accent); }
 .checkin-q { margin-bottom: 14px; }
 .checkin-q > label { display: block; font-weight: 600; margin-bottom: 6px; }
-.scale { display: grid; grid-template-columns: repeat(10, 1fr); gap: 4px; }
-.scale button { min-width: 0; padding: 0; }
-.scale button.on { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+/* the check-in's 1-10 picker; not table.scale, the explainer tables in info sheets */
+div.scale { display: grid; grid-template-columns: repeat(10, 1fr); gap: 4px; }
+div.scale button { min-width: 0; padding: 0; }
+div.scale button.on { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
 .table-wrap { overflow-x: auto; }
 table.checkins { border-collapse: collapse; width: 100%; font-size: 0.875rem; background: var(--card); border-radius: 10px; }
 table.checkins th, table.checkins td { padding: 8px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }

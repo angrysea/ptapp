@@ -1406,7 +1406,9 @@ async fn full_client_journey() {
     assert_eq!(t.call("GET", "/clients/client1/meals", Some("coach2"), None).await.0, StatusCode::FORBIDDEN, "another coach's client");
     // food search: coach-only, and it says so when the key is off
     assert_eq!(t.call("GET", "/foods/search?q=chicken+breast", Some("client1"), None).await.0, StatusCode::FORBIDDEN);
-    assert_eq!(t.call("GET", "/foods/search?q=chicken+breast", Some("coach1"), None).await.0, StatusCode::BAD_REQUEST, "no FDC key: search is off");
+    let (s, off) = t.call("GET", "/foods/search?q=chicken+breast", Some("coach1"), None).await;
+    assert_eq!(s, StatusCode::OK, "no FDC key: search is off, which is not an error");
+    assert!(off["off"].as_str().is_some_and(|m| m.contains("off")) && off["candidates"].as_array().unwrap().is_empty());
     assert_eq!(t.call("GET", "/foods/search?q=", Some("coach1"), None).await.0, StatusCode::BAD_REQUEST, "needs words");
     // a coach's saved staples live in the coach's partition
     let (s, staple) = t.call("POST", "/foods", Some("coach1"), Some(json!({ "name": " Usual lunch ", "snap": { "fdcId": "1702589", "perGrams": 100.0, "kcalPer": 165.0 } }))).await;
