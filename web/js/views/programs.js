@@ -13,7 +13,19 @@ import { $app, busy, confirmSheet, field, h, mount, num, select, sheet, toast, u
 import { loadExercises } from './exercises.js';
 import { ruleEditor } from './progression.js';
 
-const KINDS = [['straight', 'Straight sets'], ['superset', 'Superset'], ['circuit', 'Circuit'], ['amrap', 'AMRAP'], ['emom', 'EMOM'], ['interval', 'Intervals']];
+const KINDS = [['straight', 'Straight sets'], ['superset', 'Superset'], ['circuit', 'Circuit'], ['amrap', 'AMRAP'], ['emom', 'EMOM'], ['interval', 'Intervals'],
+  ['steady', 'Steady state'], ['flow', 'Flow (once through)'], ['ramp', 'Ramp-up'], ['fortime', 'For time']];
+/** The type a new block gets unless the coach picks one: post-workout cardio
+ * is one steady effort, a warm-up is a flow of drills. */
+const USUAL_KIND = { main: 'straight', warmup: 'flow', post: 'steady' };
+const KIND_HINT = {
+  steady: 'One continuous effort for time or distance, e.g. incline walk 20 min in zone 2.',
+  flow: 'Each line done once, in order (or for the rounds given): drills for time (30s) or reps.',
+  ramp: 'Each line is a stage, easiest first: e.g. row 3 min easy, 2 min moderate, 1 min hard.',
+  fortime: 'The work as fast as possible; the client logs how long it took.',
+};
+/** What a cardio item asks for when added to a block of each type. */
+const cardioStart = (b) => (b.kind === 'fortime' ? { distanceM: 1000 } : { durationSec: (b.kind === 'ramp' ? 3 : phaseOf(b) === 'warmup' ? 5 : 20) * 60 });
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 const EXTRA_PHASES = PHASES.filter(([k]) => k !== 'main');
 
@@ -41,6 +53,14 @@ export async function renderPrograms() {
 const blankProgram = () => ({ id: '', name: '', description: '', weeks: 4, isTemplate: true, workouts: [], defaultBlocks: [] });
 const blankWorkout = (week, day) => ({ week, day, workout: { id: '', name: `Week ${week} · ${DAYS[day - 1]}`, notes: '', skipProgramDefaults: false, blocks: [] } });
 const blankBlock = (kind, phase = 'main') => ({ id: '', kind, phase, rounds: null, durationSec: kind === 'amrap' || kind === 'emom' ? 600 : null, workSec: kind === 'interval' ? 40 : null, restSec: kind === 'interval' ? 20 : null, items: [], notes: '' });
+/** A steady-state block is one effort for time or distance: make its items so. */
+function makeSteady(b) {
+  for (const it of b.items) {
+    it.cardio ||= { durationSec: 20 * 60 };
+    it.sets = 1;
+    it.loadPct = it.loadKg = it.progression = null;
+  }
+}
 
 export async function renderProgramEditor(id) {
   const [lib, loaded] = await Promise.all([loadExercises(), id === 'new' ? blankProgram() : get(`/programs/${id}`)]);
@@ -98,10 +118,10 @@ export async function renderProgramEditor(id) {
 
   /** The block type picker and one add button per part of the workout. */
   function addBlockRow(blocks, redraw, phases) {
-    const kind = select(KINDS, 'straight', { 'aria-label': 'Block type' });
+    const kind = select([['', 'Usual type (warm-up: flow, cardio: steady)'], ...KINDS], '', { 'aria-label': 'Block type' });
     const ADD = { main: '+ Add block', warmup: '+ Warm-up', post: '+ Post-workout cardio' };
     return h('div', { class: 'row' }, h('div', { class: 'grow' }, kind),
-      phases.map(([phase]) => h('button', { onclick: () => { blocks.push(blankBlock(kind.value, phase)); touch(); redraw(); } }, ADD[phase])));
+      phases.map(([phase]) => h('button', { onclick: () => { blocks.push(blankBlock(kind.value || USUAL_KIND[phase], phase)); touch(); redraw(); } }, ADD[phase])));
   }
 
   function draw() {
@@ -201,7 +221,7 @@ export async function renderProgramEditor(id) {
       onchange: (e) => { obj[key] = num(e.target.value) ?? (key === 'sets' ? 1 : null); touch(); },
     });
     const minutes = h('input', { type: 'number', inputmode: 'decimal', value: b.durationSec ? b.durationSec / 60 : '', onchange: (e) => { b.durationSec = num(e.target.value) ? Math.round(num(e.target.value) * 60) : null; touch(); } });
-    const kindSel = select(KINDS, b.kind, { 'aria-label': 'Block type', onchange: (e) => { b.kind = e.target.value; touch(); redraw(); } });
+    const kindSel = select(KINDS, b.kind, { 'aria-label': 'Block type', onchange: (e) => { b.kind = e.target.value; if (b.kind === 'steady') makeSteady(b); touch(); redraw(); } });
     // Buttons rather than a select, so a block's selects stay type, then exercise.
     const phaseBtns = h('div', { class: 'row phase-pick', role: 'group', 'aria-label': 'Part of the workout' },
       phases.map(([k, label]) => h('button', {
@@ -213,9 +233,12 @@ export async function renderProgramEditor(id) {
       const ex = lib.find((e) => e.id === exSel.value);
       if (!ex) return;
       const last = b.items[b.items.length - 1];
-      const cardio = ex.modality === 'cardio';
-      b.items.push({ id: '', exerciseId: ex.id, exerciseName: ex.name, sets: cardio ? 1 : last?.sets ?? 3, reps: cardio ? '1' : last?.reps ?? '10', loadKg: null, tempo: null,
-        restSec: !cardio && b.kind === 'straight' ? 90 : null, rpe: null, rir: null, cardio: cardio ? { durationSec: (phaseOf(b) === 'warmup' ? 5 : 20) * 60 } : null, notes: '' });
+      // Steady-state work is always for time or distance; a flow or a ramp
+      // goes through each line once.
+      const cardio = ex.modality === 'cardio' || b.kind === 'steady';
+      const once = ['flow', 'ramp'].includes(b.kind);
+      b.items.push({ id: '', exerciseId: ex.id, exerciseName: ex.name, sets: cardio || once ? 1 : last?.sets ?? 3, reps: cardio ? '1' : once ? last?.reps ?? '30s' : last?.reps ?? '10', loadKg: null, tempo: null,
+        restSec: !cardio && b.kind === 'straight' ? 90 : null, rpe: null, rir: null, cardio: cardio ? cardioStart(b) : null, notes: '' });
       touch(); redraw();
     });
     const move = (arr, i, d) => { const j = i + d; if (j < 0 || j >= arr.length) return; [arr[i], arr[j]] = [arr[j], arr[i]]; touch(); redraw(); };
@@ -228,18 +251,20 @@ export async function renderProgramEditor(id) {
           h('button', { class: 'small ghost', onclick: () => move(blocks, bi, 1) }, '↓'),
           h('button', { class: 'small ghost', onclick: () => { blocks.splice(bi, 1); touch(); redraw(); } }, '✕'))),
       h('div', { class: 'item-grid', style: 'margin-top:6px' },
-        ['superset', 'circuit', 'interval'].includes(b.kind) && field('Rounds', numIn(b, 'rounds')),
+        ['superset', 'circuit', 'interval', 'flow'].includes(b.kind) && field('Rounds', numIn(b, 'rounds', { min: 1, placeholder: b.kind === 'flow' ? '1' : '' })),
         ['amrap', 'emom'].includes(b.kind) && field('Minutes', minutes),
+        b.kind === 'fortime' && field('Time cap (min)', minutes),
         ['interval', 'circuit'].includes(b.kind) && field('Work (s)', numIn(b, 'workSec')),
         ['interval', 'circuit', 'superset'].includes(b.kind) && field('Rest (s)', numIn(b, 'restSec'))),
+      KIND_HINT[b.kind] && h('p', { class: 'muted small' }, KIND_HINT[b.kind]),
       b.items.map((it, ii) => h('div', { class: 'item-card' },
-        h('div', { class: 'spread' }, h('strong', {}, it.exerciseName),
+        h('div', { class: 'spread' }, h('strong', {}, b.kind === 'ramp' ? `Stage ${ii + 1} · ` : '', it.exerciseName),
           h('div', { class: 'row', style: 'flex-wrap:nowrap' },
             h('button', { class: 'small ghost', onclick: () => move(b.items, ii, -1) }, '↑'),
             h('button', { class: 'small ghost', onclick: () => move(b.items, ii, 1) }, '↓'),
             h('button', { class: 'small ghost', onclick: () => { b.items.splice(ii, 1); touch(); redraw(); } }, '✕'))),
         it.cardio ? h('div', { class: 'item-grid' },
-          field('Repeats', numIn(it, 'sets', { min: 1 })),
+          b.kind !== 'steady' && field('Repeats', numIn(it, 'sets', { min: 1 })),
           field('Minutes', h('input', {
             type: 'number', inputmode: 'decimal', step: 'any', min: 0, value: it.cardio.durationSec ? it.cardio.durationSec / 60 : '',
             onchange: (e) => { it.cardio.durationSec = num(e.target.value) ? Math.round(num(e.target.value) * 60) : null; touch(); },
@@ -250,7 +275,7 @@ export async function renderProgramEditor(id) {
           })),
           field('Zone', select(zoneOptions, it.cardio.zone ? String(it.cardio.zone) : '', { onchange: (e) => { it.cardio.zone = num(e.target.value); touch(); } }), null, zoneInfo()),
           field('RPE', numIn(it, 'rpe', { step: '0.5', min: 1, max: 10 }), null, rpeTargetInfo()),
-          field('Rest (s)', numIn(it, 'restSec')))
+          b.kind !== 'steady' && field('Rest (s)', numIn(it, 'restSec')))
           : h('div', { class: 'item-grid' },
             field('Sets', numIn(it, 'sets', { min: 1 })),
             field('Reps', h('input', { value: it.reps, placeholder: '8-10', onchange: (e) => { it.reps = e.target.value || '1'; touch(); } })),
@@ -260,7 +285,7 @@ export async function renderProgramEditor(id) {
             field('RPE', numIn(it, 'rpe', { step: '0.5', min: 1, max: 10 }), null, rpeTargetInfo()),
             field('RIR', numIn(it, 'rir', { min: 0, max: 10 }), null, rirTargetInfo())),
         h('input', { value: it.notes, placeholder: 'Notes / cues for this exercise', onchange: (e) => { it.notes = e.target.value; touch(); } }),
-        h('button', {
+        b.kind !== 'steady' && h('button', {
           class: 'small ghost', type: 'button',
           onclick: () => { it.cardio = it.cardio ? null : { durationSec: 600 }; if (it.cardio) it.loadPct = it.loadKg = it.progression = null; touch(); redraw(); },
         }, it.cardio ? 'Do as sets × reps instead' : 'Do for time or distance instead'),

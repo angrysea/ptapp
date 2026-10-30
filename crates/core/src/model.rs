@@ -282,6 +282,19 @@ pub enum BlockKind {
     Amrap,
     Emom,
     Interval,
+    /// One continuous effort done for time or distance ("incline walk,
+    /// 20 min, zone 2"); the usual post-workout type.
+    Steady,
+    /// Drills done once through in order (or `rounds` times), each for time
+    /// or reps; the usual warm-up type.
+    Flow,
+    /// Stages that build up: each item is a stage, easiest first ("row 3 min
+    /// easy, 2 min moderate, 1 min hard", or lighter sets of the first lift).
+    Ramp,
+    /// The work as fast as possible; the client logs the time it took.
+    /// `duration_sec` is an optional time cap.
+    #[serde(rename = "fortime")]
+    ForTime,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -413,7 +426,16 @@ impl Program {
 }
 
 fn validate_block(b: &Block) -> Result<(), String> {
+    if b.duration_sec.is_some_and(|d| d == 0 || d > crate::cardio::MAX_DURATION_SEC) {
+        return Err("a block's time must be up to 6 hours".into());
+    }
+    if b.rounds.is_some_and(|r| !(1..=50).contains(&r)) {
+        return Err("rounds must be 1-50".into());
+    }
     for it in &b.items {
+        if b.kind == BlockKind::Steady && (it.cardio.is_none() || it.sets != 1) {
+            return Err(format!("{}: a steady-state block is one effort for time or distance", it.exercise_name));
+        }
         if !(1..=50).contains(&it.sets) {
             return Err(format!("{}: sets must be 1-50", it.exercise_name));
         }
@@ -580,6 +602,9 @@ pub struct WorkoutLog {
     /// anything bothering them. The coach sees it with the log.
     #[serde(default)]
     pub exercise_notes: BTreeMap<String, String>,
+    /// Seconds a "for time" block took (block id -> seconds).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub block_times: BTreeMap<String, u32>,
     /// How the workout went overall: 1 bad, 2 poor, 3 OK, 4 good, 5 great.
     #[serde(default)]
     pub rating: Option<u8>,
@@ -607,6 +632,9 @@ impl WorkoutLog {
         self.exercise_notes.retain(|_, n| !n.is_empty());
         if self.exercise_notes.len() > 100 {
             return Err("too many exercise notes".into());
+        }
+        if self.block_times.len() > 50 || self.block_times.values().any(|t| *t == 0 || *t > crate::cardio::MAX_DURATION_SEC) {
+            return Err("a block's time must be up to 6 hours".into());
         }
         for s in &self.sets {
             if s.duration_sec.is_some_and(|d| d > crate::cardio::MAX_DURATION_SEC) {
@@ -914,7 +942,7 @@ mod tests {
         log.clean_feedback().unwrap();
         assert_eq!(log.exercise_notes.into_iter().collect::<Vec<_>>(), vec![("a".to_string(), "knee ok".to_string())]);
 
-        let mut bad = WorkoutLog { rating: Some(0), exercise_notes: BTreeMap::new(), ..serde_json::from_value(serde_json::json!({
+        let mut bad = WorkoutLog { rating: Some(0), exercise_notes: BTreeMap::new(), block_times: BTreeMap::new(), ..serde_json::from_value(serde_json::json!({
             "id": "l", "scheduledId": null, "date": "2026-10-28", "workoutName": "W", "status": "completed",
             "check": null, "updatedAt": "2026-10-28T12:00:00Z"
         })).unwrap() };
@@ -987,6 +1015,26 @@ mod tests {
         assert!(program(1, 1, pct(75.0)).validate().is_ok());
         assert!(program(1, 1, pct(0.0)).validate().is_err());
         assert!(program(1, 1, pct(151.0)).validate().is_err());
+    }
+
+    #[test]
+    fn steady_blocks_are_one_effort_and_new_kinds_read_back() {
+        let with_kind = |kind: BlockKind, it: Item| {
+            let mut p = program(1, 1, it);
+            p.workouts[0].workout.blocks[0].kind = kind;
+            p
+        };
+        let walk = Item { cardio: Some(crate::cardio::CardioTarget { duration_sec: Some(1200), ..Default::default() }), ..item(1, None) };
+        assert!(with_kind(BlockKind::Steady, walk.clone()).validate().is_ok());
+        assert!(with_kind(BlockKind::Steady, item(1, None)).validate().is_err(), "steady needs time or distance");
+        assert!(with_kind(BlockKind::Steady, Item { sets: 3, ..walk }).validate().is_err(), "steady is one effort");
+        let mut capped = with_kind(BlockKind::ForTime, item(3, None));
+        capped.workouts[0].workout.blocks[0].duration_sec = Some(0);
+        assert!(capped.validate().is_err(), "a zero time cap");
+        for (kind, json) in [(BlockKind::Steady, "steady"), (BlockKind::Flow, "flow"), (BlockKind::Ramp, "ramp"), (BlockKind::ForTime, "fortime")] {
+            assert_eq!(serde_json::to_value(kind).unwrap(), json);
+            assert_eq!(serde_json::from_value::<BlockKind>(json.into()).unwrap(), kind);
+        }
     }
 
     #[test]

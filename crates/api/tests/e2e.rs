@@ -492,6 +492,10 @@ async fn full_client_journey() {
     let mut bad = program.clone();
     bad["weeks"] = json!(1);
     assert_eq!(t.call("POST", "/programs", Some("coach1"), Some(bad)).await.0, StatusCode::BAD_REQUEST);
+    // a steady-state block is one effort for time or distance
+    let mut steady = program.clone();
+    steady["workouts"][0]["workout"]["blocks"][0]["kind"] = json!("steady");
+    assert_eq!(t.call("POST", "/programs", Some("coach1"), Some(steady)).await.0, StatusCode::BAD_REQUEST);
     let (s, copy) = t.call("POST", &format!("/programs/{pid}/copy"), Some("coach1"), Some(json!({}))).await;
     assert_eq!(s, StatusCode::OK);
     assert_eq!(copy["name"], "Base Strength (copy)");
@@ -520,7 +524,8 @@ async fn full_client_journey() {
             "setIndex": i, "reps": reps, "loadKg": 100.0, "rpe": 8, "done": true })).collect::<Vec<_>>()),
         "check": { "rpe": 8, "energy": 4, "sleep": 3, "soreness": 2, "pain": true, "painLocation": "left knee" },
         "exerciseNotes": { item_id: "  Left hip a bit tight on the way down  ", "other": "   " },
-        "rating": 4
+        "rating": 4,
+        "blockTimes": { "finisher": 754 }
     });
     let now = chrono::Utc::now();
     let newer = (now - chrono::Duration::minutes(1)).to_rfc3339();
@@ -530,12 +535,17 @@ async fn full_client_journey() {
     let mut rated = log(&newer, 5);
     rated["rating"] = json!(6);
     assert_eq!(t.call("PUT", "/clients/client1/logs/log-abc", Some("client1"), Some(rated)).await.0, StatusCode::BAD_REQUEST);
+    // a "for time" block's time is up to 6 hours
+    let mut timed = log(&newer, 5);
+    timed["blockTimes"] = json!({ "finisher": 0 });
+    assert_eq!(t.call("PUT", "/clients/client1/logs/log-abc", Some("client1"), Some(timed)).await.0, StatusCode::BAD_REQUEST);
     let (s, l) = t.call("PUT", "/clients/client1/logs/log-abc", Some("client1"), Some(log(&newer, 5))).await;
     assert_eq!(s, StatusCode::OK, "{l}");
     // notes are trimmed and empty ones dropped; the coach sees them and the rating
     let (_, logs) = t.call("GET", "/clients/client1/logs", Some("coach1"), None).await;
     assert_eq!(logs[0]["exerciseNotes"], json!({ item_id: "Left hip a bit tight on the way down" }));
     assert_eq!(logs[0]["rating"], 4);
+    assert_eq!(logs[0]["blockTimes"]["finisher"], 754, "the for-time result is kept");
     let (s, conflict) = t.call("PUT", "/clients/client1/logs/log-abc", Some("client1"), Some(log(&older, 3))).await;
     assert_eq!(s, StatusCode::CONFLICT);
     assert_eq!(conflict["current"]["sets"][0]["reps"], 5);

@@ -232,6 +232,7 @@ async function logs(el, client, focus = null) {
         h('div', { class: 'spread' }, h('strong', {}, l.workoutName), statusChip(l, l.date)),
         h('div', { class: 'muted small' }, `${fmtDate(l.date)} · updated ${fmtDateTime(l.updatedAt)}`),
         l.rating && ratingChip(l.rating),
+        Object.values(l.blockTimes ?? {}).map((t) => h('div', { class: 'small' }, `⏱ For time: ${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`)),
         l.comment && h('p', { style: 'white-space:pre-wrap' }, `“${l.comment}”`),
         c && h('div', { class: 'small row' },
           c.rpe != null && h('span', {}, `sRPE ${c.rpe}`), c.energy != null && h('span', {}, `energy ${c.energy}/5`),

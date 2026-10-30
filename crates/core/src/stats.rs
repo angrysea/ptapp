@@ -200,6 +200,7 @@ mod tests {
             workout_name: "W".into(),
             status,
             exercise_notes: Default::default(),
+            block_times: Default::default(),
             rating: None,
             sets: sets
                 .into_iter()

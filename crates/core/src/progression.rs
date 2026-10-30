@@ -209,6 +209,7 @@ mod tests {
             comment: String::new(),
             check: Some(PostCheck { pain, ..Default::default() }),
             exercise_notes: BTreeMap::new(),
+            block_times: Default::default(),
             rating: None,
             updated_at: chrono::Utc::now(),
         }

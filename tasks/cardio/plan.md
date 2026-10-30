@@ -19,6 +19,19 @@ Coaches add a warm-up before a client's workout and cardio after it. Until now, 
 - **Program defaults** (`Program.defaultBlocks`, warm-up and post-workout only). Assigning a program copies them into each workout that doesn't have its own block for that phase. A workout can opt out with `skipProgramDefaults`. Already-assigned workouts are copies, so changing the defaults affects only future assignments.
 - **Compatibility:** every new field is optional or has a serde default, so existing programs, scheduled workouts, logs and offline drafts load unchanged.
 
+## Block types for warm-ups and cardio (2026-10-30)
+
+Straight sets read wrong for a single run or a mobility routine, so four block kinds were added (`BlockKind` in `crates/core/src/model.rs`). They can be used in any part of the workout:
+
+- **Steady state** (`steady`): one continuous effort for time or distance. The server refuses steady items without a cardio target or with more than one repeat. This is the type a new post-workout block starts as.
+- **Flow** (`flow`): drills done once through in order (or `rounds` times), each for time ("30s") or reps. This is the type a new warm-up starts as.
+- **Ramp-up** (`ramp`): each line is a stage, easiest first. Lines are shown as "Stage 1 · …".
+- **For time** (`fortime`): the work as fast as possible, with an optional time cap (`durationSec`). A stopwatch fills in the client's time, which is stored in `WorkoutLog.blockTimes` (block id → seconds) and shown in the coach's Logs tab.
+
+The block timer steps through a flow's or ramp-up's timed lines (`lineSteps` in `web/js/timer.js`). The builder's type picker starts at "Usual type" (straight for main blocks, flow for warm-ups, steady for post-workout cardio). Older programs keep their straight-set warm-ups and cardio; nothing is converted.
+
+In the workout screen, every type except straight sets has an ⓘ next to its heading that explains to the client how to do it (`KIND_EXPLAIN` in `web/js/views/workout.js`). For steady-state post-workout cardio, the ⓘ sits next to "Post-workout cardio".
+
 ## Not in this pass
 
 - Progression rules for cardio (for example, +2 minutes a week).

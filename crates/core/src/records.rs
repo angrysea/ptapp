@@ -163,6 +163,7 @@ mod tests {
             comment: String::new(),
             check: None,
             exercise_notes: BTreeMap::new(),
+            block_times: Default::default(),
             rating: None,
             updated_at: chrono::Utc::now(),
         }

@@ -1,4 +1,6 @@
-// LG-2: rest timer and interval timers (EMOM, AMRAP, work/rest intervals).
+// LG-2: rest timer and interval timers (EMOM, AMRAP, work/rest intervals,
+// the lines of a flow or the stages of a ramp-up) and a stopwatch for "for
+// time" blocks.
 // Runs entirely on the device, so it works offline. Keeps the screen awake
 // while running where the Wake Lock API is available.
 
@@ -60,6 +62,37 @@ export function restTimer(seconds, label = 'Rest', kind = 'rest') {
   function close() { clearInterval(tick); lock.stop(); s.close(); }
 }
 
+/** Seconds a line takes: its cardio time, or reps written as a time
+ * ("30s", "45 sec", "1 min", "1:30"); null when it's counted in reps. */
+export function lineSeconds(it) {
+  if (it.cardio?.durationSec) return it.cardio.durationSec;
+  const r = String(it.reps || '').trim().toLowerCase();
+  let m = r.match(/^(\d+):(\d{2})$/);
+  if (m) return Number(m[1]) * 60 + Number(m[2]);
+  m = r.match(/^(\d+(?:\.\d+)?)\s*(s|sec|secs|seconds?|m|min|mins|minutes?)$/);
+  if (!m) return null;
+  return Math.round(Number(m[1]) * (m[2].startsWith('m') ? 60 : 1));
+}
+
+/** The timed steps of a flow (each line, for each round) or a ramp-up
+ * (each stage); empty when none of its lines has a time. */
+export function lineSteps(block) {
+  const lines = block.items.map((it, i) => ({ it, i, sec: lineSeconds(it) })).filter((x) => x.sec);
+  if (!lines.length) return [];
+  const rounds = block.kind === 'flow' ? block.rounds || 1 : 1;
+  const steps = [];
+  for (let r = 1; r <= rounds; r++) {
+    for (const { it, i, sec } of lines) {
+      const label = block.kind === 'ramp' ? `Stage ${i + 1} · ${it.exerciseName}` : it.exerciseName;
+      steps.push({ label: rounds > 1 ? `${label} · round ${r} of ${rounds}` : label, kind: 'work', sec });
+    }
+  }
+  return steps;
+}
+
+/** Whether `blockTimer` has something to time for this block. */
+export const hasBlockTimer = (b) => ['emom', 'amrap', 'interval', 'circuit', 'superset'].includes(b.kind) || (['flow', 'ramp'].includes(b.kind) && lineSteps(b).length > 0);
+
 /**
  * Interval timer for a workout block. Builds a list of phases from the block
  * kind and steps through them with beeps.
@@ -67,7 +100,9 @@ export function restTimer(seconds, label = 'Rest', kind = 'rest') {
 export function blockTimer(block) {
   const phases = [];
   const kind = block.kind;
-  if (kind === 'emom') {
+  if (kind === 'flow' || kind === 'ramp') {
+    phases.push(...lineSteps(block));
+  } else if (kind === 'emom') {
     const n = block.rounds || Math.max(1, Math.round((block.durationSec || 600) / 60));
     for (let i = 1; i <= n; i++) phases.push({ label: `Minute ${i} of ${n}`, kind: 'work', sec: 60 });
   } else if (kind === 'amrap') {
@@ -117,7 +152,7 @@ export function blockTimer(block) {
   }, 250);
 
   const s = sheet(
-    h('h3', { class: 'center' }, kind.toUpperCase()),
+    h('h3', { class: 'center' }, { flow: 'FLOW', ramp: 'RAMP-UP' }[kind] ?? kind.toUpperCase()),
     phaseEl,
     big,
     kind === 'amrap' && h('div', { class: 'row', style: 'justify-content:center' },
@@ -131,4 +166,39 @@ export function blockTimer(block) {
   const lock = keepAwake();
   enter(0);
   function close() { clearInterval(tick); lock.stop(); s.close(); }
+}
+
+/** Stopwatch for a "for time" block: counts up, beeps at the cap if there is
+ * one, and hands the time to `onStop` (seconds) when stopped. */
+export function stopwatch(label, capSec, onStop) {
+  let start = Date.now();
+  let pausedAt = null;
+  const big = h('div', { class: 'timer-big' }, '0:00');
+  const capEl = capSec ? h('div', { class: 'muted center' }, `Time cap ${mmss(capSec)}`) : null;
+  const lock = keepAwake();
+  let capped = false;
+  const elapsed = () => ((pausedAt ?? Date.now()) - start) / 1000;
+  const tick = setInterval(() => {
+    const t = elapsed();
+    big.textContent = mmss(Math.floor(t));
+    if (capSec && !capped && t >= capSec) { capped = true; beep(990, 700); }
+  }, 250);
+  const pauseBtn = h('button', {
+    onclick: () => {
+      if (pausedAt == null) { pausedAt = Date.now(); pauseBtn.textContent = 'Resume'; }
+      else { start += Date.now() - pausedAt; pausedAt = null; pauseBtn.textContent = 'Pause'; }
+    },
+  }, 'Pause');
+  beep(990, 300);
+  const s = sheet(
+    h('div', { class: 'timer-phase work' }, label),
+    big,
+    capEl,
+    h('div', { class: 'row', style: 'justify-content:center' },
+      pauseBtn,
+      h('button', { onclick: close }, 'Cancel'),
+      h('button', { class: 'primary', onclick: () => { const t = Math.max(1, Math.round(elapsed())); close(); onStop?.(capSec ? Math.min(t, capSec) : t); } }, 'Done')),
+  );
+  s.onClose = () => { clearInterval(tick); lock.stop(); };
+  function close() { s.close(); }
 }

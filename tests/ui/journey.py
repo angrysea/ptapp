@@ -197,9 +197,11 @@ with sync_playwright() as p:
     # a warm-up and post-workout cardio every workout gets when the program is assigned
     every = coach.locator(".card", has=coach.get_by_role("heading", name="Warm-up and cardio for every workout"))
     every.get_by_role("button", name="+ Warm-up").click()
+    expect(every.locator(".block-card").nth(0).get_by_label("Block type")).to_have_value("flow")  # a warm-up is a flow unless picked
     every.locator(".block-card").nth(0).locator("select").nth(1).select_option(label="Rowing (erg)")
     every.get_by_role("button", name="+ Post-workout cardio").click()
     walk = every.locator(".block-card").nth(1)
+    expect(walk.get_by_label("Block type")).to_have_value("steady")  # post-workout cardio is one steady effort
     walk.locator("select").nth(1).select_option(label="Incline Walk")
     expect(walk.get_by_label("Minutes")).to_have_value("20")  # cardio exercises start as 20 min
     walk.get_by_label("Zone", exact=True).select_option("2")
@@ -258,6 +260,10 @@ with sync_playwright() as p:
     client_ctx.set_offline(True)
     # the program's warm-up comes first and is ticked off as a whole
     expect(client.locator(".card.phase-warmup")).to_contain_text("Rowing (erg)")
+    expect(client.locator(".card.phase-warmup h3")).to_contain_text("Warm-up · Flow · once through")
+    client.get_by_role("button", name="What is Flow?").click()  # each type explains itself to the client
+    expect(client.locator(".sheet")).to_contain_text("Go through each move once, in order")
+    client.locator(".sheet").get_by_role("button", name="Got it").click()
     client.get_by_role("button", name="Mark warm-up done").click()
     expect(client.get_by_role("button", name="✓ Warm-up done")).to_be_visible()
     done = client.locator(".setrow .done")

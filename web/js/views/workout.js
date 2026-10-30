@@ -7,10 +7,10 @@ import { del, enqueue, get, onSync, post } from '../api.js';
 import { kv } from '../idb.js';
 import { go } from '../router.js';
 import { session } from '../session.js';
-import { blockTimer, restTimer } from '../timer.js';
+import { blockTimer, hasBlockTimer, restTimer, stopwatch } from '../timer.js';
 import { RATINGS, rpeLogInfo, sessionRpeInfo } from '../effort.js';
-import { byPhase, cardioText, distUnits, phaseOf, zoneInfo } from '../cardio.js';
-import { $app, addDays, busy, confirmSheet, field, fmtDate, h, mount, num, select, sheet, toast, todayIso, uid, units } from '../ui.js';
+import { byPhase, cardioText, distUnits, fmtDuration, phaseOf, zoneInfo } from '../cardio.js';
+import { $app, addDays, busy, confirmSheet, field, fmtDate, h, infoButton, mount, num, select, sheet, toast, todayIso, uid, units } from '../ui.js';
 import { CannotEncode, canEncode, encodeClip } from '../encode.js';
 import { onUploads, pendingUploads, queueVideo, removeUpload, retryUpload } from '../uploads.js';
 import { askBeforeCellular, filmingTip, onCellular, playReply, playVideo } from '../videos.js';
@@ -38,7 +38,29 @@ onSync(async (_, failure) => {
   toast('Your workout was kept as a draft so you can fix it and save again.', 'error');
 });
 
-const KIND_LABEL = { straight: '', superset: 'Superset', circuit: 'Circuit', amrap: 'AMRAP', emom: 'EMOM', interval: 'Intervals' };
+const KIND_LABEL = { straight: '', superset: 'Superset', circuit: 'Circuit', amrap: 'AMRAP', emom: 'EMOM', interval: 'Intervals', steady: 'Steady state', flow: 'Flow', ramp: 'Ramp-up', fortime: 'For time' };
+/** How to do each block type, for the client (straight sets need no explaining). */
+const KIND_EXPLAIN = {
+  steady: 'Keep one steady pace for the whole time or distance. Stay in the zone or effort shown.',
+  flow: 'Go through each move once, in order, with no rest between. The timer moves you on.',
+  ramp: 'Start easy and build up: each stage is a little harder than the last.',
+  fortime: 'Do all the work as fast as you can with good form. Start the stopwatch, and tap Done when you finish. If there’s a time cap, stop when it runs out.',
+  superset: 'Do one set of each exercise back to back, then rest, and repeat for the rounds shown.',
+  circuit: 'Do one set of each exercise back to back, then rest, and repeat for the rounds shown.',
+  amrap: 'As many rounds as possible: repeat the list until the time runs out, and count your rounds.',
+  emom: 'Every minute on the minute: start the work at the top of each minute and rest for what’s left of it.',
+  interval: 'Work for the “on” time, rest for the “off” time, and repeat.',
+};
+/** The ⓘ that explains a block's type, or nothing for straight sets. */
+const kindInfo = (b) => KIND_EXPLAIN[b.kind] && infoButton(KIND_LABEL[b.kind], h('p', {}, KIND_EXPLAIN[b.kind]));
+/** A block's heading detail: rounds, minutes, a time cap. */
+const kindDetail = (b) => (b.kind === 'amrap' || b.kind === 'emom' ? `${Math.round((b.durationSec || 0) / 60)} min`
+  : b.kind === 'fortime' ? (b.durationSec ? `${fmtDuration(b.durationSec)} cap` : '')
+  : b.kind === 'flow' ? (b.rounds > 1 ? `${b.rounds} rounds` : 'once through')
+  : b.kind === 'ramp' || b.kind === 'steady' ? ''
+  : [b.rounds && `${b.rounds} rounds`, b.workSec && `${b.workSec}s on`, b.restSec && `${b.restSec}s off`].filter(Boolean).join(' · '));
+/** An exercise's name, as a numbered stage in a ramp-up. */
+const lineName = (b, it) => (b.kind === 'ramp' ? `Stage ${b.items.indexOf(it) + 1} · ${it.exerciseName}` : it.exerciseName);
 
 /** Cache schedule/logs per client (not per date range), so the offline cache
  * survives midnight: items accumulate across days and are pruned to a
@@ -453,13 +475,14 @@ export async function renderWorkout(date, schedId) {
       },
     }, isDone() ? '✓ Warm-up done' : 'Mark warm-up done');
     const label = KIND_LABEL[b.kind];
+    const detail = kindDetail(b);
     return h('div', { class: 'card phase-warmup' },
-      h('div', { class: 'spread' }, h('h3', {}, 'Warm-up', label ? ` · ${label}` : ''),
-        label && h('button', { class: 'small', onclick: () => blockTimer(b) }, '⏱ Timer')),
+      h('div', { class: 'spread' }, h('h3', {}, 'Warm-up', label ? ` · ${label}` : '', detail ? ` · ${detail}` : '', ' ', kindInfo(b)),
+        hasBlockTimer(b) && h('button', { class: 'small', onclick: () => blockTimer(b) }, '⏱ Timer')),
       b.notes && h('p', { class: 'muted small' }, b.notes),
       h('ul', { class: 'warmup-list' }, b.items.map((it) => {
         const info = exerciseInfo(it.exerciseId);
-        return h('li', {}, h('strong', {}, it.exerciseName), ' ', h('span', { class: 'muted small' }, prescription(it)),
+        return h('li', {}, h('strong', {}, lineName(b, it)), ' ', h('span', { class: 'muted small' }, prescription(it)),
           it.notes && h('div', { class: 'small' }, it.notes),
           info && (info.cues?.length || info.demoUrl || info.demoVideoUrl) && h('button', { class: 'small ghost', onclick: () => showExercise(info) }, 'How to'));
       })),
@@ -469,21 +492,21 @@ export async function renderWorkout(date, schedId) {
   function blockCard(b) {
     if (phaseOf(b) === 'warmup') return warmupCard(b);
     const head = [];
-    const label = KIND_LABEL[b.kind];
-    if (label) {
-      const detail = b.kind === 'amrap' || b.kind === 'emom'
-        ? `${Math.round((b.durationSec || 0) / 60)} min`
-        : [b.rounds && `${b.rounds} rounds`, b.workSec && `${b.workSec}s on`, b.restSec && `${b.restSec}s off`].filter(Boolean).join(' · ');
-      head.push(h('div', { class: 'spread' },
-        h('h3', {}, `${label} ${detail ? '· ' + detail : ''}`),
-        h('button', { class: 'small primary', onclick: () => blockTimer(b) }, '⏱ Timer')));
-    }
     const post = phaseOf(b) === 'post';
-    return h('div', { class: `card ${post ? 'phase-post' : ''}` }, post && h('h3', {}, 'Post-workout cardio'), head, b.notes && h('p', { class: 'muted small' }, b.notes),
+    // Post-workout cardio is steady by default; its heading says enough.
+    const label = post && b.kind === 'steady' ? '' : KIND_LABEL[b.kind];
+    if (label) {
+      const detail = kindDetail(b);
+      head.push(h('div', { class: 'spread' },
+        h('h3', {}, `${label} ${detail ? '· ' + detail : ''}`, ' ', kindInfo(b)),
+        b.kind === 'fortime' ? forTimeButton(b) : hasBlockTimer(b) && h('button', { class: 'small primary', onclick: () => blockTimer(b) }, '⏱ Timer')));
+      if (b.kind === 'fortime') head.push(forTimeResult(b));
+    }
+    return h('div', { class: `card ${post ? 'phase-post' : ''}` }, post && h('h3', {}, 'Post-workout cardio', !label && [' ', kindInfo(b)]), head, b.notes && h('p', { class: 'muted small' }, b.notes),
       b.items.map((it) => {
         const info = exerciseInfo(it.exerciseId);
         return h('div', { class: 'exercise' },
-          h('div', { class: 'spread' }, h('strong', {}, it.exerciseName),
+          h('div', { class: 'spread' }, h('strong', {}, lineName(b, it)),
             h('div', { class: 'row', style: 'flex-wrap:nowrap' },
               it.cardio?.durationSec && h('button', { class: 'small', onclick: () => restTimer(it.cardio.durationSec, it.exerciseName, 'work') }, '⏱ Timer'),
               info && (info.cues?.length || info.demoUrl || info.demoVideoUrl) &&
@@ -515,6 +538,33 @@ export async function renderWorkout(date, schedId) {
       onclick: async () => { if (await commentOn(me.userId, bySched[schedId].id)) toast('Sent to your coach'); },
     }, '💬 Ask your coach about this workout'),
   );
+
+  /** A "for time" block's stopwatch; stopping it records the time. */
+  function forTimeButton(b) {
+    return h('button', {
+      class: 'small primary',
+      onclick: () => stopwatch(`For time${b.durationSec ? ` · ${fmtDuration(b.durationSec)} cap` : ''}`, b.durationSec, (sec) => {
+        (log.blockTimes ||= {})[b.id] = sec;
+        saveDraft();
+        const el = document.getElementById(`bt-${b.id}`);
+        if (el) el.value = fmtClock(sec);
+      }),
+    }, '⏱ Start');
+  }
+
+  /** The time a "for time" block took, as m:ss; filled by the stopwatch or typed. */
+  function forTimeResult(b) {
+    const t = log.blockTimes?.[b.id];
+    const input = h('input', {
+      id: `bt-${b.id}`, inputmode: 'numeric', placeholder: 'm:ss', value: t ? fmtClock(t) : '', style: 'width:90px', 'aria-label': 'Your time',
+      onchange: (e) => {
+        const sec = parseClock(e.target.value);
+        if (sec) (log.blockTimes ||= {})[b.id] = sec; else delete log.blockTimes?.[b.id];
+        saveDraft();
+      },
+    });
+    return h('div', { class: 'row small' }, h('span', {}, 'Your time'), input);
+  }
 
   /** The client's note on one exercise, for their coach; kept with the draft. */
   function exerciseNote(it) {
@@ -599,4 +649,13 @@ function showExercise(info) {
     h('p', { class: 'muted small' }, [...(info.muscleGroups || []), ...(info.equipment || [])].join(' · ')),
     h('button', { class: 'block', onclick: () => sh.close() }, 'Close'),
   );
+}
+
+const fmtClock = (sec) => `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
+/** "12:34" or "754" (seconds) to seconds; null when it isn't a time. */
+function parseClock(v) {
+  const t = String(v || '').trim();
+  const m = t.match(/^(\d+):([0-5]\d)$/);
+  if (m) return Number(m[1]) * 60 + Number(m[2]) || null;
+  return /^\d+$/.test(t) && Number(t) > 0 ? Number(t) : null;
 }
