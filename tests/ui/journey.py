@@ -690,6 +690,11 @@ with sync_playwright() as p:
     coach.get_by_role("button", name="Overlay").click()
     coach.wait_for_function(f"document.querySelector('canvas.review-canvas').width === {narrow}")
     compare.select_option("")
+    # the coach's camera in a corner of the reply (VR-6); the fake camera stands in
+    coach.get_by_label("Show my camera").check()
+    expect(coach.get_by_label("Camera corner")).to_be_enabled()
+    coach.wait_for_function("[...document.querySelectorAll('video.review-src')].some((v) => v.srcObject && v.videoWidth > 0)", timeout=15000)
+    coach.get_by_label("Camera corner").select_option("tl")
     coach.get_by_role("button", name="● Record reply").click()
     coach.get_by_role("button", name="Play", exact=True).click()
     time.sleep(2.5)

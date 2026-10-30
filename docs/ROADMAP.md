@@ -24,7 +24,7 @@ Status legend: ✅ done in MVP · 🟡 partial · ⬜ not started
 | Builder | WB-1 ✅ · WB-2 ✅ · WB-3 ✅ · WB-4 ✅ | WB-5 ✅ (%1RM resolved from client maxes) · WB-6 ✅ (rules → coach-approved suggestions) · WB-7 ⬜ |
 | Logging | LG-1 ✅ · LG-2 ✅ · LG-3 ✅ · LG-4 ✅ · LG-6 ✅ | LG-5 ✅ (rep-max and e1RM records, celebrated) · LG-7 ✅ (alert inbox: pain at once, missed runs hourly, pushed) · LG-8 ⬜ |
 | Video submission | VS-1 ✅ · VS-2 ✅ · VS-3 ✅ · VS-4 ✅ (real-device checks pending, see `tasks/todo.md`) | VS-5 ✅ (filming tips per exercise) |
-| Video reply | VR-1 ✅ · VR-2 ✅ · VR-3 ✅ (recorded in the browser, `tasks/reply`) | VR-4 ✅ (pen, line, arrow, circle, angle, timer) · VR-5 ✅ (side by side or overlay, synced) · VR-6 ⬜ · VR-7 ⬜ |
+| Video reply | VR-1 ✅ · VR-2 ✅ · VR-3 ✅ (recorded in the browser, `tasks/reply`) | VR-4 ✅ (pen, line, arrow, circle, angle, timer) · VR-5 ✅ (side by side or overlay, synced) · VR-6 ✅ (the coach's webcam in a chosen corner of the reply, drawn into the recording canvas) · VR-7 ⬜ |
 | Feedback | FB-1 ✅ · FB-2 ✅ | FB-3 ✅ (weekly check-ins, editable questions, 4-week view) · FB-4 ✅ (snippets with a / shortcut) |
 | AI | AI-6/AI-7 (whenever AI ships) | AI-1…AI-5 ⬜ |
 | Body metrics | BM-1 ✅ · BM-2 ✅ · BM-3 ✅ · BM-4 ✅ · BM-7 ✅ · BM-8 ✅ | BM-5 ✅ · BM-6 ✅ (US Navy tape estimate; DEXA/BIA/scale readings) |
@@ -160,7 +160,7 @@ Use the server-side render approach from the BRD: the browser records an **edit 
 | **MS-6 Group chat** | Threads become first-class: `THREAD#{id}` with members; WebSocket fan-out to members. |
 | **BZ-5 Branded app** | `COACH#/BRAND` (logo, colors) → CSS variables at boot. A custom domain per coach via CloudFront + ACM; a per-coach Capacitor build for true white-label. |
 | **Assistant coach** | Role `assistant` with `ASSIGNMENT#{assistant}#{client}` items; `client_scope` checks it with a permissions bitmask (view, comment, program). |
-| **VR-6 PiP coach camera** | Record the webcam with the voice-over (`getUserMedia` video) and composite it in the render (`overlay` bottom-right). |
+| **VR-6 PiP coach camera** ✅ | Built in the browser like the rest of the reply (`web/js/views/review.js`): "Show my camera" opens the webcam (`getUserMedia` video), and each frame draws it mirrored, with a white rounded border, into the chosen corner of the clip on the same canvas the recorder captures, so it's in the preview and the reply alike. The on/off choice and corner are remembered on the device. |
 | **MS-5 Availability** | Display `COACH#/AVAIL` in the client thread header (built in BZ-2). |
 
 ## Open questions from the BRD (answers needed before the phase they affect)

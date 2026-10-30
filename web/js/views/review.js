@@ -3,7 +3,8 @@
 // frame steps, scrubbing), marks the segments worth talking about, and
 // records a reply: the clip exactly as they play, pause, slow and step
 // through it, drawn on a canvas, with their voice over it and the clip's own
-// sound lowered underneath, and whatever they draw over it (draw.js, VR-4).
+// sound lowered underneath, and whatever they draw over it (draw.js, VR-4),
+// and their own webcam in a corner if they turn it on (VR-6).
 // Or they write a reply instead. Sending marks the
 // video reviewed (routes/replies.rs); recordings upload through uploads.js,
 // so they survive a lost connection. Decisions: tasks/reply/plan.md.
@@ -27,6 +28,11 @@ export const QUEUE_OPENED = 'pt.reviewQueueOpenedAt';
 
 const fmt = (s) => `${Math.floor(s / 60)}:${(s % 60).toFixed(1).padStart(4, '0')}`;
 const segKey = (vid) => `pt.segments.${vid}`;
+const CAM_PREF = 'pt.replyCam'; // the coach's camera choice, kept for the next review
+const CAM_SHARE = 0.28; // the camera's width as a share of the clip's
+const CORNERS = [['br', 'Bottom right'], ['bl', 'Bottom left'], ['tr', 'Top right'], ['tl', 'Top left']];
+const camPref = () => { try { return JSON.parse(localStorage.getItem(CAM_PREF)) || {}; } catch { return {}; } };
+const saveCamPref = (p) => { try { localStorage.setItem(CAM_PREF, JSON.stringify(p)); } catch { /* not kept */ } };
 const loadSegs = (vid) => { try { return JSON.parse(localStorage.getItem(segKey(vid))) || []; } catch { return []; } };
 const saveSegs = (vid, s) => { try { localStorage.setItem(segKey(vid), JSON.stringify(s)); } catch { /* not kept */ } };
 
@@ -219,6 +225,60 @@ export async function renderReview(cid, vid) {
     }
   }
 
+  // ---- the coach's camera (VR-6): drawn into a corner of the clip, so it's
+  // in the preview and the recording alike; mirrored like a selfie
+  const cam = h('video', { muted: true, playsinline: true, autoplay: true, class: 'review-src' });
+  cam.muted = true;
+  let camStream = null;
+  const pref = camPref();
+  let corner = CORNERS.some(([k]) => k === pref.corner) ? pref.corner : 'br';
+  const camToggle = h('input', { type: 'checkbox', checked: false, 'aria-label': 'Show my camera' });
+  const cornerSel = h('select', { 'aria-label': 'Camera corner', disabled: true },
+    CORNERS.map(([k, label]) => h('option', { value: k, selected: k === corner }, label)));
+  cornerSel.addEventListener('change', () => { corner = cornerSel.value; saveCamPref({ on: !!camStream, corner }); });
+  async function setCam(on) {
+    if (on && !camStream) {
+      try {
+        camStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } } });
+      } catch (e) {
+        camToggle.checked = false;
+        return toast(e.name === 'NotAllowedError'
+          ? 'The camera is blocked. Allow it for this site in your browser settings.'
+          : `Couldn’t start the camera: ${e.message}`, 'error');
+      }
+      cam.srcObject = camStream;
+      cam.play().catch(() => {});
+    } else if (!on && camStream) {
+      camStream.getTracks().forEach((t) => t.stop());
+      camStream = null;
+      cam.srcObject = null;
+    }
+    camToggle.checked = !!camStream;
+    cornerSel.disabled = !camStream;
+    saveCamPref({ on: !!camStream, corner });
+  }
+  camToggle.addEventListener('change', () => setCam(camToggle.checked));
+  function drawCam() {
+    if (!camStream || cam.readyState < 2 || !cam.videoWidth) return;
+    const w = Math.round(mainW * CAM_SHARE);
+    const hgt = Math.round((w * cam.videoHeight) / cam.videoWidth);
+    const pad = Math.round(mainW * 0.03);
+    const x = corner.endsWith('r') ? mainW - w - pad : pad;
+    const y = corner.startsWith('b') ? mainH - hgt - pad : pad;
+    const r = Math.round(w * 0.08);
+    ctx2d.save();
+    ctx2d.beginPath();
+    if (ctx2d.roundRect) ctx2d.roundRect(x, y, w, hgt, r); else ctx2d.rect(x, y, w, hgt);
+    ctx2d.lineWidth = Math.max(2, Math.round(w * 0.015));
+    ctx2d.strokeStyle = '#fff';
+    ctx2d.stroke();
+    ctx2d.clip();
+    ctx2d.translate(x + w, y);
+    ctx2d.scale(-1, 1);
+    ctx2d.drawImage(cam, 0, 0, w, hgt);
+    ctx2d.restore();
+  }
+
   // ---- draw every animation frame, playing or not, so a recording runs at a steady rate
   function frame() {
     if (!canvas.isConnected) return cleanup();
@@ -226,6 +286,7 @@ export async function renderReview(cid, vid) {
       syncRef();
       drawFrame();
       marks.paint(ctx2d);
+      drawCam();
     }
     time.textContent = `${fmt(Math.max(0, video.currentTime - lo))} / ${fmt(Math.max(0, (Number.isFinite(hi) ? hi : video.duration || 0) - lo))}`;
     if (document.activeElement !== scrub) scrub.value = video.currentTime;
@@ -342,6 +403,7 @@ export async function renderReview(cid, vid) {
     video.pause();
     ref.pause();
     mic?.getTracks().forEach((t) => t.stop());
+    camStream?.getTracks().forEach((t) => t.stop());
     ac?.close().catch(() => {});
   }
 
@@ -350,7 +412,8 @@ export async function renderReview(cid, vid) {
     h('h1', {}, clientName),
     h('p', { class: 'muted' }, `${v.exerciseName} · set ${v.setIndex + 1} · ${fmtDateTime(v.createdAt)}`),
     video,
-    ref, // hidden, like the clip: both are drawn into the canvas
+    ref, // hidden, like the clip and the camera: all are drawn into the canvas
+    cam,
     canvas,
     marks.toolbar,
     h('div', { class: 'review-controls' },
@@ -374,7 +437,11 @@ export async function renderReview(cid, vid) {
     h('div', { class: 'card' },
       h('h3', {}, 'Video reply'),
       canRecord
-        ? [h('p', { class: 'small muted' }, 'Records the clip as you play, pause, slow down and step through it, with your voice over it. Up to 5 minutes.'), recBtn, recTime]
+        ? [h('p', { class: 'small muted' }, 'Records the clip as you play, pause, slow down and step through it, with your voice over it. Up to 5 minutes.'),
+          h('div', { class: 'row', style: 'margin-bottom:8px' },
+            h('label', { class: 'check grow' }, camToggle, 'Show my camera in a corner'),
+            h('div', { style: 'width:150px' }, cornerSel)),
+          recBtn, recTime]
         : h('p', { class: 'banner' }, firefox
           ? 'Firefox can’t make video replies iPhones will play. Use Chrome, Edge or Safari to record, or write a reply below.'
           : 'This browser can’t record video replies. Use Chrome, Edge or Safari, or write a reply below.'),
@@ -387,4 +454,5 @@ export async function renderReview(cid, vid) {
         h('button', { class: 'grow', onclick: (e) => busy(e.currentTarget, sendWritten) }, 'Send written reply'))),
   );
   requestAnimationFrame(frame);
+  if (canRecord && pref.on) setCam(true); // on last time: back on (the browser remembers the permission)
 }
