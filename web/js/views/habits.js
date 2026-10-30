@@ -13,10 +13,12 @@ const met = (hb, v) => v >= hb.target - 1e-9;
 
 /** Server data with this user's still-queued day values applied. */
 async function load(cid) {
+  // The outbox first, so a value synced while the GET runs is in one or the other.
+  const queued = await myOutbox();
   const data = await get(`/clients/${cid}/habits?days=14`, { cache: true });
   const value = {};
   for (const l of data.logs) value[`${l.habitId}|${l.date}`] = l.value;
-  for (const i of await myOutbox()) {
+  for (const i of queued) {
     const m = i.method === 'PUT' && i.path.match(/^\/clients\/[^/]+\/habits\/([^/]+)\/days\/([^/]+)$/);
     if (m) value[`${m[1]}|${m[2]}`] = i.body.value;
   }

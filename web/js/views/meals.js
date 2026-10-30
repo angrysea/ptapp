@@ -41,9 +41,12 @@ const dayKcal = (t) => (typeof t === 'number' ? t : t?.kcal);
 
 /** Server meals with this user's queued writes applied, so Today works offline. */
 async function load(cid) {
+  // The outbox first: a write it no longer holds has reached the server
+  // before the GET below, so a meal saved a moment ago is never in neither.
+  const queued = await myOutbox();
   const data = await get(`/clients/${cid}/meals?days=14`, { cache: true });
   const byId = new Map((data.meals ?? []).map((m) => [m.id, m]));
-  for (const i of await myOutbox()) {
+  for (const i of queued) {
     const mt = i.path.match(/^\/clients\/([^/]+)\/meals\/([^/]+)$/);
     if (!mt || mt[1] !== cid) continue;
     if (i.method === 'PUT') byId.set(mt[2], { ...byId.get(mt[2]) ?? {}, ...i.body, id: mt[2] });
