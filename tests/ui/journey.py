@@ -222,8 +222,12 @@ with sync_playwright() as p:
     expect(walk.get_by_label("Minutes")).to_have_value("20")  # cardio exercises start as 20 min
     walk.get_by_label("Zone", exact=True).select_option("2")
     shot(coach, "02-program-builder")
+    # saving a new program reopens it at its own address; mark this builder so
+    # the next steps wait for that fresh one instead of editing the old one
+    coach.evaluate("document.querySelector('.cal').dataset.stale = '1'")
     coach.locator("button.primary", has_text="Save").first.click()
     expect(coach.get_by_text("Program saved")).to_be_visible()
+    expect(coach.locator(".cal:not([data-stale])")).to_have_count(1)
     # copy week 1 to week 2
     coach.locator(".cal .wk button").first.click()
     coach.locator(".sheet").get_by_role("button", name="Copy").click()
