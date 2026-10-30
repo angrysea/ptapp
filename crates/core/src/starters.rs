@@ -10,6 +10,9 @@
 //!   phases from 10-12 reps down to 6-8, with lighter weeks 4 and 8.
 //! * Bodyweight only, 12 weeks: the same shape, progressing by harder
 //!   variations and more volume instead of load.
+//! * Bodybuilding, 12 weeks, four days a week, as a push/pull split or an
+//!   upper/lower split: hypertrophy work that stresses time under tension
+//!   with a tempo on every lift (`tut`).
 
 use crate::cardio::{CardioTarget, Phase};
 use crate::library::builtin_exercises;
@@ -60,8 +63,9 @@ fn program(name: &str, description: &str, weeks: u32, workouts: Vec<ProgramWorko
 /// Every starter program, in the order the app lists them. Each id is a
 /// fixed key (`starter-…`) that the API copies by; a coach's copy gets its own.
 pub fn starter_programs() -> Vec<Program> {
-    let mut all = vec![benchmark(), kettlebell_dumbbell(), bodyweight()];
-    for (p, key) in all.iter_mut().zip(["starter-benchmark", "starter-kettlebell-dumbbell", "starter-bodyweight"]) {
+    let mut all = vec![benchmark(), kettlebell_dumbbell(), bodyweight(), push_pull(), upper_lower()];
+    let keys = ["starter-benchmark", "starter-kettlebell-dumbbell", "starter-bodyweight", "starter-push-pull", "starter-upper-lower"];
+    for (p, key) in all.iter_mut().zip(keys) {
         p.id = key.into();
     }
     all
@@ -270,6 +274,147 @@ fn bodyweight() -> Program {
     )
 }
 
+// ---------------------------------------------------------------- bodybuilding (time under tension)
+
+/// A week of the bodybuilding programs. Tempo is lowering-pause-lifting-top in
+/// seconds, so "4-1-1-0" is four seconds down, a one-second pause, one up.
+/// Compounds slow the lowering by phase and phase 3 adds a pause in the
+/// stretch; isolation work holds a squeeze at the top instead.
+struct Tut {
+    sets: u32,
+    reps: &'static str,
+    iso_reps: &'static str,
+    rpe: f64,
+    tempo: &'static str,
+    iso_tempo: &'static str,
+}
+
+fn tut(week: u32) -> Tut {
+    match week {
+        4 | 8 => Tut { sets: 2, reps: "10", iso_reps: "12", rpe: 6.0, tempo: "3-1-1-0", iso_tempo: "2-0-1-1" },
+        1..=3 => Tut { sets: 3, reps: "10-12", iso_reps: "12-15", rpe: if week == 3 { 8.0 } else { 7.0 }, tempo: "3-1-1-0", iso_tempo: "2-0-1-1" },
+        5..=7 => Tut { sets: 4, reps: "8-10", iso_reps: "10-12", rpe: if week == 7 { 8.5 } else { 8.0 }, tempo: "4-1-1-0", iso_tempo: "3-0-1-2" },
+        12 => Tut { sets: 3, reps: "10-12", iso_reps: "12-15", rpe: 9.0, tempo: "4-1-1-0", iso_tempo: "3-0-1-2" },
+        _ => Tut { sets: 4, reps: "8-10", iso_reps: "10-12", rpe: if week == 11 { 9.0 } else { 8.5 }, tempo: "3-2-1-0", iso_tempo: "3-0-1-2" },
+    }
+}
+
+fn tut_note(week: u32) -> &'static str {
+    match week {
+        1 => "Tempo on every lift: 3-1-1-0 means 3 seconds lowering, a 1-second pause, 1 second up, straight into the next rep. Count it. Pick weights you can control at that speed; they will be lighter than usual.",
+        4 | 8 => "Lighter week: two sets, same tempo, several reps in reserve.",
+        5 => "Phase 2: lowering slows to 4 seconds. Drop the weight if you need to; the time under tension is the point.",
+        9 => "Phase 3: a 2-second pause in the stretch (bottom of the squat, chest just above the bar, arms long on rows).",
+        12 => "Last week: back to higher reps with a 4-second lowering, taken close to failure.",
+        _ => "",
+    }
+}
+
+/// A compound lift at the week's tempo; `notes` adds to the cue.
+fn compound(t: &Tut, id: &str, notes: &str) -> Item {
+    Item { tempo: Some(t.tempo.into()), ..line(id, t.sets, t.reps, Some(t.rpe), Some(120), notes) }
+}
+
+/// An isolation lift: more reps, a squeeze at the top.
+fn isolation(t: &Tut, id: &str, notes: &str) -> Item {
+    Item { tempo: Some(t.iso_tempo.into()), ..line(id, t.sets, t.iso_reps, Some(t.rpe), Some(60), notes) }
+}
+
+/// Two isolation lifts done back to back.
+fn superset(t: &Tut, a: Item, b: Item) -> Block {
+    let mut s = block(BlockKind::Superset, Phase::Main, vec![a, b]);
+    (s.rounds, s.rest_sec) = (Some(t.sets), Some(75));
+    s
+}
+
+fn bodybuilding_defaults() -> Vec<Block> {
+    let warmup = block(BlockKind::Flow, Phase::Warmup, vec![
+        timed("rowing-erg", 5, Some(2)),
+        line("band-pull-apart", 1, "15", None, None, ""),
+        line("worlds-greatest-stretch", 1, "5 per side", None, None, ""),
+        line("leg-swing", 1, "10 per side", None, None, ""),
+    ]);
+    let cardio = block(BlockKind::Steady, Phase::Post, vec![timed("incline-walk", 15, Some(2))]);
+    vec![warmup, cardio]
+}
+
+/// Four days a week on days 1, 2, 4 and 5 (Mon, Tue, Thu, Fri).
+fn four_days(name: &str, description: &str, day: impl Fn(&Tut, u32, u32) -> Workout) -> Program {
+    let mut workouts = vec![];
+    for week in 1..=12 {
+        let t = tut(week);
+        for (slot, d) in [1, 2, 4, 5].into_iter().enumerate() {
+            let mut w = day(&t, week, slot as u32);
+            w.notes = tut_note(week).into();
+            workouts.push(ProgramWorkout { week, day: d, workout: w });
+        }
+    }
+    program(name, description, 12, workouts, bodybuilding_defaults())
+}
+
+fn push_pull() -> Program {
+    four_days(
+        "Bodybuilding push/pull (12 weeks, 4 days)",
+        "Hypertrophy with time under tension. Push days (Mon, Thu) train chest, shoulders, triceps and quads; pull days (Tue, Fri) train back, rear delts, biceps, hamstrings and glutes. Every lift has a tempo: the lowering slows from 3 to 4 seconds and the last phase adds a pause in the stretch. Weeks 4 and 8 are lighter.",
+        |t, week, slot| match slot {
+            0 => workout(&format!("Week {week} · Push A"), "", vec![
+                main(vec![compound(t, "back-squat", ""), compound(t, "bench-press", "")]),
+                main(vec![compound(t, "seated-db-shoulder-press", ""), isolation(t, "leg-extension", "")]),
+                superset(t, isolation(t, "lateral-raise", ""), isolation(t, "triceps-pushdown", "")),
+                main(vec![isolation(t, "calf-raise", "Full stretch at the bottom")]),
+            ]),
+            1 => workout(&format!("Week {week} · Pull A"), "", vec![
+                main(vec![compound(t, "romanian-deadlift", ""), compound(t, "lat-pulldown", "")]),
+                main(vec![compound(t, "barbell-row", ""), isolation(t, "leg-curl", "")]),
+                superset(t, isolation(t, "face-pull", ""), isolation(t, "bicep-curl", "")),
+            ]),
+            2 => workout(&format!("Week {week} · Push B"), "", vec![
+                main(vec![compound(t, "leg-press", ""), compound(t, "incline-db-press", "")]),
+                main(vec![compound(t, "bulgarian-split-squat", "Reps per leg"), compound(t, "dip", "Lean forward for chest")]),
+                superset(t, isolation(t, "db-fly", ""), isolation(t, "overhead-triceps-extension", "")),
+                main(vec![isolation(t, "lateral-raise", ""), isolation(t, "calf-raise", "")]),
+            ]),
+            _ => workout(&format!("Week {week} · Pull B"), "", vec![
+                main(vec![compound(t, "hip-thrust", ""), compound(t, "chest-supported-row", "")]),
+                main(vec![compound(t, "pull-up", "Use a band or the lat pulldown if needed"), compound(t, "one-arm-db-row", "Reps per arm")]),
+                superset(t, isolation(t, "leg-curl", ""), isolation(t, "rear-delt-fly", "")),
+                main(vec![isolation(t, "hammer-curl", "")]),
+            ]),
+        },
+    )
+}
+
+fn upper_lower() -> Program {
+    four_days(
+        "Bodybuilding upper/lower (12 weeks, 4 days)",
+        "Hypertrophy with time under tension. Upper days (Mon, Thu) and lower days (Tue, Fri), each muscle twice a week. Every lift has a tempo: the lowering slows from 3 to 4 seconds and the last phase adds a pause in the stretch. Weeks 4 and 8 are lighter.",
+        |t, week, slot| match slot {
+            0 => workout(&format!("Week {week} · Upper A"), "", vec![
+                main(vec![compound(t, "bench-press", ""), compound(t, "barbell-row", "")]),
+                main(vec![compound(t, "seated-db-shoulder-press", ""), compound(t, "lat-pulldown", "")]),
+                superset(t, isolation(t, "bicep-curl", ""), isolation(t, "triceps-pushdown", "")),
+                main(vec![isolation(t, "lateral-raise", "")]),
+            ]),
+            1 => workout(&format!("Week {week} · Lower A"), "", vec![
+                main(vec![compound(t, "back-squat", ""), compound(t, "romanian-deadlift", "")]),
+                main(vec![compound(t, "leg-press", ""), isolation(t, "leg-curl", "")]),
+                main(vec![isolation(t, "calf-raise", "Full stretch at the bottom"), line("plank", t.sets.min(3), "45s", None, Some(45), "")]),
+            ]),
+            2 => workout(&format!("Week {week} · Upper B"), "", vec![
+                main(vec![compound(t, "incline-db-press", ""), compound(t, "chest-supported-row", "")]),
+                main(vec![compound(t, "dip", "Lean forward for chest"), compound(t, "one-arm-db-row", "Reps per arm")]),
+                superset(t, isolation(t, "db-fly", ""), isolation(t, "rear-delt-fly", "")),
+                superset(t, isolation(t, "hammer-curl", ""), isolation(t, "overhead-triceps-extension", "")),
+            ]),
+            _ => workout(&format!("Week {week} · Lower B"), "", vec![
+                main(vec![compound(t, "front-squat", ""), compound(t, "hip-thrust", "")]),
+                main(vec![compound(t, "bulgarian-split-squat", "Reps per leg"), isolation(t, "leg-extension", "")]),
+                main(vec![isolation(t, "leg-curl", ""), isolation(t, "calf-raise", "")]),
+            ]),
+        },
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -277,7 +422,7 @@ mod tests {
     #[test]
     fn starters_are_valid_programs() {
         let all = starter_programs();
-        assert_eq!(all.len(), 3);
+        assert_eq!(all.len(), 5);
         for p in &all {
             p.validate().unwrap_or_else(|e| panic!("{}: {e}", p.name));
             let size = serde_json::to_vec(p).unwrap().len();
@@ -286,11 +431,12 @@ mod tests {
     }
 
     #[test]
-    fn twelve_week_programs_fill_three_days_every_week() {
+    fn twelve_week_programs_fill_their_days_every_week() {
         for p in starter_programs().into_iter().filter(|p| p.weeks == 12) {
+            let want = if p.name.starts_with("Bodybuilding") { vec![1, 2, 4, 5] } else { vec![1, 3, 5] };
             for week in 1..=12 {
                 let days: Vec<u32> = p.workouts.iter().filter(|w| w.week == week).map(|w| w.day).collect();
-                assert_eq!(days, vec![1, 3, 5], "{} week {week}", p.name);
+                assert_eq!(days, want, "{} week {week}", p.name);
             }
             assert!(p.default_blocks.iter().any(|b| b.kind == BlockKind::Flow && b.phase == Phase::Warmup));
         }
@@ -315,5 +461,20 @@ mod tests {
         assert_eq!(dose(10).reps, "6-8");
         assert_eq!((dose(4).sets, dose(8).sets), (2, 2));
         assert_eq!(dose(12).reps, "5");
+    }
+
+    #[test]
+    fn bodybuilding_lifts_all_have_a_tempo_that_slows_by_phase() {
+        for p in [push_pull(), upper_lower()] {
+            for pw in &p.workouts {
+                for it in pw.workout.blocks.iter().flat_map(|b| &b.items).filter(|it| it.exercise_id != "plank") {
+                    assert!(it.tempo.is_some(), "{} week {}: {} has no tempo", p.name, pw.week, it.exercise_name);
+                }
+            }
+        }
+        let lowering = |w: u32| tut(w).tempo.split('-').next().unwrap().parse::<u32>().unwrap();
+        assert!(lowering(1) < lowering(5), "phase 2 lowers slower");
+        assert_eq!(tut(9).tempo, "3-2-1-0", "phase 3 pauses in the stretch");
+        assert_eq!((tut(4).sets, tut(8).sets), (2, 2));
     }
 }
