@@ -73,19 +73,41 @@ pub struct Plan {
     /// Days the credits last from the day they're granted; `None`: no expiry.
     #[serde(default)]
     pub valid_days: Option<u32>,
+    /// What the plan costs, in the currency's smallest unit (cents); 0: free.
+    #[serde(default)]
+    pub price_cents: u32,
+    /// ISO 4217 code, lowercase as Stripe takes it ("usd").
+    #[serde(default = "default_currency")]
+    pub currency: String,
     #[serde(default)]
     pub updated_at: Option<DateTime<Utc>>,
 }
+
+fn default_currency() -> String {
+    "usd".into()
+}
+
+/// Currencies a plan can be priced in.
+pub const CURRENCIES: [&str; 5] = ["usd", "cad", "eur", "gbp", "aud"];
+/// Highest price: $100,000.
+pub const MAX_PRICE_CENTS: u32 = 10_000_000;
 
 impl Plan {
     pub fn validate(&mut self) -> Result<(), String> {
         self.name = self.name.trim().to_string();
         self.description = self.description.trim().to_string();
+        self.currency = self.currency.trim().to_lowercase();
         if self.name.is_empty() || self.name.chars().count() > 80 {
             return Err("a plan's name must be 1-80 characters".into());
         }
-        if self.description.chars().count() > 500 {
-            return Err("a plan's description must be at most 500 characters".into());
+        if self.description.is_empty() || self.description.chars().count() > 500 {
+            return Err("a plan's description must be 1-500 characters".into());
+        }
+        if self.price_cents > MAX_PRICE_CENTS {
+            return Err("a plan's price must be at most 100,000".into());
+        }
+        if !CURRENCIES.contains(&self.currency.as_str()) {
+            return Err(format!("a plan's currency must be one of {}", CURRENCIES.join(", ").to_uppercase()));
         }
         if self.lines.is_empty() {
             return Err("a plan needs at least one service".into());
@@ -259,9 +281,15 @@ mod tests {
     #[test]
     fn plans_validate_their_lines() {
         let line = |service, quantity| PlanLine { service, quantity };
-        let mut ok = Plan { id: String::new(), name: " Monthly ".into(), description: String::new(), lines: vec![line(Service::Message, None), line(Service::VideoReview, Some(4))], valid_days: Some(30), updated_at: None };
+        let mut ok = Plan { id: String::new(), name: " Monthly ".into(), description: "Coaching for a month".into(), lines: vec![line(Service::Message, None), line(Service::VideoReview, Some(4))], valid_days: Some(30), price_cents: 9900, currency: " USD ".into(), updated_at: None };
         assert!(ok.validate().is_ok());
-        assert_eq!(ok.name, "Monthly");
+        assert_eq!((ok.name.as_str(), ok.currency.as_str()), ("Monthly", "usd"));
+        let mut no_desc = Plan { description: " ".into(), ..ok.clone() };
+        assert!(no_desc.validate().is_err(), "a description is required");
+        let mut yen = Plan { currency: "jpy".into(), ..ok.clone() };
+        assert!(yen.validate().is_err());
+        let mut free = Plan { price_cents: 0, ..ok.clone() };
+        assert!(free.validate().is_ok(), "a free plan is allowed");
         let mut twice = Plan { lines: vec![line(Service::Message, Some(1)), line(Service::Message, Some(2))], ..ok.clone() };
         assert!(twice.validate().is_err());
         let mut zero = Plan { lines: vec![line(Service::Session, Some(0))], ..ok.clone() };
@@ -274,7 +302,7 @@ mod tests {
 
     #[test]
     fn a_plan_becomes_one_grant_per_line_with_its_expiry() {
-        let plan = Plan { id: "p".into(), name: "Monthly".into(), description: String::new(), lines: vec![PlanLine { service: Service::Message, quantity: None }, PlanLine { service: Service::Session, quantity: Some(4) }], valid_days: Some(30), updated_at: None };
+        let plan = Plan { id: "p".into(), name: "Monthly".into(), description: "x".into(), lines: vec![PlanLine { service: Service::Message, quantity: None }, PlanLine { service: Service::Session, quantity: Some(4) }], valid_days: Some(30), price_cents: 0, currency: "usd".into(), updated_at: None };
         let mut n = 0;
         let gs = grants_for(&plan, d(1), Utc::now(), None, || { n += 1; format!("g{n}") });
         assert_eq!(gs.len(), 2);

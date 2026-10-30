@@ -14,6 +14,7 @@ use ptcore::sessions::{ics, open_slots, Availability, Event, Session, SessionSta
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+use aws_sdk_dynamodb::types::AttributeValue;
 use ptcore::credits::Service;
 use crate::auth::{client_scope, ClientScope, Ctx};
 use crate::error::{bad_request, ApiError, ApiResult};
@@ -208,10 +209,19 @@ pub async fn cancel(State(st): State<AppState>, ctx: Ctx, Path((cid, sid)): Path
         return Ok(Json(s));
     }
     s.status = SessionStatus::Cancelled;
-    save(&st, &s).await?;
-    if let Some(g) = &s.credit_grant {
-        super::credits::refund(&st, &scope, g, Service::Session, "Session cancelled").await?;
+    // The credit comes back once, and only for a session cancelled before it
+    // starts: the cancel that clears `creditGrant` from the stored session
+    // is the one that refunds, so two cancels at once can't both.
+    if let Some(g) = s.credit_grant.take() {
+        let cleared = st.store.put_if_with(&scope.pk(), &sk(&s), &s, "creditGrant = :g", &[(":g", AttributeValue::S(g.clone()))]).await?;
+        if !cleared {
+            return Ok(Json(s));
+        }
+        if s.start > Utc::now() {
+            super::credits::refund(&st, &scope, &g, Service::Session, "Session cancelled").await?;
+        }
     }
+    save(&st, &s).await?;
     st.store.delete(&format!("COACH#{}", s.coach_id), &format!("SLOTLOCK#{}", s.start.to_rfc3339())).await?;
     let coach = profile(&st, &s.coach_id).await?;
     tell_other(&st, &scope, &coach, &s, "Session cancelled").await;

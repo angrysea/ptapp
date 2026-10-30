@@ -70,6 +70,21 @@ pub async fn require(st: &AppState, scope: &ClientScope, service: Service) -> Ap
     }
 }
 
+/// After a request that holds a credit has been recorded (a set video):
+/// refuses if the holds now outnumber the credits. Two uploads started at
+/// once can both pass `require`; this check, made after both are written,
+/// sees both holds, so at most the credits there are get through.
+pub async fn confirm_hold(st: &AppState, scope: &ClientScope, service: Service) -> ApiResult<()> {
+    if !service.enforced() || !settings_for(st, &scope.client.coach_id).await?.enforce {
+        return Ok(());
+    }
+    let b = balances(&grants(st, scope).await?, scope.today(), &held(st, scope).await?);
+    match b.iter().find(|x| x.service == service) {
+        Some(x) if x.remaining.is_none_or(|r| r >= x.held) => Ok(()),
+        _ => Err(out_of(service, scope.by_coach)),
+    }
+}
+
 /// Takes one credit of `service` for something delivered. With no credit
 /// left: refused if `block` and the coach enforces credits, otherwise the
 /// use goes unrecorded against a grant (and is noted in the ledger).

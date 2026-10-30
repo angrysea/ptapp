@@ -274,6 +274,15 @@ pub async fn create(
         None => None,
     };
     st.store.put(&scope.pk(), &video_sk(&video.id), &video).await?;
+    // The upload now holds a review credit; if another upload took the last
+    // one at the same moment, this one is undone.
+    if let Err(e) = super::credits::confirm_hold(&st, &scope, Service::VideoReview).await {
+        st.store.delete(&scope.pk(), &video_sk(&video.id)).await?;
+        if let Some(upload_id) = &video.upload_id {
+            let _ = st.s3.abort_multipart_upload().bucket(&st.bucket).key(&video.key).upload_id(upload_id).send().await;
+        }
+        return Err(e);
+    }
     Ok(Json(json!({ "video": video, "parts": parts, "poster": poster })))
 }
 

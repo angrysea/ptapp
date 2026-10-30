@@ -181,7 +181,13 @@ function expirySheet(client, g, onDone) {
 
 // ---------------------------------------------------------------- coach: plans (Profile)
 
+const CURRENCIES = ['usd', 'cad', 'eur', 'gbp', 'aud'];
+/** "$49.00", "Free". */
+export const fmtPrice = (p) => (!p.priceCents ? 'Free'
+  : new Intl.NumberFormat(undefined, { style: 'currency', currency: (p.currency || 'usd').toUpperCase() }).format(p.priceCents / 100));
+
 const planSummary = (p) => [
+  fmtPrice(p),
   p.lines.map((l) => `${l.quantity == null ? 'Unlimited' : l.quantity} ${label(l.service).toLowerCase()}`).join(', '),
   p.validDays ? `for ${p.validDays} days` : 'no expiry',
 ].join(' · ');
@@ -205,7 +211,7 @@ export function plansCard() {
       h('label', { class: 'check' }, enforce, 'Require credits'),
       h('p', { class: 'muted small' }, 'A plan is a bundle of credits for your services. Grant one from a client’s Overview; each message, photo, video review, session and program uses one credit.'),
       plans.map((p) => h('div', { class: 'spread credit-row' },
-        h('div', {}, h('strong', {}, p.name), h('div', { class: 'muted small' }, planSummary(p))),
+        h('div', {}, h('strong', {}, p.name), h('div', { class: 'small' }, p.description), h('div', { class: 'muted small' }, planSummary(p))),
         h('div', { class: 'row', style: 'flex-wrap:nowrap' },
           h('button', { class: 'small ghost', onclick: () => planSheet(p, draw) }, 'Edit'),
           h('button', {
@@ -225,7 +231,9 @@ export function plansCard() {
 /** Create or edit a plan: per service, included or not, a number or unlimited. */
 function planSheet(plan, onDone) {
   const name = h('input', { value: plan?.name ?? '', maxlength: 80, placeholder: 'e.g. Monthly coaching' });
-  const desc = h('textarea', { maxlength: 500, value: plan?.description ?? '' });
+  const desc = h('textarea', { maxlength: 500, value: plan?.description ?? '', placeholder: 'What the client gets, e.g. a month of programming, weekly video feedback and messaging' });
+  const price = h('input', { type: 'number', inputmode: 'decimal', min: 0, step: '0.01', value: plan ? (plan.priceCents / 100).toFixed(2) : '', placeholder: '0.00' });
+  const currency = select(CURRENCIES.map((c) => [c, c.toUpperCase()]), plan?.currency || 'usd', { 'aria-label': 'Currency' });
   const days = h('input', { type: 'number', inputmode: 'numeric', min: 1, value: plan ? plan.validDays ?? '' : 30, placeholder: 'no expiry' });
   const rows = SERVICES.map(([k, l, help]) => {
     const line = plan?.lines.find((x) => x.service === k);
@@ -246,13 +254,18 @@ function planSheet(plan, onDone) {
   const sh = sheet(
     h('h2', {}, plan ? 'Edit plan' : 'New plan'),
     field('Name', name),
-    field('Description (optional)', desc),
+    field('Description', desc),
+    h('div', { class: 'row' }, h('div', { class: 'grow' }, field('Price', price, 'What the client pays for the plan; 0 for free.')), h('div', { style: 'width:110px' }, field('Currency', currency))),
     rows.map((r) => r.el),
     field('Credits last (days)', days, 'Leave empty for no expiry. You can change the date when granting.'),
     h('button', {
       class: 'primary block',
       onclick: (e) => busy(e.currentTarget, async () => {
-        const body = { name: name.value, description: desc.value, lines: rows.map((r) => r.get()).filter(Boolean), validDays: num(days.value) ? Math.round(num(days.value)) : null };
+        if (!name.value.trim()) throw new Error('Give the plan a name');
+        if (!desc.value.trim()) throw new Error('Describe what the plan includes');
+        const cost = num(price.value);
+        if (cost == null || cost < 0) throw new Error('Enter the plan’s price (0 if it’s free)');
+        const body = { name: name.value, description: desc.value, priceCents: Math.round(cost * 100), currency: currency.value, lines: rows.map((r) => r.get()).filter(Boolean), validDays: num(days.value) ? Math.round(num(days.value)) : null };
         if (plan) await put(`/plans/${plan.id}`, body); else await post('/plans', body);
         toast('Plan saved');
         sh.close();

@@ -1427,7 +1427,6 @@ async fn journey() {
     // future outgrows the test thread's stack
     Box::pin(nutrition_targets_and_import(&t, &day)).await;
     Box::pin(client_programs_and_maxes(&t, local_today)).await;
-    Box::pin(service_credits(&t, &s3, &bucket, local_today)).await;
     assert_eq!(t.call("GET", "/clients/client1/meals", Some("coach2"), None).await.0, StatusCode::FORBIDDEN, "another coach's client");
     // food search: coach-only, and it says so when the key is off
     assert_eq!(t.call("GET", "/foods/search?q=chicken+breast", Some("client1"), None).await.0, StatusCode::FORBIDDEN);
@@ -1561,6 +1560,8 @@ async fn journey() {
     assert_eq!(t.text(&coach_feed).await.0, StatusCode::NOT_FOUND);
     t.call("PUT", "/admin/coaches/coach1/suspended", Some("admin1"), Some(json!({ "suspended": false }))).await;
     assert_eq!(t.text(&coach_feed).await.0, StatusCode::NOT_FOUND, "suspending removed the link; the coach makes a new one");
+
+    Box::pin(service_credits(&t, &s3, &bucket, local_today)).await;
 
     // --- security review: deleting a client's account removes the coach's copies of their sessions
     let (_, before) = t.call("GET", "/sessions", Some("coach1"), None).await;
@@ -1750,10 +1751,11 @@ async fn service_credits(t: &T, s3: &aws_sdk_s3::Client, bucket: &str, today: ch
     let held = balance(&credits().await.1, "videoReview")["held"].as_u64().unwrap();
 
     // plans: the coach's, validated
-    assert_eq!(t.call("POST", "/plans", Some("client1"), Some(json!({ "name": "x", "lines": [{ "service": "message", "quantity": 1 }] }))).await.0, StatusCode::FORBIDDEN);
-    assert_eq!(t.call("POST", "/plans", Some("coach1"), Some(json!({ "name": "x", "lines": [] }))).await.0, StatusCode::BAD_REQUEST);
+    assert_eq!(t.call("POST", "/plans", Some("client1"), Some(json!({ "name": "x", "description": "x", "lines": [{ "service": "message", "quantity": 1 }] }))).await.0, StatusCode::FORBIDDEN);
+    assert_eq!(t.call("POST", "/plans", Some("coach1"), Some(json!({ "name": "x", "description": "x", "lines": [] }))).await.0, StatusCode::BAD_REQUEST);
+    assert_eq!(t.call("POST", "/plans", Some("coach1"), Some(json!({ "name": "x", "lines": [{ "service": "message", "quantity": 1 }] }))).await.0, StatusCode::BAD_REQUEST, "needs a description");
     let (s, plan) = t.call("POST", "/plans", Some("coach1"), Some(json!({
-        "name": "Starter month", "validDays": 30,
+        "name": "Starter month", "description": "A month of coaching", "priceCents": 4900, "currency": "usd", "validDays": 30,
         "lines": [
             { "service": "message", "quantity": 2 },
             { "service": "videoReview", "quantity": held + 1 },
@@ -1762,6 +1764,7 @@ async fn service_credits(t: &T, s3: &aws_sdk_s3::Client, bucket: &str, today: ch
         ]
     }))).await;
     assert_eq!(s, StatusCode::OK, "{plan}");
+    assert_eq!((plan["priceCents"].as_u64(), plan["currency"].as_str()), (Some(4900), Some("usd")));
     let (_, on) = t.call("PUT", "/credits/settings", Some("coach1"), Some(json!({ "enforce": true }))).await;
     assert_eq!(on["enforce"], true);
 
@@ -1816,6 +1819,14 @@ async fn service_credits(t: &T, s3: &aws_sdk_s3::Client, bucket: &str, today: ch
     let (s, s2) = book("2027-03-04T15:00:00Z").await;
     assert_eq!(s, StatusCode::OK, "the cancelled session's credit came back: {s2}");
     t.call("POST", &format!("/clients/client1/sessions/{}/cancel", s2["id"].as_str().unwrap()), Some("coach1"), None).await;
+    // a session that has already started gives nothing back, and cancelling twice refunds at most once
+    let started = (chrono::Utc::now() - chrono::Duration::minutes(30)).to_rfc3339();
+    let (s, past) = book(&started).await;
+    assert_eq!(s, StatusCode::OK, "{past}");
+    let cancel_past = format!("/clients/client1/sessions/{}/cancel", past["id"].as_str().unwrap());
+    t.call("POST", &cancel_past, Some("client1"), None).await;
+    t.call("POST", &cancel_past, Some("client1"), None).await;
+    assert_eq!(book("2027-03-05T15:00:00Z").await.0, StatusCode::PAYMENT_REQUIRED, "no refund for a session already under way");
 
     // programming is counted, never refused
     let start = today + chrono::Duration::days(250);
