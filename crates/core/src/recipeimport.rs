@@ -294,7 +294,8 @@ fn plain(s: &str) -> String {
 
 /// The contents of every `<script type="application/ld+json">` on a page.
 fn json_ld_blocks(html: &str) -> Vec<Value> {
-    let lower = html.to_lowercase();
+    // ASCII lowercase keeps byte offsets lined up with `html`.
+    let lower = html.to_ascii_lowercase();
     let mut out = vec![];
     let mut from = 0;
     while let Some(p) = lower[from..].find("<script") {
@@ -432,15 +433,30 @@ pub fn from_html(html: &str, url: &str) -> Draft {
 
 /// A page's readable text: scripts and styles dropped, block tags as lines.
 pub fn page_text(html: &str) -> String {
-    let mut s = html.to_string();
-    for tag in ["script", "style", "noscript", "svg", "nav", "footer", "header"] {
-        loop {
-            let lower = s.to_lowercase();
-            let Some(a) = lower.find(&format!("<{tag}")) else { break };
-            let Some(b) = lower[a..].find(&format!("</{tag}>")).map(|e| a + e + tag.len() + 3) else { break };
-            s.replace_range(a..b, "\n");
+    // One pass: skip each dropped block from its opening tag to its closing
+    // one, always moving forward (re-searching from the start for every block
+    // made a crafted 3 MB page take far too long). ASCII lowercase keeps
+    // byte offsets lined up with `html`.
+    const DROP: [&str; 7] = ["script", "style", "noscript", "svg", "nav", "footer", "header"];
+    let lower = html.to_ascii_lowercase();
+    let mut s = String::with_capacity(html.len());
+    let mut at = 0;
+    while let Some(p) = lower[at..].find('<').map(|p| at + p) {
+        s.push_str(&html[at..p]);
+        let after = &lower[p + 1..];
+        let dropped = DROP.iter().find(|t| after.starts_with(**t) && after[t.len()..].starts_with(|c: char| c == '>' || c == '/' || c.is_ascii_whitespace()));
+        match dropped {
+            Some(t) => {
+                at = lower[p..].find(&format!("</{t}>")).map(|e| p + e + t.len() + 3).unwrap_or(html.len());
+                s.push('\n');
+            }
+            None => {
+                s.push('<');
+                at = p + 1;
+            }
         }
     }
+    s.push_str(&html[at..]);
     let mut out = String::new();
     let mut i = 0;
     let bytes = s.as_bytes();
@@ -543,5 +559,16 @@ mod tests {
         assert_eq!(iso_minutes("PT45S"), Some(1));
         assert_eq!(iso_minutes("90 minutes"), None);
         assert_eq!(decode_entities("Tom &amp; Jerry&#39;s &#x2013; &bogus; &"), "Tom & Jerry's – &bogus; &");
+    }
+
+    #[test]
+    fn page_text_is_linear_and_keeps_offsets() {
+        // Thousands of unclosed blocks used to restart the search each time.
+        let many = "<style>".repeat(50_000) + "<p>Serves 2</p>";
+        let t = std::time::Instant::now();
+        let _ = page_text(&many);
+        assert!(t.elapsed().as_secs() < 2, "{:?}", t.elapsed());
+        // A character whose lowercase is longer doesn't shift what's cut.
+        assert_eq!(page_text("<p>İ</p><script>x</script><p>Oats</p>"), "İ\nOats");
     }
 }

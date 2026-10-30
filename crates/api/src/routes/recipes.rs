@@ -246,13 +246,14 @@ fn public_ip(ip: IpAddr) -> bool {
             !(v.is_private() || v.is_loopback() || v.is_link_local() || v.is_unspecified() || v.is_broadcast() || v.is_multicast() || v.is_documentation()
                 || a == 0 || (a == 100 && (64..128).contains(&b)) || (a == 192 && b == 0) || (a == 198 && (18..20).contains(&b)) || a >= 240)
         }
-        IpAddr::V6(v) => match v.to_ipv4_mapped() {
-            Some(v4) => public_ip(IpAddr::V4(v4)),
-            None => {
-                let s = v.segments()[0];
-                !(v.is_loopback() || v.is_unspecified() || v.is_multicast() || (s & 0xfe00) == 0xfc00 || (s & 0xffc0) == 0xfe80 || s == 0x2001 && v.segments()[1] == 0x0db8)
-            }
-        },
+        // IPv6: only global unicast (2000::/3), and none of the ranges that
+        // carry an IPv4 address inside (6to4 2002::/16, Teredo 2001::/32),
+        // which could smuggle a private one past the IPv4 check; NAT64,
+        // IPv4-compatible and IPv4-mapped addresses fall outside 2000::/3.
+        IpAddr::V6(v) => {
+            let [a, b, ..] = v.segments();
+            (a & 0xe000) == 0x2000 && a != 0x2002 && !(a == 0x2001 && (b == 0 || b == 0x0db8))
+        }
     }
 }
 
@@ -277,6 +278,8 @@ async fn fetch_public(raw: &str) -> ApiResult<(String, String)> {
         }
         let client = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
+            // A proxy would resolve the host itself, past the pinned address.
+            .no_proxy()
             .timeout(std::time::Duration::from_secs(10))
             .user_agent("Mozilla/5.0 (compatible; PTCoachRecipeImport/1.0)")
             .resolve(&host, addrs[0])
@@ -447,7 +450,10 @@ mod tests {
 
     #[test]
     fn only_public_addresses_are_fetched() {
-        for blocked in ["127.0.0.1", "10.1.2.3", "172.16.0.1", "192.168.1.1", "169.254.169.254", "100.64.0.1", "0.0.0.0", "::1", "fd00::1", "fe80::1", "::ffff:127.0.0.1", "::ffff:169.254.169.254"] {
+        for blocked in [
+            "127.0.0.1", "10.1.2.3", "172.16.0.1", "192.168.1.1", "169.254.169.254", "100.64.0.1", "0.0.0.0", "::1", "fd00::1", "fe80::1",
+            "::ffff:127.0.0.1", "::ffff:169.254.169.254", "64:ff9b::a9fe:a9fe", "64:ff9b:1::a00:1", "2002:a9fe:a9fe::1", "2001:0:4136:e378::1", "::a9fe:a9fe", "2001:db8::1",
+        ] {
             assert!(!public_ip(blocked.parse().unwrap()), "{blocked} must be refused");
         }
         for ok in ["93.184.216.34", "1.1.1.1", "2606:4700:4700::1111"] {
