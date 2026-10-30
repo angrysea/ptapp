@@ -312,6 +312,10 @@ pub struct Item {
     /// `load_kg` from their max (strength.rs); in a program it stays empty.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub load_pct: Option<f64>,
+    /// With `load_pct`: the weight to use when the client has no 1RM for the
+    /// exercise, so the line still has a load (strength.rs).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback_kg: Option<f64>,
     /// Suggest a change for the next workout when this one goes well (WB-6).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub progression: Option<crate::progression::ProgressionRule>,
@@ -390,6 +394,13 @@ pub struct Program {
     /// is assigned (`cardio::add_program_defaults`).
     #[serde(default)]
     pub default_blocks: Vec<Block>,
+    /// The client this program was made for (a copy personalized for them);
+    /// none for the coach's own templates. Editing a client's program
+    /// updates their upcoming workouts from it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_name: Option<String>,
     pub updated_at: Option<DateTime<Utc>>,
 }
 
@@ -450,6 +461,9 @@ fn validate_block(b: &Block) -> Result<(), String> {
         }
         if let Some(rule) = &it.progression {
             rule.validate().map_err(|e| format!("{}: {e}", it.exercise_name))?;
+        }
+        if it.fallback_kg.is_some_and(|l| !(0.0..1000.0).contains(&l)) {
+            return Err(format!("{}: the weight without a 1RM must be 0-1000 kg", it.exercise_name));
         }
         if it.load_pct.is_some_and(|p| !(p > 0.0 && p <= crate::strength::MAX_PCT)) {
             return Err(format!("{}: % of 1RM must be above 0 and at most {}", it.exercise_name, crate::strength::MAX_PCT));
@@ -961,6 +975,7 @@ mod tests {
             reps: "5".into(),
             load_kg: Some(100.0),
             load_pct: None,
+            fallback_kg: None,
             progression: None,
             tempo: None,
             rest_sec: Some(180),
@@ -979,6 +994,8 @@ mod tests {
             weeks: 4,
             is_template: true,
             default_blocks: vec![],
+            client_id: None,
+            client_name: None,
             updated_at: None,
             workouts: vec![ProgramWorkout {
                 week,

@@ -28,40 +28,55 @@ export async function maxes(el, client) {
   const source = select([['tested', 'Tested (lifted for 1 rep)'], ['estimated', 'Estimated']], 'tested');
   const date = h('input', { type: 'date', value: todayIso() });
 
+  const formCard = h('div', { class: 'card' },
+    h('h3', {}, 'Record or change a max'),
+    field('Exercise', exercise),
+    h('div', { class: 'grid2' }, field(`1RM (${u.w})`, weight), field('Date', date)),
+    field('How it was found', source),
+    h('button', {
+      class: 'primary block',
+      onclick: (e) => busy(e.currentTarget, async () => {
+        const kg = u.fromW(weight.value);
+        if (!num(weight.value) || kg <= 0) throw new Error('Enter the weight');
+        const ex = library.find((x) => x.id === exercise.value);
+        await save(ex.id, ex.name, kg, source.value, date.value);
+      }),
+    }, 'Save max'),
+  );
   mount(el,
     h('div', { class: 'card' },
       h('h3', {}, 'One-rep maxes'),
-      h('p', { class: 'muted small' }, 'Programs can set loads as a % of these. Changing one updates the weights in upcoming workouts.'),
+      h('p', { class: 'muted small' }, 'Programs can set loads as a % of these. Changing one updates the weights in upcoming workouts. When a finished workout’s sets estimate higher than a max, the max goes up by itself.'),
       list.length === 0 && h('p', { class: 'muted' }, 'None recorded yet.'),
       list.map((m) => h('div', { class: 'spread max-row' },
         h('div', {},
           h('strong', {}, m.exerciseName), ' ',
           h('span', {}, `${u.toW(m.kg)} ${u.w}`),
           h('div', { class: 'muted small' }, `${m.source === 'tested' ? 'Tested' : 'Estimated'} ${fmtDate(m.date)} · set by ${m.setBy === 'coach' ? 'coach' : 'client'}`)),
-        h('button', {
-          class: 'small ghost', 'aria-label': `Delete ${m.exerciseName} max`,
-          onclick: async () => {
-            if (!(await confirmSheet(`Delete the ${m.exerciseName} max? Upcoming % loads for it go back to "pick a weight".`, 'Delete'))) return;
-            const r = await api('DELETE', `${base}/${encodeURIComponent(m.exerciseId)}`);
-            toast(`Deleted.${updated(r.updatedWorkouts)}`);
-            redraw();
-          },
-        }, '✕')))),
+        h('div', { class: 'row', style: 'flex-wrap:nowrap' },
+          h('button', {
+            class: 'small ghost', 'aria-label': `Edit ${m.exerciseName} max`,
+            onclick: () => {
+              // Fill the form below with this max to change it.
+              exercise.value = m.exerciseId;
+              weight.value = u.toW(m.kg);
+              source.value = m.source;
+              date.value = m.date;
+              formCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
+              weight.focus();
+            },
+          }, 'Edit'),
+          h('button', {
+            class: 'small ghost', 'aria-label': `Delete ${m.exerciseName} max`,
+            onclick: async () => {
+              if (!(await confirmSheet(`Delete the ${m.exerciseName} max? Upcoming % loads for it go back to "pick a weight".`, 'Delete'))) return;
+              const r = await api('DELETE', `${base}/${encodeURIComponent(m.exerciseId)}`);
+              toast(`Deleted.${updated(r.updatedWorkouts)}`);
+              redraw();
+            },
+          }, '✕'))))),
 
-    h('div', { class: 'card' },
-      h('h3', {}, 'Record a max'),
-      field('Exercise', exercise),
-      h('div', { class: 'grid2' }, field(`1RM (${u.w})`, weight), field('Date', date)),
-      field('How it was found', source),
-      h('button', {
-        class: 'primary block',
-        onclick: (e) => busy(e.currentTarget, async () => {
-          const kg = u.fromW(weight.value);
-          if (!num(weight.value) || kg <= 0) throw new Error('Enter the weight');
-          const ex = library.find((x) => x.id === exercise.value);
-          await save(ex.id, ex.name, kg, source.value, date.value);
-        }),
-      }, 'Save max')),
+    formCard,
 
     estimates.length > 0 && h('div', { class: 'card' },
       h('h3', {}, 'From logged sets'),

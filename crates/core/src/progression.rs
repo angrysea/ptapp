@@ -170,6 +170,7 @@ mod tests {
             reps: reps.into(),
             load_kg: Some(100.0),
             load_pct: None,
+            fallback_kg: None,
             progression: Some(rule),
             tempo: None,
             rest_sec: None,

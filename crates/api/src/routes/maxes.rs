@@ -1,6 +1,8 @@
 //! A client's 1RMs (WB-5, ON-4 test lifts), which program loads written as
 //! a percentage resolve against (ptcore::strength). Coach and client can
-//! both record one; changing a max re-weighs the client's upcoming workouts.
+//! both record or change one, and a finished workout whose sets estimate
+//! higher raises it (`raise_from_log`); any change re-weighs the client's
+//! upcoming workouts.
 
 use std::collections::HashMap;
 
@@ -9,7 +11,7 @@ use axum::Json;
 use chrono::{Duration, NaiveDate, Utc};
 use ptcore::model::{ScheduledWorkout, WorkoutLog};
 use ptcore::stats::strength_trends;
-use ptcore::strength::{resolve_workout, uses_pct_of, Max, MaxSource};
+use ptcore::strength::{raised_maxes, resolve_workout, uses_pct_of, Max, MaxSource};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -53,6 +55,30 @@ async fn reweigh_upcoming(st: &AppState, scope: &ClientScope, exercise_id: &str)
     let changed = items.len();
     st.store.batch_put(items).await?;
     Ok(changed)
+}
+
+/// After a workout is logged: every recorded max its working sets beat is
+/// raised to the new estimate (source "estimated"), and upcoming workouts
+/// re-weighed. Returns the exercises raised.
+pub async fn raise_from_log(st: &AppState, scope: &ClientScope, log: &WorkoutLog) -> ApiResult<Vec<String>> {
+    let pk = scope.pk();
+    let maxes = maxes_by_exercise(st, &pk).await?;
+    let mut raised = vec![];
+    for (exercise_id, exercise_name, kg) in raised_maxes(log, &maxes) {
+        let max = Max {
+            exercise_id: exercise_id.clone(),
+            exercise_name,
+            kg: (kg * 10.0).round() / 10.0,
+            source: MaxSource::Estimated,
+            date: log.date,
+            set_by: scope.actor_role(),
+            updated_at: Utc::now(),
+        };
+        st.store.put(&pk, &max_sk(&exercise_id), &max).await?;
+        reweigh_upcoming(st, scope, &exercise_id).await?;
+        raised.push(exercise_id);
+    }
+    Ok(raised)
 }
 
 /// `GET /clients/{cid}/maxes`: recorded maxes, plus the best e1RM per

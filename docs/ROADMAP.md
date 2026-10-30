@@ -21,7 +21,7 @@ Status legend: ✅ done in MVP · 🟡 partial · ⬜ not started
 | Area | Must (MVP) | Should / Could |
 |---|---|---|
 | Onboarding | ON-1 ✅ (emailed with SES, bound to the invited verified email) · ON-2 ✅ · ON-3 ✅ · coach profiles + public coach directory ✅ (`tasks/coaches`; tax IDs left to Stripe in BZ-1) | ON-4 ✅ (test-lift maxes; a starting-point date progress is measured from) · ON-5 ✅ (coach's extra questions after the standard intake) |
-| Builder | WB-1 ✅ · WB-2 ✅ · WB-3 ✅ · WB-4 ✅ | WB-5 ✅ (%1RM resolved from client maxes) · WB-6 ✅ (rules → coach-approved suggestions) · WB-7 ⬜ |
+| Builder | WB-1 ✅ · WB-2 ✅ · WB-3 ✅ · WB-4 ✅ | WB-5 ✅ (%1RM resolved from client maxes, with a fallback weight when there's no max; a finished workout that beats a max raises it; programs are copied per client on assignment and edits re-write that client's upcoming workouts) · WB-6 ✅ (rules → coach-approved suggestions) · WB-7 ⬜ |
 | Logging | LG-1 ✅ · LG-2 ✅ · LG-3 ✅ · LG-4 ✅ · LG-6 ✅ | LG-5 ✅ (rep-max and e1RM records, celebrated) · LG-7 ✅ (alert inbox: pain at once, missed runs hourly, pushed) · LG-8 ⬜ |
 | Video submission | VS-1 ✅ · VS-2 ✅ · VS-3 ✅ · VS-4 ✅ (real-device checks pending, see `tasks/todo.md`) | VS-5 ✅ (filming tips per exercise) |
 | Video reply | VR-1 ✅ · VR-2 ✅ · VR-3 ✅ (recorded in the browser, `tasks/reply`) | VR-4 ✅ (pen, line, arrow, circle, angle, timer) · VR-5 ✅ (side by side or overlay, synced) · VR-6 ✅ (the coach's webcam in a chosen corner of the reply, drawn into the recording canvas) · VR-7 ⬜ |

@@ -1414,6 +1414,7 @@ async fn full_client_journey() {
     // targets and CSV import, in their own future: inline, the journey's
     // future outgrows the test thread's stack
     Box::pin(nutrition_targets_and_import(&t, &day)).await;
+    Box::pin(client_programs_and_maxes(&t, local_today)).await;
     assert_eq!(t.call("GET", "/clients/client1/meals", Some("coach2"), None).await.0, StatusCode::FORBIDDEN, "another coach's client");
     // food search: coach-only, and it says so when the key is off
     assert_eq!(t.call("GET", "/foods/search?q=chicken+breast", Some("client1"), None).await.0, StatusCode::FORBIDDEN);
@@ -1642,5 +1643,81 @@ x,1
     assert_eq!(t.call("POST", "/clients/client1/meals/import", Some("coach2"), Some(json!({ "csv": csv }))).await.0, StatusCode::FORBIDDEN);
     for m in &imported {
         t.call("DELETE", &format!("/clients/client1/meals/{}", m["id"].as_str().unwrap()), Some("client1"), None).await;
+    }
+}
+
+/// Assigning copies a program for the client; %1RM lines fall back to the
+/// program's weight without a max; a new max, an edit to the client's
+/// program and a logged set that beats a max all reach the calendar.
+async fn client_programs_and_maxes(t: &T, today: chrono::NaiveDate) {
+    let start = today + chrono::Duration::days(150);
+    let line = |id: &str, name: &str, extra: Value| {
+        let mut it = json!({ "exerciseId": id, "exerciseName": name, "sets": 3, "reps": "5", "loadKg": null, "tempo": null, "restSec": null, "rpe": null, "rir": null, "notes": "" });
+        for (k, v) in extra.as_object().unwrap() { it[k] = v.clone(); }
+        it
+    };
+    let template = json!({
+        "name": "Personal test", "description": "", "weeks": 1, "isTemplate": true, "updatedAt": null, "defaultBlocks": [],
+        "workouts": [{ "week": 1, "day": 1, "workout": { "name": "Day 1", "notes": "", "blocks": [{ "kind": "straight", "rounds": null, "durationSec": null, "workSec": null, "restSec": null, "notes": "", "items": [
+            line("bench-press", "Bench Press", json!({ "loadPct": 70.0, "fallbackKg": 50.0 })),
+            line("back-squat", "Back Squat", json!({ "loadKg": 100.0 })),
+        ] }] } }]
+    });
+    let (s, tpl) = t.call("POST", "/programs", Some("coach1"), Some(template)).await;
+    assert_eq!(s, StatusCode::OK, "{tpl}");
+    let tpl_id = tpl["id"].as_str().unwrap().to_string();
+    t.call("DELETE", "/clients/client1/maxes/bench-press", Some("coach1"), None).await;
+    let (s, a) = t.call("POST", "/clients/client1/assignments", Some("coach1"), Some(json!({ "programId": tpl_id, "startDate": start.to_string() }))).await;
+    assert_eq!(s, StatusCode::OK, "{a}");
+    let mine = a["programId"].as_str().unwrap().to_string();
+    assert_ne!(mine, tpl_id, "the client gets their own copy");
+    let (_, programs) = t.call("GET", "/programs", Some("coach1"), None).await;
+    let copy = programs.as_array().unwrap().iter().find(|p| p["id"] == mine.as_str()).unwrap().clone();
+    assert_eq!((copy["clientId"].as_str(), copy["name"].as_str()), (Some("client1"), Some("Personal test")));
+    let sched_path = format!("/clients/client1/schedule?from={start}&to={start}");
+    let bench = |w: &Value| w[0]["workout"]["blocks"][0]["items"][0].clone();
+    // client1 trains in pounds: %1RM loads round to 5 lb
+    let lb = |v: &Value| v["loadKg"].as_f64().map(|kg| (kg / 0.453_592_37 * 10.0).round() / 10.0);
+    let w = t.call("GET", &sched_path, Some("coach1"), None).await.1;
+    assert_eq!(bench(&w)["loadKg"].as_f64(), Some(50.0), "no bench max: the program's fallback weight");
+    // a coach-entered max re-weighs it
+    let (_, m) = t.call("PUT", "/clients/client1/maxes/bench-press", Some("coach1"), Some(json!({ "exerciseName": "Bench Press", "kg": 100.0, "source": "tested" }))).await;
+    assert!(m["updatedWorkouts"].as_u64().unwrap() >= 1, "{m}");
+    assert_eq!(lb(&bench(&t.call("GET", &sched_path, Some("coach1"), None).await.1)), Some(155.0), "70% of 220.5 lb");
+    // editing the client's program reaches their upcoming workout; the template is untouched
+    let mut edited = copy.clone();
+    edited["workouts"][0]["workout"]["blocks"][0]["items"][0]["sets"] = json!(4);
+    let (s, saved) = t.call("PUT", &format!("/programs/{mine}"), Some("coach1"), Some(edited)).await;
+    assert_eq!(s, StatusCode::OK, "{saved}");
+    assert_eq!(saved["updatedWorkouts"], 1);
+    assert_eq!(saved["clientId"], "client1", "an edit keeps who it's for");
+    let w = t.call("GET", &sched_path, Some("coach1"), None).await.1;
+    assert_eq!((bench(&w)["sets"].as_u64(), lb(&bench(&w))), (Some(4), Some(155.0)), "the edit, still weighed from the max");
+    let (_, tpl_now) = t.call("GET", &format!("/programs/{tpl_id}"), Some("coach1"), None).await;
+    assert_eq!(tpl_now["workouts"][0]["workout"]["blocks"][0]["items"][0]["sets"], 3);
+    // assigning this client's own program again uses it as is
+    let (s, again) = t.call("POST", "/clients/client1/assignments", Some("coach1"), Some(json!({ "programId": mine, "startDate": (start + chrono::Duration::days(14)).to_string() }))).await;
+    assert_eq!(s, StatusCode::OK, "{again}");
+    assert_eq!(again["programId"].as_str(), Some(mine.as_str()));
+    // a starter program becomes this client's program too
+    let (s, st) = t.call("POST", "/clients/client1/assignments", Some("coach1"), Some(json!({ "starterKey": "starter-benchmark", "startDate": (start + chrono::Duration::days(28)).to_string() }))).await;
+    assert_eq!(s, StatusCode::OK, "{st}");
+    let (_, programs) = t.call("GET", "/programs", Some("coach1"), None).await;
+    assert!(programs.as_array().unwrap().iter().any(|p| p["id"] == st["programId"] && p["clientId"] == "client1" && p["name"] == "Strength benchmark (1RM estimate)"));
+    assert_eq!(t.call("POST", "/clients/client1/assignments", Some("coach1"), Some(json!({ "startDate": start.to_string() }))).await.0, StatusCode::BAD_REQUEST, "needs a program");
+    // a finished workout whose set beats the max raises it, and re-weighs
+    let log = json!({
+        "id": "log-max", "scheduledId": null, "date": today.to_string(), "workoutName": "Extra", "status": "completed",
+        "updatedAt": chrono::Utc::now().to_rfc3339(),
+        "sets": [{ "itemId": "x", "exerciseId": "bench-press", "exerciseName": "Bench Press", "setIndex": 0, "reps": 5, "loadKg": 105.0, "done": true }]
+    });
+    let (s, l) = t.call("PUT", "/clients/client1/logs/log-max", Some("client1"), Some(log)).await;
+    assert_eq!(s, StatusCode::OK, "{l}");
+    let (_, maxes) = t.call("GET", "/clients/client1/maxes", Some("client1"), None).await;
+    let b = maxes["maxes"].as_array().unwrap().iter().find(|m| m["exerciseId"] == "bench-press").unwrap().clone();
+    assert_eq!((b["kg"].as_f64(), b["source"].as_str()), (Some(122.5), Some("estimated")), "105 × 5 → 122.5 beats 100");
+    assert_eq!(lb(&bench(&t.call("GET", &sched_path, Some("coach1"), None).await.1)), Some(190.0), "70% of the new max, 270 lb");
+    for id in [a["id"].as_str().unwrap(), again["id"].as_str().unwrap(), st["id"].as_str().unwrap()] {
+        t.call("DELETE", &format!("/clients/client1/assignments/{id}"), Some("coach1"), None).await;
     }
 }

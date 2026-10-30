@@ -31,25 +31,23 @@ const EXTRA_PHASES = PHASES.filter(([k]) => k !== 'main');
 
 export async function renderPrograms() {
   const [list, starters] = await Promise.all([get('/programs', { cache: true }), get('/programs/starters', { cache: true }).catch(() => [])]);
+  // Templates are the coach's own; assigning one copies it for that client.
+  const templates = list.filter((p) => !p.clientId);
+  const byClient = {};
+  for (const p of list.filter((x) => x.clientId)) (byClient[p.clientName || 'Client'] ||= []).push(p);
   mount($app(),
     h('div', { class: 'spread page-head' }, h('h1', {}, 'Programs'), h('button', { class: 'primary', onclick: () => go('/programs/new') }, '+ New')),
-    list.length === 0 && h('div', { class: 'card muted' }, 'No programs yet. Build one and assign it to clients from their Calendar tab.'),
-    list.map((p) => h('div', { class: 'card' },
-      h('div', { class: 'spread link', onclick: () => go(`/programs/${p.id}`), style: 'cursor:pointer' },
-        h('div', {}, h('strong', {}, p.name), ' ', p.isTemplate && h('span', { class: 'chip' }, 'Template'),
-          h('div', { class: 'muted small' }, `${p.weeks} weeks · ${p.workouts.length} workouts`)),
-        h('span', { class: 'muted' }, '›')),
-      h('div', { class: 'row', style: 'margin-top:8px' },
-        h('button', { class: 'small', onclick: (e) => busy(e.currentTarget, async () => { await post(`/programs/${p.id}/copy`, {}); toast('Copied'); renderPrograms(); }) }, 'Duplicate'),
-        h('button', {
-          class: 'small danger', onclick: async () => {
-            if (!(await confirmSheet(`Delete “${p.name}”? Clients already assigned keep their workouts.`, 'Delete'))) return;
-            await del(`/programs/${p.id}`); renderPrograms();
-          },
-        }, 'Delete')))),
+    h('h2', {}, 'Your templates'),
+    templates.length === 0 && h('div', { class: 'card muted' }, 'No templates yet. Build one, or start from a starter program below. Assigning one from a client’s Calendar tab gives that client their own copy to personalize.'),
+    templates.map(programCard),
+    Object.keys(byClient).length > 0 && [
+      h('h2', {}, 'Client programs'),
+      h('p', { class: 'muted small' }, 'Each client’s own copy. Editing one updates that client’s upcoming workouts.'),
+      Object.entries(byClient).sort(([a], [b]) => a.localeCompare(b)).map(([name, ps]) => [h('h3', {}, name), ps.map(programCard)]),
+    ],
     starters.length > 0 && [
       h('h2', {}, 'Starter programs'),
-      h('p', { class: 'muted small' }, 'Ready-made programs to start from. “Use” puts a copy in your programs to edit and assign; weights are left for you to set per client.'),
+      h('p', { class: 'muted small' }, 'Ready-made programs to start from. “Use” makes it one of your templates to edit; you can also assign one straight from a client’s Calendar tab, which makes a copy for that client.'),
       starters.map((p) => h('div', { class: 'card starter' },
         h('strong', {}, p.name),
         h('div', { class: 'muted small' }, `${p.weeks} week${p.weeks === 1 ? '' : 's'} · ${p.workouts.length} workout${p.workouts.length === 1 ? '' : 's'}`),
@@ -64,6 +62,23 @@ export async function renderPrograms() {
         }, 'Use this program'))),
     ],
   );
+}
+
+/** One program in the list: open, duplicate, delete. */
+function programCard(p) {
+  return h('div', { class: 'card' },
+    h('div', { class: 'spread link', onclick: () => go(`/programs/${p.id}`), style: 'cursor:pointer' },
+      h('div', {}, h('strong', {}, p.name), ' ', p.clientName ? h('span', { class: 'chip' }, p.clientName) : p.isTemplate && h('span', { class: 'chip' }, 'Template'),
+        h('div', { class: 'muted small' }, `${p.weeks} weeks · ${p.workouts.length} workouts`)),
+      h('span', { class: 'muted' }, '›')),
+    h('div', { class: 'row', style: 'margin-top:8px' },
+      h('button', { class: 'small', onclick: (e) => busy(e.currentTarget, async () => { await post(`/programs/${p.id}/copy`, {}); toast('Copied'); renderPrograms(); }) }, 'Duplicate'),
+      h('button', {
+        class: 'small danger', onclick: async () => {
+          if (!(await confirmSheet(`Delete “${p.name}”? Clients already assigned keep their workouts.`, 'Delete'))) return;
+          await del(`/programs/${p.id}`); renderPrograms();
+        },
+      }, 'Delete')));
 }
 
 const blankProgram = () => ({ id: '', name: '', description: '', weeks: 4, isTemplate: true, workouts: [], defaultBlocks: [] });
@@ -99,10 +114,10 @@ export async function renderProgramEditor(id) {
     if (!p.name.trim()) throw new Error('Give the program a name');
     const outside = p.workouts.filter((w) => w.week > p.weeks);
     if (outside.length) throw new Error(`${outside.length} workout(s) are beyond week ${p.weeks}; increase weeks or delete them`);
-    const saved = p.id ? await put(`/programs/${p.id}`, p) : await post('/programs', p);
+    const { updatedWorkouts, ...saved } = p.id ? await put(`/programs/${p.id}`, p) : await post('/programs', p);
     Object.assign(p, saved);
     dirty = false;
-    toast('Program saved');
+    toast(updatedWorkouts ? `Program saved. ${p.clientName || 'The client'}’s ${updatedWorkouts} upcoming workout${updatedWorkouts === 1 ? '' : 's'} updated.` : 'Program saved');
     if (id === 'new') go(`/programs/${saved.id}`);
     else draw();
   });
@@ -111,6 +126,7 @@ export async function renderProgramEditor(id) {
     h('div', { class: 'spread' },
       h('button', { class: 'ghost small', onclick: async () => { if (!dirty || (await confirmSheet('Discard unsaved changes?', 'Discard'))) go('/programs'); } }, '‹ Programs'),
       h('button', { class: 'primary', onclick: (e) => save(e.currentTarget) }, 'Save')),
+    p.clientName && h('p', { class: 'banner' }, `${p.clientName}’s program. Changes update their upcoming workouts; logged and today’s workouts stay as they are.`),
     h('div', { class: 'card' },
       field('Program name', name),
       field('Description', desc),
@@ -323,11 +339,19 @@ function loadInput(it, u, touch) {
     onchange: () => store(),
   });
   const mode = select([['w', u.w], ['pct', '% 1RM']], it.loadPct != null ? 'pct' : 'w', { 'aria-label': 'Load unit', onchange: () => store() });
+  // With a %: the weight to use when the client has no 1RM for the exercise.
+  const fallback = h('input', {
+    type: 'number', inputmode: 'decimal', step: 'any', min: 0, placeholder: `${u.w} if no 1RM`, 'aria-label': 'Weight if no 1RM',
+    value: it.fallbackKg != null ? u.toW(it.fallbackKg) : '', onchange: () => store(),
+  });
   function store() {
     const v = value.value === '' ? null : Number(value.value);
     it.loadPct = asPct() ? v : null;
     it.loadKg = asPct() ? null : u.fromW(value.value);
+    it.fallbackKg = asPct() ? u.fromW(fallback.value) : null;
+    fallback.hidden = !asPct();
     touch();
   }
-  return h('div', { class: 'load-input' }, value, mode);
+  fallback.hidden = !asPct();
+  return h('div', { class: 'load-input' }, value, mode, fallback);
 }

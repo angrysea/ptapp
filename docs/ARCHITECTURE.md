@@ -52,7 +52,7 @@ When a coach reads intake, waiver, metrics or photos, an `AUDIT#` item is writte
 | `USER#{coach}` | `COACHPROFILE` | coach profile: private business details (legal name, phone, address, certification numbers, CPR, insurance) and the public profile; read only by the coach and admins |
 | `DIRECTORY` | `COACH#{coach}` | public copy of a complete, listed profile (no private fields); the only item the unauthenticated `/public/coaches` routes read |
 | `COACH#{coach}` | `EXERCISE#{id}` | custom exercise (built-ins are compiled into the binary) |
-| `COACH#{coach}` | `PROGRAM#{id}` | whole program document |
+| `COACH#{coach}` | `PROGRAM#{id}` | whole program document: a template, or a client's own copy (`clientId`, made when assigning from a template or a starter program); editing a client's program re-writes their unlogged workouts from tomorrow on |
 | `COACH#{coach}` | `THREAD#{client}` | message thread summary: last message and each side's unread count; the coach's inbox (`GET /messages`) and both sides' badges read it; a new message also goes to the recipient's AppSync Events inbox channel so open apps refresh |
 | `COACH#{coach}` | `REVIEW#{createdAt}#{video}` | unreviewed set video in the coach's review queue (oldest first); deleted when marked reviewed |
 | `CLIENT#{client}` | `INTAKE` | intake answers |
@@ -99,7 +99,7 @@ GET  /exercises POST /exercises  PUT|DELETE /exercises/{id}  POST /exercises/{id
 GET  /programs POST /programs    GET|PUT|DELETE /programs/{id}  POST /programs/{id}/copy
 GET  /clients                    GET /clients/{cid}
 GET|PUT  /clients/{cid}/intake   GET|POST /clients/{cid}/waiver   GET /clients/{cid}/dashboard?weeks=
-GET|POST /clients/{cid}/assignments   DELETE /clients/{cid}/assignments/{aid}
+GET|POST /clients/{cid}/assignments   DELETE /clients/{cid}/assignments/{aid}   # POST {programId | starterKey, startDate}: copies for the client unless it's theirs
 GET  /clients/{cid}/schedule?from&to  GET /clients/{cid}/logs?from&to  PUT /clients/{cid}/logs/{lid}
 GET|POST /clients/{cid}/comments
 GET|POST /clients/{cid}/metrics?kind=  DELETE /clients/{cid}/metrics/{mid}

@@ -244,8 +244,12 @@ with sync_playwright() as p:
     coach.get_by_text("Sam Client").first.click()
     coach.get_by_role("button", name="Calendar").click()
     coach.get_by_label("Start date").fill(monday.isoformat())
+    expect(coach.get_by_label("Program")).to_have_value(re.compile(r"^p:"))  # the coach's template comes first
     coach.get_by_role("button", name="Assign").click()
-    expect(coach.get_by_text("Program assigned")).to_be_visible()
+    expect(coach.get_by_text("has their own copy to personalize")).to_be_visible()
+    # the assignment ran from Sam's own copy, listed with an Edit link
+    expect(coach.get_by_role("heading", name="Sam Client’s programs")).to_be_visible()
+    expect(coach.locator(".card", has_text="Sam Client’s programs").get_by_role("link", name="Edit")).to_be_visible()
     shot(coach, "05-coach-calendar")
 
     # ---------------- client logs today's workout, offline
@@ -424,6 +428,12 @@ with sync_playwright() as p:
     client.get_by_label("1RM (lb)").fill("275")
     client.get_by_role("button", name="Save max").click()
     expect(client.locator(".max-row", has_text="Back Squat").get_by_text("275 lb")).to_be_visible()
+    # Edit fills the form with the max to change it
+    client.get_by_role("button", name="Edit Back Squat max").click()
+    expect(client.get_by_label("1RM (lb)")).to_have_value("275")
+    client.get_by_label("1RM (lb)").fill("280")
+    client.get_by_role("button", name="Save max").click()
+    expect(client.locator(".max-row", has_text="Back Squat").get_by_text("280 lb")).to_be_visible()
     shot(client, "10b-maxes")
     # the logged squat set the client's starting records
     client.get_by_role("button", name="Records").click()

@@ -8,7 +8,8 @@ use std::collections::HashMap;
 use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::model::{Role, UnitSystem, Workout};
+use crate::model::{Role, UnitSystem, Workout, WorkoutLog};
+use crate::stats::strength_trends;
 
 pub const KG_PER_LB: f64 = 0.453_592_37;
 
@@ -60,19 +61,34 @@ pub fn load_for_pct(max_kg: f64, pct: f64, units: UnitSystem) -> f64 {
 }
 
 /// Fills in the weight of every %1RM item from `maxes` (kg by exercise id).
-/// An item whose exercise has no max gets no weight, so the client sees the
-/// percentage and picks one. Returns whether anything changed.
+/// An item whose exercise has no max falls back to its `fallback_kg`, or
+/// gets no weight, so the client sees the percentage and picks one.
+/// Returns whether anything changed.
 pub fn resolve_workout(workout: &mut Workout, maxes: &HashMap<String, f64>, units: UnitSystem) -> bool {
     let mut changed = false;
     for item in workout.blocks.iter_mut().flat_map(|b| b.items.iter_mut()) {
         let Some(pct) = item.load_pct else { continue };
-        let load = maxes.get(&item.exercise_id).map(|m| load_for_pct(*m, pct, units));
+        let load = maxes.get(&item.exercise_id).map(|m| load_for_pct(*m, pct, units)).or(item.fallback_kg);
         if load != item.load_kg {
             item.load_kg = load;
             changed = true;
         }
     }
     changed
+}
+
+/// Maxes a finished log beats: for each exercise with a recorded max, the
+/// best e1RM from the log's working sets (stats::strength_trends: done,
+/// loaded, at most 12 reps) when it's higher. Exercises with no max are
+/// left alone; their estimates are offered in Progress › Maxes instead.
+pub fn raised_maxes(log: &WorkoutLog, maxes: &HashMap<String, f64>) -> Vec<(String, String, f64)> {
+    strength_trends(std::slice::from_ref(log))
+        .into_iter()
+        .filter_map(|t| {
+            let old = *maxes.get(&t.exercise_id)?;
+            (t.best_e1rm_kg > old + 0.05).then_some((t.exercise_id, t.exercise_name, t.best_e1rm_kg))
+        })
+        .collect()
 }
 
 /// Whether the workout prescribes any %1RM load of `exercise_id`.
@@ -108,6 +124,7 @@ mod tests {
             reps: "5".into(),
             load_kg,
             load_pct: pct,
+            fallback_kg: None,
             progression: None,
             tempo: None,
             rest_sec: None,
@@ -146,5 +163,35 @@ mod tests {
         assert_eq!(items[2].load_kg, None, "no bench max: the client picks the weight");
         assert!(!resolve_workout(&mut w, &maxes, UnitSystem::Metric), "already resolved");
         assert!(uses_pct_of(&w, "bench") && !uses_pct_of(&w, "curl"));
+    }
+
+    #[test]
+    fn no_max_falls_back_to_the_programs_weight() {
+        let mut w = workout(vec![Item { fallback_kg: Some(60.0), ..item("bench", Some(70.0), None) }]);
+        resolve_workout(&mut w, &HashMap::new(), UnitSystem::Metric);
+        assert_eq!(w.blocks[0].items[0].load_kg, Some(60.0), "no max: the fallback weight");
+        resolve_workout(&mut w, &HashMap::from([("bench".to_string(), 100.0)]), UnitSystem::Metric);
+        assert_eq!(w.blocks[0].items[0].load_kg, Some(70.0), "a max wins over the fallback");
+        resolve_workout(&mut w, &HashMap::new(), UnitSystem::Metric);
+        assert_eq!(w.blocks[0].items[0].load_kg, Some(60.0), "the max deleted: back to the fallback");
+    }
+
+    #[test]
+    fn a_logged_set_raises_a_max_only_when_it_beats_it() {
+        let log: WorkoutLog = serde_json::from_value(serde_json::json!({
+            "id": "l", "scheduledId": null, "date": "2026-10-28", "workoutName": "W", "status": "completed", "updatedAt": "2026-10-28T10:00:00Z",
+            "sets": [
+                { "itemId": "a", "exerciseId": "squat", "exerciseName": "Squat", "setIndex": 0, "reps": 5, "loadKg": 120.0, "done": true },
+                { "itemId": "b", "exerciseId": "bench", "exerciseName": "Bench", "setIndex": 0, "reps": 5, "loadKg": 60.0, "done": true },
+                { "itemId": "c", "exerciseId": "row", "exerciseName": "Row", "setIndex": 0, "reps": 8, "loadKg": 70.0, "done": true },
+                { "itemId": "d", "exerciseId": "squat", "exerciseName": "Squat", "setIndex": 1, "reps": 20, "loadKg": 125.0, "done": true },
+            ]
+        })).unwrap();
+        let maxes = HashMap::from([("squat".to_string(), 130.0), ("bench".to_string(), 100.0)]);
+        let raised = raised_maxes(&log, &maxes);
+        assert_eq!(raised, vec![("squat".to_string(), "Squat".to_string(), 140.0)], "120 × 5 → 140 beats 130; bench 70 doesn't; row has no max; 20 reps don't count");
+        let mut unfinished = log.clone();
+        unfinished.status = crate::model::LogStatus::InProgress;
+        assert!(raised_maxes(&unfinished, &maxes).is_empty(), "only finished workouts");
     }
 }

@@ -16,7 +16,8 @@ use serde_json::{json, Value};
 
 use crate::auth::{client_scope, Ctx};
 use crate::error::{bad_request, ApiError, ApiResult};
-use crate::routes::maxes::maxes_by_exercise;
+use crate::routes::maxes::{maxes_by_exercise, raise_from_log};
+use crate::routes::programs::copy_for_client;
 use crate::routes::{alerts, records, suggestions};
 use crate::store::{key, keyed, s};
 use crate::util::{audit, new_id, parse_date};
@@ -28,7 +29,13 @@ const HIGH: &str = "~";
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AssignBody {
-    program_id: String,
+    /// One of the coach's programs: used as is when it's already this
+    /// client's, otherwise copied for them first.
+    #[serde(default)]
+    program_id: Option<String>,
+    /// Or a starter program (ptcore::starters), copied for the client.
+    #[serde(default)]
+    starter_key: Option<String>,
     start_date: String,
 }
 
@@ -40,11 +47,11 @@ pub async fn assign(
 ) -> ApiResult<Json<Assignment>> {
     let coach = ctx.require_coach()?.to_string();
     let scope = client_scope(&st, &ctx, &cid).await?;
-    let program: Program = st
-        .store
-        .get(&format!("COACH#{coach}"), &format!("PROGRAM#{}", body.program_id))
-        .await?
-        .ok_or(ApiError::NotFound("program"))?;
+    let mut program: Program = match (&body.program_id, &body.starter_key) {
+        (Some(id), None) => st.store.get(&format!("COACH#{coach}"), &format!("PROGRAM#{id}")).await?.ok_or(ApiError::NotFound("program"))?,
+        (None, Some(key)) => ptcore::starters::starter_programs().into_iter().find(|p| &p.id == key).ok_or(ApiError::NotFound("starter program"))?,
+        _ => return Err(bad_request("pick one of your programs or a starter program")),
+    };
     let start = parse_date(&body.start_date)?;
     let end = end_date(start, program.weeks);
     // Two overlapping assignments would schedule the same dates twice and
@@ -73,6 +80,12 @@ pub async fn assign(
             name = clash.workout.name,
         )));
     }
+    // Every assignment runs from a program of the client's own, so the coach
+    // can personalize it without touching the original or other clients.
+    if program.client_id.as_deref() != Some(cid.as_str()) {
+        program = copy_for_client(&st, &coach, program, &scope.client).await?;
+    }
+    let dates = materialize(&program, start); // the copy's own workout order
     let assignment = Assignment {
         id: new_id(),
         program_id: program.id.clone(),
@@ -300,6 +313,9 @@ pub async fn put_log(
                 // again the next time the log is saved.
                 if let Err(e) = records::record(&st, &pk, &log).await {
                     tracing::warn!(log = %log.id, "recording PRs failed: {e:?}");
+                }
+                if let Err(e) = raise_from_log(&st, &scope, &log).await {
+                    tracing::warn!(log = %log.id, "raising maxes failed: {e:?}");
                 }
                 if let Err(e) = suggestions::evaluate(&st, &scope, &log).await {
                     tracing::warn!(log = %log.id, "progression suggestions failed: {e:?}");

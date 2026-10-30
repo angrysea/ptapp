@@ -166,14 +166,24 @@ async function overview(el, client) {
 async function calendar(el, client) {
   const from = addDays(todayIso(), -14);
   const to = addDays(todayIso(), 56);
-  const [programs, assignments, sched, logs] = await Promise.all([
+  const [programs, starters, assignments, sched, logs] = await Promise.all([
     get('/programs', { cache: true }),
+    get('/programs/starters', { cache: true }).catch(() => []),
     get(`/clients/${client.userId}/assignments`),
     get(`/clients/${client.userId}/schedule?from=${from}&to=${to}`),
     get(`/clients/${client.userId}/logs?from=${from}&to=${to}`),
   ]);
   const bySched = Object.fromEntries(logs.filter((l) => l.scheduledId).map((l) => [l.scheduledId, l]));
-  const prog = select(programs.map((p) => [p.id, `${p.name} (${p.weeks} wk)`]), programs[0]?.id);
+  // The client's own programs run as they are; one of the coach's templates
+  // or a starter program is copied for the client first (routes/training.rs).
+  const theirs = programs.filter((p) => p.clientId === client.userId);
+  const templates = programs.filter((p) => !p.clientId);
+  const opt = (value, p) => h('option', { value }, `${p.name} (${p.weeks} wk)`);
+  const prog = h('select', { 'aria-label': 'Program' },
+    theirs.length > 0 && h('optgroup', { label: `${client.name}’s programs` }, theirs.map((p) => opt(`p:${p.id}`, p))),
+    templates.length > 0 && h('optgroup', { label: 'Your programs (makes a copy for this client)' }, templates.map((p) => opt(`p:${p.id}`, p))),
+    starters.length > 0 && h('optgroup', { label: 'Starter programs (makes a copy for this client)' }, starters.map((p) => opt(`s:${p.id}`, p))));
+  const copies = () => !prog.value.startsWith('p:') || !theirs.some((p) => `p:${p.id}` === prog.value);
   const start = h('input', { type: 'date', value: todayIso() });
   const weeks = {};
   for (const s of sched) {
@@ -183,16 +193,23 @@ async function calendar(el, client) {
   }
   mount(el,
     h('div', { class: 'card' }, h('h3', {}, 'Assign a program'),
-      programs.length === 0 ? h('p', { class: 'muted' }, 'Create a program first.', ' ', h('a', { href: '#/programs' }, 'Programs'))
+      programs.length + starters.length === 0 ? h('p', { class: 'muted' }, 'Create a program first.', ' ', h('a', { href: '#/programs' }, 'Programs'))
         : [h('div', { class: 'grid2' }, field('Program', prog), field('Start date', start)),
+          h('p', { class: 'muted small' }, 'Weights written as a % of 1RM are filled in from this client’s maxes (Progress › Maxes); without one, the program’s own weight is used.'),
           h('button', {
             class: 'primary block',
             onclick: (e) => busy(e.currentTarget, async () => {
-              await post(`/clients/${client.userId}/assignments`, { programId: prog.value, startDate: start.value });
-              toast('Program assigned');
+              const [kind, id] = [prog.value.slice(0, 1), prog.value.slice(2)];
+              const copied = copies();
+              await post(`/clients/${client.userId}/assignments`, { ...(kind === 's' ? { starterKey: id } : { programId: id }), startDate: start.value });
+              toast(copied ? `Program assigned. ${client.name} has their own copy to personalize under “${client.name}’s programs”.` : 'Program assigned');
               calendar(el, client);
             }),
-          }, 'Assign')]),
+          }, 'Assign')],
+      theirs.length > 0 && [h('h3', { style: 'margin-top:14px' }, `${client.name}’s programs`),
+        theirs.map((p) => h('div', { class: 'spread', style: 'margin:6px 0' },
+          h('div', {}, h('strong', {}, p.name), h('div', { class: 'muted small' }, `${p.weeks} weeks · editing updates upcoming workouts`)),
+          h('a', { class: 'btn small', href: `#/programs/${p.id}` }, 'Edit')))]),
     assignments.length > 0 && h('div', { class: 'card' }, h('h3', {}, 'Assignments'),
       assignments.map((a) => h('div', { class: 'spread', style: 'margin:6px 0' },
         h('div', {}, h('strong', {}, a.programName), h('div', { class: 'muted small' }, `${fmtDate(a.startDate)} → ${fmtDate(a.endDate)}`)),

@@ -37,6 +37,7 @@ fn line(id: &str, sets: u32, reps: &str, rpe: Option<f64>, rest_sec: Option<u32>
         reps: reps.into(),
         load_kg: None,
         load_pct: None,
+        fallback_kg: None,
         progression: None,
         tempo: None,
         rest_sec,
@@ -65,7 +66,7 @@ fn workout(name: &str, notes: &str, blocks: Vec<Block>) -> Workout {
 }
 
 fn program(name: &str, description: &str, weeks: u32, workouts: Vec<ProgramWorkout>, default_blocks: Vec<Block>) -> Program {
-    Program { id: String::new(), name: name.into(), description: description.into(), weeks, is_template: true, workouts, default_blocks, updated_at: None }
+    Program { id: String::new(), name: name.into(), description: description.into(), weeks, is_template: true, workouts, default_blocks, client_id: None, client_name: None, updated_at: None }
 }
 
 /// Every starter program, in the order the app lists them. Each id is a
