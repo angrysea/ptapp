@@ -86,15 +86,16 @@ export async function flush() {
         await api(item.method, item.path, item.body);
         // Only drop the queued write if it is still the one we just sent; if
         // the user re-queued this key while the request was in flight, keep
-        // the newer item so it replays on the next flush.
-        const cur = await outbox.get(item.key);
-        if (cur?.seq === item.seq) await outbox.del(item.key);
+        // the newer item so it replays on the next flush. The check and the
+        // delete are one transaction: as two steps, an edit landing between
+        // them was deleted unsent (a habit value typed right after taps).
+        await outbox.delIfSeq(item.key, item.seq);
       } catch (e) {
         if (isNetwork(e)) break; // offline: stop, everything retries later
         if (e instanceof ApiError && (e.status >= 500 || e.status === 401)) continue; // retry this write later, don't stall the queue
         // 409 = server already has a newer version; other 4xx will never succeed.
         console.warn('dropping queued write', item, e);
-        await outbox.del(item.key);
+        await outbox.delIfSeq(item.key, item.seq); // a newer edit still gets its chance
         listeners.forEach((fn) => fn(null, { item, error: e }));
       }
     }

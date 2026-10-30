@@ -475,8 +475,19 @@ with sync_playwright() as p:
     expect(water).to_have_class(re.compile("done"))
     shot(client, "10d-habits")
     expect(client.locator("#sync")).to_be_hidden(timeout=15000)  # the queued values have synced
+    # The coach's card shows the server's streak as it loads, so reload until
+    # the last value (8, typed straight after the taps) has arrived. A value
+    # lost on the way (the outbox once deleted an edit queued mid-send) never
+    # arrives, and this still fails.
     coach.goto(coach.url.split("#")[0] + "#/c/client" + RUN + "/overview")
-    expect(coach.locator(".habit-row", has_text="Water")).to_contain_text("🔥 1")
+    row = coach.locator(".habit-row", has_text="Water")
+    for _ in range(15):
+        expect(row).to_be_visible()
+        if "🔥 1" in row.inner_text():
+            break
+        time.sleep(1)
+        coach.reload()
+    expect(row).to_contain_text("🔥 1")
     expect(coach.get_by_role("heading", name="Weekly cardio (minutes)")).to_be_visible()  # the 20 min walk, not the warm-up
     # the printable progress report (BZ-6), from the client's Overview
     coach.get_by_role("link", name="📄 Progress report (print or PDF)").click()

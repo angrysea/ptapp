@@ -45,6 +45,14 @@ export const outbox = {
   all: async () => ((await run('outbox', 'readonly', (s) => s.getAll())) || []).sort((a, b) => a.seq - b.seq),
   get: (key) => run('outbox', 'readonly', (s) => s.get(key)),
   del: (key) => run('outbox', 'readwrite', (s) => s.delete(key)),
+  /** Deletes the item only if it is still the one with `seq`, in one
+   * transaction: a newer edit queued under the same key while the old one
+   * was being sent is never deleted with it. */
+  delIfSeq: (key, seq) => run('outbox', 'readwrite', (s) => {
+    const req = s.get(key);
+    req.onsuccess = () => { if (req.result?.seq === seq) s.delete(key); };
+    return req;
+  }),
   clear: () => run('outbox', 'readwrite', (s) => s.clear()),
 };
 
