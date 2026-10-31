@@ -163,6 +163,11 @@ const MANUALS = {
         title: 'Messages',
         body: [
           'The Messages tab is your inbox across all clients, updated live, with unread badges. Send text, photos (📷 Photo) and voice notes (🎤 Voice), and link a message to a workout, set or video.',
+          { list: [
+            '+ New message: pick one teammate to message them directly, or several people (teammates and clients) for a group chat, and give it a name. Everyone in a group sees everyone’s name and messages, and clients can reply.',
+            '📣 Broadcast: send one message to many clients at once. Each gets it in their private conversation with you, and no one sees who else did.',
+            'Edit group renames a group or changes who’s in it (you, or whoever started it). Anyone can leave a group. Group messages don’t use credits.',
+          ] },
           'Save replies you send often as Snippets, then type / in a message to insert one.',
           'Set reminders and automated messages under Profile → Reminders & automated messages. They go out at each client’s local time.',
         ],
@@ -237,12 +242,18 @@ const MANUALS = {
           { list: [
             'Programming: build and edit programs in your head coach’s library, assign them to your clients, and record their maxes.',
             'Nutrition: recipes, recipe books and meal plans, your clients’ food journals and nutrition targets.',
-            'Messaging: message your clients from the Messages tab or a client’s Messages page. You’re notified when they write.',
+            'Messaging: message your clients from the Messages tab or a client’s Messages page, include them in group chats, and broadcast to them. You’re notified when they write.',
             'Video review: your clients’ set videos on the Videos tab; reply in writing or with a recorded video.',
             'Progress (view): your clients’ workouts, logs, body data, check-ins, habits and food journal.',
             'Health & intake: your clients’ intake questionnaire and health screening.',
           ] },
           'Without Messaging, you see only comments on workouts and videos, and can comment only there.',
+        ],
+      },
+      {
+        title: 'Message your team',
+        body: [
+          'Everyone on the team can message each other, whatever their permissions. On Messages, tap + New message and pick your head coach or a teammate, or several people for a group chat. With Messaging, you can add your clients to groups too.',
         ],
       },
       {
@@ -315,6 +326,7 @@ const MANUALS = {
         body: [
           'The Coach tab is your thread with your coach, live. Send text, a 📷 Photo or a 🎤 Voice note. Your coach’s hours show at the top.',
           'From a workout, 💬 Ask your coach about this workout links your message to it.',
+          'If your coach adds you to a group chat, it appears under Group chats on the Coach tab. Everyone in the group sees your name and messages. You can leave a group at any time.',
         ],
       },
       {

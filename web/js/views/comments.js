@@ -35,17 +35,18 @@ export async function pushPrompt(who) {
 const VOICE_TYPES = ['audio/mp4', 'audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus'];
 const MAX_VOICE_S = 120;
 
-/** Uploads a photo or voice note for the thread; returns the message's `attachment`. */
-async function upload(clientId, kind, blob, durationSec) {
+/** Uploads a photo or voice note via `path` (which hands out upload URLs);
+ * returns the message's `attachment`. */
+async function upload(path, kind, blob, durationSec) {
   const contentType = blob.type.split(';')[0];
-  const up = await post(`/clients/${clientId}/attachments`, { kind, contentType, size: blob.size });
+  const up = await post(path, { kind, contentType, size: blob.size });
   const res = await fetch(up.uploadUrl, { method: 'PUT', headers: up.uploadHeaders, body: blob });
   if (!res.ok) throw new Error(`Upload failed (${res.status})`);
   return { kind, key: up.key, contentType, durationSec: durationSec ?? null };
 }
 
 /** A message's photo (tap for full size) or voice note. */
-function attachmentView(c) {
+export function attachmentView(c) {
   const a = c.attachment;
   if (!a) return null;
   if (!c.attachmentUrl) return h('div', { class: 'small muted' }, a.kind === 'photo' ? '📷 Photo (needs a connection)' : '🎤 Voice note (needs a connection)');
@@ -54,6 +55,66 @@ function attachmentView(c) {
     src: c.attachmentUrl, alt: 'Photo', loading: 'lazy', class: 'msg-photo',
     onclick: () => { const s = sheet(h('img', { src: c.attachmentUrl, alt: 'Photo', class: 'msg-photo-full' }), h('button', { class: 'block', onclick: () => s.close() }, 'Close')); },
   });
+}
+
+/** Photo and voice-note buttons for a message box (they need a connection:
+ * they upload first). `uploadPath` hands out upload URLs, `check(kind)` may
+ * refuse before anything uploads (credits), and `send(attachment)` sends
+ * the message carrying it. `pending` holds a recorded voice note to send. */
+export function mediaTools({ uploadPath, check = async () => true, send }) {
+  const pending = h('div');
+  const photoPick = h('input', { type: 'file', accept: 'image/*', hidden: true, 'aria-label': 'Photo to send' });
+  const photoBtn = h('button', { class: 'small', 'aria-label': 'Send a photo', onclick: () => photoPick.click() }, '📷 Photo');
+  photoPick.addEventListener('change', () => busy(photoBtn, async () => {
+    const f = photoPick.files?.[0];
+    photoPick.value = '';
+    if (!f || !(await check('photoReview'))) return; // before the upload, not after
+    await send(await upload(uploadPath, 'photo', await shrinkImage(f, 1600)));
+  }).catch((e) => toast(e.message, 'error')));
+
+  let rec = null;
+  const voiceBtn = h('button', { class: 'small', 'aria-label': 'Record a voice note', onclick: () => (rec ? rec.stop() : startVoice()) }, '🎤 Voice');
+  async function startVoice() {
+    if (!(await check('message'))) return;
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+    } catch (e) {
+      return toast(e.name === 'NotAllowedError' ? 'The microphone is blocked; allow it in your browser settings.' : `Couldn’t start the microphone: ${e.message}`, 'error');
+    }
+    const mimeType = VOICE_TYPES.find((t) => MediaRecorder.isTypeSupported(t)) || '';
+    rec = new MediaRecorder(stream, { ...(mimeType && { mimeType }), audioBitsPerSecond: 64_000 });
+    const chunks = [];
+    const started = performance.now();
+    const tick = setInterval(() => {
+      const s = (performance.now() - started) / 1000;
+      voiceBtn.textContent = `■ Stop ${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+      if (s >= MAX_VOICE_S) rec?.stop();
+    }, 250);
+    rec.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
+    rec.onstop = () => {
+      clearInterval(tick);
+      stream.getTracks().forEach((t) => t.stop());
+      const blob = new Blob(chunks, { type: (rec.mimeType || mimeType || 'audio/webm').split(';')[0] });
+      const seconds = Math.min(MAX_VOICE_S, (performance.now() - started) / 1000);
+      rec = null;
+      voiceBtn.textContent = '🎤 Voice';
+      const url = URL.createObjectURL(blob);
+      const clear = () => { URL.revokeObjectURL(url); mount(pending); };
+      mount(pending, h('div', { class: 'voice-take' },
+        h('audio', { src: url, controls: true }),
+        h('div', { class: 'row' },
+          h('button', { class: 'ghost small', onclick: clear }, 'Discard'),
+          h('button', {
+            class: 'primary small',
+            onclick: (e) => busy(e.currentTarget, async () => { await send(await upload(uploadPath, 'voice', blob, seconds)); clear(); }),
+          }, 'Send voice note'))));
+    };
+    rec.start(1000);
+    voiceBtn.textContent = '■ Stop 0:00';
+  }
+  const canVoice = typeof MediaRecorder === 'function' && !!navigator.mediaDevices?.getUserMedia;
+  return { pending, buttons: [photoBtn, photoPick, canVoice && voiceBtn] };
 }
 
 export async function renderThread(el, clientId, logsById = {}) {
@@ -118,75 +179,22 @@ export async function renderThread(el, clientId, logsById = {}) {
     listEl.lastElementChild?.scrollIntoView({ block: 'nearest', behavior: first ? 'auto' : 'smooth' });
     if (list.some((c) => c.authorId !== session.userId) && document.visibilityState === 'visible') markRead(clientId);
   }
-  // ---- photos and voice notes (they need a connection: they upload first)
-  const pending = h('div'); // a recorded voice note waiting to be sent
   const sendMessage = async (attachment) => {
     if (!(await guard(clientId, attachment?.kind === 'photo' ? 'photoReview' : 'message'))) return;
     await post(`/clients/${clientId}/comments`, { text: text.value, ...(attachment && { attachment }) });
     text.value = '';
     await draw();
   };
-  const photoPick = h('input', { type: 'file', accept: 'image/*', hidden: true, 'aria-label': 'Photo to send' });
-  const photoBtn = h('button', { class: 'small', 'aria-label': 'Send a photo', onclick: () => photoPick.click() }, '📷 Photo');
-  photoPick.addEventListener('change', () => busy(photoBtn, async () => {
-    const f = photoPick.files?.[0];
-    photoPick.value = '';
-    if (!f || !(await guard(clientId, 'photoReview'))) return; // before the upload, not after
-    await sendMessage(await upload(clientId, 'photo', await shrinkImage(f, 1600)));
-  }).catch((e) => toast(e.message, 'error')));
-
-  let rec = null;
-  const voiceBtn = h('button', { class: 'small', 'aria-label': 'Record a voice note', onclick: () => (rec ? rec.stop() : startVoice()) }, '🎤 Voice');
-  async function startVoice() {
-    if (!(await guard(clientId, 'message'))) return;
-    let stream;
-    try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
-    } catch (e) {
-      return toast(e.name === 'NotAllowedError' ? 'The microphone is blocked; allow it in your browser settings.' : `Couldn’t start the microphone: ${e.message}`, 'error');
-    }
-    const mimeType = VOICE_TYPES.find((t) => MediaRecorder.isTypeSupported(t)) || '';
-    rec = new MediaRecorder(stream, { ...(mimeType && { mimeType }), audioBitsPerSecond: 64_000 });
-    const chunks = [];
-    const started = performance.now();
-    const tick = setInterval(() => {
-      const s = (performance.now() - started) / 1000;
-      voiceBtn.textContent = `■ Stop ${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
-      if (s >= MAX_VOICE_S) rec?.stop();
-    }, 250);
-    rec.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
-    rec.onstop = () => {
-      clearInterval(tick);
-      stream.getTracks().forEach((t) => t.stop());
-      const blob = new Blob(chunks, { type: (rec.mimeType || mimeType || 'audio/webm').split(';')[0] });
-      const seconds = Math.min(MAX_VOICE_S, (performance.now() - started) / 1000);
-      rec = null;
-      voiceBtn.textContent = '🎤 Voice';
-      const url = URL.createObjectURL(blob);
-      const clear = () => { URL.revokeObjectURL(url); mount(pending); };
-      mount(pending, h('div', { class: 'voice-take' },
-        h('audio', { src: url, controls: true }),
-        h('div', { class: 'row' },
-          h('button', { class: 'ghost small', onclick: clear }, 'Discard'),
-          h('button', {
-            class: 'primary small',
-            onclick: (e) => busy(e.currentTarget, async () => { await sendMessage(await upload(clientId, 'voice', blob, seconds)); clear(); }),
-          }, 'Send voice note'))));
-    };
-    rec.start(1000);
-    voiceBtn.textContent = '■ Stop 0:00';
-  }
-  const canVoice = typeof MediaRecorder === 'function' && !!navigator.mediaDevices?.getUserMedia;
+  const media = mediaTools({ uploadPath: `/clients/${clientId}/attachments`, check: (kind) => guard(clientId, kind), send: sendMessage });
   const snippets = session.isCoach ? snippetTools(text, clientId) : { field: text, button: null };
 
   mount(el,
     await pushPrompt(session.isCoach ? 'your client' : 'your coach'),
     listEl,
     h('div', { class: 'card' }, snippets.field,
-      pending,
+      media.pending,
       h('div', { class: 'row', style: 'margin-top:8px' },
-        photoBtn, photoPick,
-        canVoice && voiceBtn,
+        media.buttons,
         snippets.button,
         h('button', {
           class: 'primary grow',

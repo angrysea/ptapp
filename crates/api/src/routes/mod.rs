@@ -6,6 +6,7 @@ pub mod checkins;
 pub mod clients;
 pub mod coaches;
 pub mod comments;
+pub mod conversations;
 pub mod credits;
 pub mod exercises;
 pub mod habits;

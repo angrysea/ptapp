@@ -60,6 +60,8 @@ When a coach reads intake, waiver, metrics or photos, an `AUDIT#` item is writte
 | `CLIENT#{client}` | `CREDIT#{id}` | credits of one service granted to the client (total or unlimited, used, expiry, plan) |
 | `CLIENT#{client}` | `LEDGER#{at}#{id}` | a grant, use or refund of credits |
 | `COACH#{coach}` | `PROGRAM#{id}` | whole program document: a template, or a client's own copy (`clientId`, made when assigning from a template or a starter program); editing a client's program re-writes their unlogged workouts from tomorrow on |
+| `COACH#{coach}` | `CONV#{id}` | a team or group conversation (ptcore::conversations): kind (direct between two teammates, `dm-{a}-{b}`, or a named group), members, last message, each member's unread count |
+| `CONV#{id}` | `MSG#{at}#{id}` | a message in that conversation (text, photo or voice note under `media/{coach}/conversations/{id}/`) |
 | `COACH#{coach}` | `THREAD#{client}` | message thread summary: last message and each side's unread count; the coach's inbox (`GET /messages`) and both sides' badges read it; a new message also goes to the recipient's AppSync Events inbox channel so open apps refresh |
 | `COACH#{coach}` | `REVIEW#{createdAt}#{video}` | unreviewed set video in the coach's review queue (oldest first); deleted when marked reviewed |
 | `CLIENT#{client}` | `INTAKE` | intake answers |
@@ -109,6 +111,7 @@ GET|PUT  /clients/{cid}/intake   GET|POST /clients/{cid}/waiver   GET /clients/{
 GET|POST /recipes   GET|PUT|DELETE /recipes/{rid}   POST /recipes/import {text|url}   GET|POST /recipes/books   PUT|DELETE /recipes/books/{bid}
 GET|POST /clients/{cid}/recipes   PUT|DELETE /clients/{cid}/recipes/{rid}   GET|POST /mealplans   GET|PUT|DELETE /mealplans/{id}
 GET|PUT|DELETE /clients/{cid}/mealplan   # today's planned meals; assign; remove
+GET|POST /conversations   GET /conversations/people   GET|PUT|DELETE /conversations/{id}   POST /conversations/{id}/messages|attachments|read|leave   POST /broadcasts   # team and group messages
 GET /team   POST /team/invites   DELETE /team/invites/{code}   PUT|DELETE /team/{uid}   GET /me/team   # assistant coaches
 GET|PUT  /credits/settings   GET|POST /plans   PUT|DELETE /plans/{id}           # service credits (coach)
 GET|POST /clients/{cid}/credits   POST /clients/{cid}/credits/plan   PUT|DELETE /clients/{cid}/credits/{gid}

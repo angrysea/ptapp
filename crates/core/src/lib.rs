@@ -6,6 +6,7 @@ pub mod bodycomp;
 pub mod cardio;
 pub mod checkin;
 pub mod coach;
+pub mod conversations;
 pub mod credits;
 pub mod habits;
 pub mod library;

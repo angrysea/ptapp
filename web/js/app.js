@@ -25,6 +25,7 @@ import { captureInvite, renderOnboarding } from './views/onboarding.js';
 import { landing } from './views/landing.js';
 import { renderInviteSignedIn, renderInviteSignUp, resumeAfterSignOut } from './views/signup.js';
 import { renderThread } from './views/comments.js';
+import { conversationRows, renderConversation } from './views/conversations.js';
 import { renderCheckin } from './views/checkins.js';
 import { renderAutomation } from './views/automation.js';
 import { coachHours, renderSchedule, renderSessions } from './views/sessions.js';
@@ -136,7 +137,7 @@ async function boot() {
     const can = (p) => session.can(p);
     highlight = tabs([
       ['/', '👥', 'Clients'],
-      can('messaging') && ['/messages', '💬', 'Messages'],
+      ['/messages', '💬', 'Messages'], // team conversations for every teammate; clients' threads need Messaging
       can('review') && ['/videos', '🎥', 'Videos'],
       (can('programming') || can('nutrition')) && [can('programming') ? '/programs' : '/recipes', '🗓️', 'Programs'],
       can('programming') && ['/exercises', '🏋️', 'Exercises'],
@@ -158,6 +159,7 @@ async function boot() {
     route('/exercises', renderExercises);
     route('/videos', renderVideoQueue);
     route('/messages', renderInbox);
+    route('/conversations/:id', renderConversation);
     route('/review/:cid/:vid', renderReview);
     route('/automation', renderAutomation);
     route('/schedule', renderSchedule);
@@ -169,10 +171,16 @@ async function boot() {
     route('/coach', () => {
       const el = h('div');
       const hours = h('div');
-      mount($app(), h('h1', {}, 'Messages'), hours, el);
+      const groups = h('div');
+      mount($app(), h('h1', {}, 'Messages'), hours, groups, el);
       coachHours(hours); // MS-5: when the coach is around (online only)
+      // Group chats the client is in, above their own thread with the coach.
+      get('/conversations').then((r) => {
+        if (r.conversations.length) mount(groups, h('h2', {}, 'Group chats'), conversationRows(r.conversations), h('h2', {}, 'Your coach'));
+      }).catch(() => {});
       return renderThread(el, session.userId);
     });
+    route('/conversations/:id', renderConversation);
     route('/intake', renderIntake);
     route('/checkin', renderCheckin);
     route('/sessions', renderSessions);

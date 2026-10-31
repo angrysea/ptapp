@@ -117,14 +117,21 @@ async fn backfill(st: &AppState, coach: &str, e: &RosterEntry) -> ApiResult<Mess
     Ok(t)
 }
 
-/// `GET /messages`: the caller's conversations, newest first, each with its
-/// unread count; for the coach, also the unread messages themselves (the
-/// latest few), so the inbox can show them. A client has one conversation.
+/// `GET /messages`: the caller's client conversations, newest first, each
+/// with its unread count; for the coach, also the unread messages themselves
+/// (the latest few), so the inbox can show them. A client has one
+/// conversation. `conversationsUnread` counts team and group messages
+/// (routes/conversations.rs) for the badge.
 pub async fn inbox(State(st): State<AppState>, ctx: Ctx) -> ApiResult<Json<Value>> {
+    let groups: u32 = super::conversations::mine(&st, &ctx).await?.iter().map(|c| c.unread_for(ctx.user_id())).sum();
     if ctx.profile.role == Role::Client {
         let (pk, sk) = thread_key(&ctx.profile.coach_id, ctx.user_id());
         let t: MessageThread = st.store.get(&pk, &sk).await?.unwrap_or_default();
-        return Ok(Json(json!({ "unreadTotal": t.unread_client, "threads": [] })));
+        return Ok(Json(json!({ "unreadTotal": t.unread_client, "conversationsUnread": groups, "threads": [] })));
+    }
+    // Every teammate has team conversations; clients' threads need Messaging.
+    if ctx.is_assistant() && ctx.require(Perm::Messaging).is_err() {
+        return Ok(Json(json!({ "unreadTotal": 0, "conversationsUnread": groups, "threads": [] })));
     }
     let coach = ctx.require(Perm::Messaging)?.to_string();
     let pk = format!("COACH#{coach}");
@@ -177,7 +184,7 @@ pub async fn inbox(State(st): State<AppState>, ctx: Ctx) -> ApiResult<Json<Value
         key(a).cmp(&key(b))
     });
     let total: u64 = rows.iter().filter_map(|r| r["unread"].as_u64()).sum();
-    Ok(Json(json!({ "unreadTotal": total, "threads": rows })))
+    Ok(Json(json!({ "unreadTotal": total, "conversationsUnread": groups, "threads": rows })))
 }
 
 #[cfg(test)]

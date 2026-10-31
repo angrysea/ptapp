@@ -1,13 +1,15 @@
-// The coach's messages page (MS-1): every client's conversation, newest and
-// unread first, with the unread messages shown and a reply box on each, so
-// the coach can answer without leaving the page. Also the unread badges on
-// the coach's Messages tab and the client's Coach tab.
+// The coach's messages page (MS-1): team and group conversations
+// (conversations.js), then every client's conversation, newest and unread
+// first, with the unread messages shown and a reply box on each, so the
+// coach can answer without leaving the page. Also the unread badges on the
+// coach's Messages tab and the client's Coach tab.
 
 import { get, post } from '../api.js';
 import { onLive } from '../realtime.js';
 import { session } from '../session.js';
 import { $app, busy, fmtDateTime, h, mount, toast } from '../ui.js';
 import { snippetTools } from './snippets.js';
+import { broadcastSheet, conversationRows, newConversationSheet } from './conversations.js';
 
 const ONLY_NEW = 'pt.messages.onlyNew';
 
@@ -16,7 +18,10 @@ export async function refreshMessageBadge(count) {
   const tab = document.querySelector(`#tabs a[data-path="${session.isCoach ? '/messages' : '/coach'}"]`);
   if (!tab) return;
   if (count == null) {
-    try { count = (await get('/messages')).unreadTotal; } catch { return; }
+    try {
+      const m = await get('/messages');
+      count = m.unreadTotal + (m.conversationsUnread ?? 0);
+    } catch { return; }
   }
   let badge = tab.querySelector('.badge');
   if (!count) { badge?.remove(); return; }
@@ -38,6 +43,8 @@ export async function renderInbox() {
   try { onlyNew = localStorage.getItem(ONLY_NEW) === '1'; } catch { /* storage unavailable */ }
   const filter = h('input', { type: 'checkbox', checked: onlyNew });
   const listEl = h('div');
+  const groupsEl = h('div');
+  const clientsToo = session.can('messaging'); // team conversations are for every teammate
   const open = new Set(); // client ids with the reply box open
   const drafts = {}; // typed replies, kept across refreshes
 
@@ -49,18 +56,33 @@ export async function renderInbox() {
 
   mount($app(),
     h('div', { class: 'spread page-head' }, h('h1', {}, 'Messages'), h('label', { class: 'check' }, filter, 'Only new messages')),
+    h('div', { class: 'row' },
+      h('button', { class: 'primary small', onclick: (e) => busy(e.currentTarget, newConversationSheet) }, '+ New message'),
+      clientsToo && h('button', { class: 'small', onclick: (e) => busy(e.currentTarget, broadcastSheet) }, '📣 Broadcast')),
+    groupsEl,
     listEl);
 
   let data = null;
+  let convs = [];
   async function load() {
-    data = await get('/messages', { cache: true });
-    refreshMessageBadge(data.unreadTotal);
+    [data, convs] = await Promise.all([
+      get('/messages', { cache: true }),
+      get('/conversations', { cache: true }).then((r) => r.conversations).catch(() => convs),
+    ]);
+    refreshMessageBadge(data.unreadTotal + (data.conversationsUnread ?? 0));
     draw();
   }
 
   function draw() {
+    const groups = conversationRows(convs, { onlyNew });
+    mount(groupsEl, groups.length > 0 && h('div', {}, h('h2', {}, 'Team & groups'), groups));
+    if (!clientsToo) {
+      mount(listEl, groups.length === 0 && h('div', { class: 'card muted' }, onlyNew ? 'No new messages.' : 'Message your head coach and teammates with + New message.'));
+      return;
+    }
     const rows = data.threads.filter((t) => !onlyNew || t.unread > 0);
     mount(listEl,
+      groups.length > 0 && rows.length > 0 && h('h2', {}, 'Clients'),
       rows.length === 0 && h('div', { class: 'card muted' }, onlyNew ? 'No new messages.' : 'No clients yet.'),
       rows.map(card));
   }

@@ -74,7 +74,7 @@ async fn media_keys(st: &AppState, prefix: &str) -> ApiResult<Vec<String>> {
 }
 
 /// Deletes every file under `prefix` in the media bucket.
-async fn delete_media(st: &AppState, prefix: &str) -> ApiResult<()> {
+pub(crate) async fn delete_media(st: &AppState, prefix: &str) -> ApiResult<()> {
     let keys = media_keys(st, prefix).await?;
     for chunk in keys.chunks(1000) {
         let objects: Vec<ObjectIdentifier> = chunk.iter().filter_map(|k| ObjectIdentifier::builder().key(k).build().ok()).collect();
@@ -91,7 +91,7 @@ async fn delete_media(st: &AppState, prefix: &str) -> ApiResult<()> {
 }
 
 /// Deletes a whole partition.
-async fn delete_partition(st: &AppState, pk: &str) -> ApiResult<()> {
+pub(crate) async fn delete_partition(st: &AppState, pk: &str) -> ApiResult<()> {
     let keys = st.store.partition(pk).await?.iter().map(|i| (pk.to_string(), sk_of(i))).collect();
     st.store.batch_delete(keys).await
 }
@@ -155,10 +155,12 @@ pub async fn export(State(st): State<AppState>, ctx: Ctx) -> ApiResult<Json<Valu
     for key in keys.iter().take(MAX_EXPORT_FILES) {
         files.push(json!({ "key": key, "url": presign_get(&st, key).await? }));
     }
+    let group_messages = super::conversations::sent_by(&st, &p.coach_id, &p.user_id).await?;
     Ok(Json(json!({
         "exportedAt": Utc::now(),
         "account": { "email": ctx.caller.email, "profile": p },
         "records": records,
+        "groupMessages": group_messages,
         "files": files,
         "filesNote": "The file links work for 15 minutes from the export time.",
     })))
@@ -185,8 +187,9 @@ pub async fn delete(State(st): State<AppState>, ctx: Ctx, Json(body): Json<Confi
         delete_media(&st, &prefix).await?;
     }
 
-    // 2. Everything in the client's partition.
+    // 2. Everything in the client's partition, and what they sent in groups.
     delete_partition(&st, &format!("CLIENT#{}", p.user_id)).await?;
+    super::conversations::forget(&st, &p.coach_id, &p.user_id, true).await?;
 
     // 3. Their place in the coach's lists: roster, thread, review queue.
     let coach_pk = format!("COACH#{}", p.coach_id);
@@ -298,6 +301,9 @@ pub async fn delete_coach(
         .filter_map(|i| sk_of(i).strip_prefix("INVITE#").map(|code| (format!("INVITE#{code}"), "INVITE".to_string())))
         .collect();
     st.store.batch_delete(invites).await?;
+    for conv in items.iter().filter_map(|i| sk_of(i).strip_prefix("CONV#").map(str::to_string)) {
+        delete_partition(&st, &format!("CONV#{conv}")).await?;
+    }
     delete_partition(&st, &coach_pk).await?;
 
     // 3. The directory and the admin's coach list.
@@ -393,6 +399,7 @@ pub async fn move_client(State(st): State<AppState>, ctx: Ctx, Path(cid): Path<S
     st.store.put_new(&new_pk, &format!("CLIENT#{cid}"), &roster).await?;
 
     // 3. The old coach's records about them: the queue moves, the rest goes.
+    super::conversations::forget(&st, &from, &cid, false).await?;
     let mut gone = vec![(old_pk.clone(), format!("CLIENT#{cid}")), (old_pk.clone(), format!("THREAD#{cid}"))];
     let mut moved_reviews = Vec::new();
     let mut cancelled = 0;

@@ -102,6 +102,7 @@ pub async fn remove(State(st): State<AppState>, ctx: Ctx, Path(uid): Path<String
     let pk = format!("COACH#{coach}");
     st.store.get::<Member>(&pk, &member_sk(&uid)).await?.ok_or(ApiError::NotFound("assistant"))?;
     st.store.delete(&pk, &member_sk(&uid)).await?;
+    super::conversations::forget(&st, coach, &uid, false).await?;
     Ok(Json(json!({ "removed": uid })))
 }
 
