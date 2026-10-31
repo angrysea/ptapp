@@ -3,9 +3,12 @@
 //! and start groups with teammates and the clients they can reach: every
 //! client for the head coach, an assistant's assigned clients if they have
 //! Messaging. Clients read and reply in groups they're in but don't start
-//! them; group messages don't use credits. Membership is the access: only
-//! members see a conversation, and a client who leaves the coach, or an
-//! assistant who leaves the team, leaves its groups (`forget`).
+//! them; group messages don't use credits. Only members see a conversation,
+//! and an assistant only while they can message every client in it (it
+//! hides again if the head coach unassigns one or takes away Messaging). A
+//! client who leaves the coach, or an assistant who leaves the team, leaves
+//! its groups (`forget`); a direct conversation with someone who left the
+//! team stays as read-only history.
 //!
 //! A broadcast is one message sent to many clients' private threads, so no
 //! client sees who else got it.
@@ -77,11 +80,45 @@ fn view(ctx: &Ctx, c: &Conversation) -> Value {
     })
 }
 
+/// Whether an assistant (by their team record) may be in a conversation
+/// with `members`: every client in it must be one they message.
+fn reaches(m: &Member, members: &[ConvMember]) -> bool {
+    members.iter().filter(|x| x.role == Role::Client).all(|x| m.can(Perm::Messaging) && m.assigned(&x.user_id))
+}
+
+/// Whether the caller is in `c` and may see it now.
+fn sees(ctx: &Ctx, c: &Conversation) -> bool {
+    c.member(ctx.user_id()).is_some() && ctx.member.as_ref().is_none_or(|m| reaches(m, &c.members))
+}
+
+/// Everyone else in `c` who may still see it, for notifications: an
+/// assistant only while they're on the team and reach its clients.
+async fn audience<'a>(st: &AppState, head: &str, c: &'a Conversation, author: &str) -> ApiResult<Vec<&'a ConvMember>> {
+    let team: Vec<Member> = st.store.query_prefix(&format!("COACH#{head}"), "ASSISTANT#").await?;
+    Ok(c.members
+        .iter()
+        .filter(|x| x.user_id != author)
+        .filter(|x| x.role != Role::Assistant || team.iter().any(|m| m.user_id == x.user_id && reaches(m, &c.members)))
+        .collect())
+}
+
+/// Refuses a group with an assistant who couldn't message all its clients
+/// (or who's no longer on the team).
+async fn check_team(st: &AppState, head: &str, members: &[ConvMember]) -> ApiResult<()> {
+    let team: Vec<Member> = st.store.query_prefix(&format!("COACH#{head}"), "ASSISTANT#").await?;
+    for a in members.iter().filter(|x| x.role == Role::Assistant) {
+        if !team.iter().any(|m| m.user_id == a.user_id && reaches(m, members)) {
+            return Err(bad_request(format!("{} can only be in a group with clients they're assigned and message; assign them first, or leave them out", a.name)));
+        }
+    }
+    Ok(())
+}
+
 /// The caller's conversations, newest first.
 pub async fn mine(st: &AppState, ctx: &Ctx) -> ApiResult<Vec<Conversation>> {
     let Ok(head) = head(ctx) else { return Ok(vec![]) };
     let mut all: Vec<Conversation> = st.store.query_prefix(&format!("COACH#{head}"), "CONV#").await?;
-    all.retain(|c| c.member(ctx.user_id()).is_some());
+    all.retain(|c| sees(ctx, c));
     all.sort_by_key(|c| std::cmp::Reverse(c.last_at.unwrap_or(c.created_at)));
     Ok(all)
 }
@@ -91,7 +128,7 @@ async fn load(st: &AppState, ctx: &Ctx, id: &str) -> ApiResult<(String, Conversa
     let head = head(ctx)?.to_string();
     let (pk, sk) = summary_key(&head, id);
     let c: Conversation = st.store.get(&pk, &sk).await?.ok_or(ApiError::NotFound("conversation"))?;
-    if c.member(ctx.user_id()).is_none() {
+    if !sees(ctx, &c) {
         return Err(ApiError::NotFound("conversation"));
     }
     Ok((head, c))
@@ -191,6 +228,7 @@ pub async fn create(State(st): State<AppState>, ctx: Ctx, Json(body): Json<NewCo
         }
     }
     members.extend(others);
+    check_team(&st, &head, &members).await?;
     let name = group_name(body.name.as_deref(), &members, ctx.user_id()).map_err(bad_request)?;
     let mut c = Conversation {
         id: new_id(), kind: ConvKind::Group, name, members: vec![], created_by: ctx.user_id().to_string(), created_at: Utc::now(),
@@ -260,6 +298,10 @@ pub async fn send(State(st): State<AppState>, ctx: Ctx, Path(id): Path<String>, 
     if text.chars().count() > MAX_TEXT || (text.is_empty() && body.attachment.is_none()) {
         return Err(bad_request(format!("a message is 1-{MAX_TEXT} characters")));
     }
+    let audience = audience(&st, &head, &c, ctx.user_id()).await?;
+    if c.kind == ConvKind::Direct && audience.is_empty() {
+        return Err(bad_request(format!("{} is no longer on your team", c.title_for(ctx.user_id()))));
+    }
     if let Some(a) = &body.attachment {
         ext_for(&a.content_type, if a.kind == AttachmentKind::Photo { IMAGE_TYPES } else { AUDIO_TYPES })?;
         if !a.key.starts_with(&media_prefix(&head, &c.id)) || a.key.contains("..") {
@@ -283,14 +325,13 @@ pub async fn send(State(st): State<AppState>, ctx: Ctx, Path(id): Path<String>, 
         created_at: Utc::now(),
     };
     st.store.put(&format!("CONV#{id}"), &format!("MSG#{}#{}", m.created_at.to_rfc3339(), m.id), &m).await?;
-    on_message(&st, &head, &c, &m).await;
+    on_message(&st, &head, &c, &audience, &m).await;
     Ok(Json(m))
 }
 
-/// Records a new message on the summary (last message, everyone else's
-/// unread count) and tells everyone else; failures here don't fail the send.
-async fn on_message(st: &AppState, head: &str, c: &Conversation, m: &ConvMessage) {
-    let others: Vec<&ConvMember> = c.members.iter().filter(|x| x.user_id != m.author_id).collect();
+/// Records a new message on the summary (last message, the `others`'
+/// unread counts) and tells them; failures here don't fail the send.
+async fn on_message(st: &AppState, head: &str, c: &Conversation, others: &[&ConvMember], m: &ConvMessage) {
     let preview: String = m.preview_text().chars().take(200).collect();
     let (pk, sk) = summary_key(head, &c.id);
     let mut expr = "SET lastAt = :at, lastText = :t, lastAuthor = :a".to_string();
@@ -317,7 +358,7 @@ async fn on_message(st: &AppState, head: &str, c: &Conversation, m: &ConvMessage
         ConvKind::Direct => m.author_name.clone(),
     };
     let (url, tag, body) = (format!("#/conversations/{}", c.id), format!("conv-{}", c.id), m.preview_text());
-    stream::iter(others)
+    stream::iter(others.iter().copied())
         .for_each_concurrent(8, |o| {
             let (title, url, tag, body) = (&title, &url, &tag, &body);
             async move {
@@ -367,6 +408,7 @@ pub async fn update(State(st): State<AppState>, ctx: Ctx, Path(id): Path<String>
     }
     let mut members = vec![me(&ctx)];
     members.extend(pick(&st, &ctx, &body.members, &c.members).await?);
+    check_team(&st, &head, &members).await?;
     c.name = group_name(body.name.as_deref(), &members, ctx.user_id()).map_err(bad_request)?;
     c.set_members(members);
     let (pk, sk) = summary_key(&head, &c.id);
@@ -410,11 +452,12 @@ async fn remove_all(st: &AppState, head: &str, id: &str) -> ApiResult<()> {
 }
 
 /// Takes `user_id` out of `head`'s groups: a client who left the coach (or
-/// deleted their account, when `erase` also deletes what they sent), or an
-/// assistant who left the team. Direct conversations stay as history.
+/// deleted their account, when `erase` also deletes what they sent in any
+/// of the coach's groups, including ones they'd left), or an assistant who
+/// left the team. Direct conversations stay as history.
 pub async fn forget(st: &AppState, head: &str, user_id: &str, erase: bool) -> ApiResult<()> {
     let all: Vec<Conversation> = st.store.query_prefix(&format!("COACH#{head}"), "CONV#").await?;
-    for mut c in all.into_iter().filter(|c| c.kind == ConvKind::Group && c.member(user_id).is_some()) {
+    for mut c in all.into_iter().filter(|c| c.kind == ConvKind::Group && (erase || c.member(user_id).is_some())) {
         if erase {
             let pk = format!("CONV#{}", c.id);
             let theirs: Vec<ConvMessage> = st.store.query_prefix(&pk, "MSG#").await?;
@@ -423,6 +466,9 @@ pub async fn forget(st: &AppState, head: &str, user_id: &str, erase: bool) -> Ap
                 let _ = st.s3.delete_object().bucket(&st.bucket).key(&m.key).send().await;
             }
             st.store.batch_delete(theirs.iter().map(|m| (pk.clone(), format!("MSG#{}#{}", m.created_at.to_rfc3339(), m.id))).collect()).await?;
+        }
+        if c.member(user_id).is_none() {
+            continue;
         }
         let rest: Vec<ConvMember> = c.members.iter().filter(|m| m.user_id != user_id).cloned().collect();
         if rest.is_empty() {
@@ -436,11 +482,12 @@ pub async fn forget(st: &AppState, head: &str, user_id: &str, erase: bool) -> Ap
     Ok(())
 }
 
-/// What a client sent in groups, for their data export.
+/// What a client sent in `head`'s groups (including ones they've left), for
+/// their data export.
 pub async fn sent_by(st: &AppState, head: &str, user_id: &str) -> ApiResult<Vec<Value>> {
     let all: Vec<Conversation> = st.store.query_prefix(&format!("COACH#{head}"), "CONV#").await?;
     let mut out = Vec::new();
-    for c in all.iter().filter(|c| c.member(user_id).is_some()) {
+    for c in all.iter().filter(|c| c.kind == ConvKind::Group) {
         let msgs: Vec<ConvMessage> = st.store.query_prefix(&format!("CONV#{}", c.id), "MSG#").await?;
         for m in msgs.into_iter().filter(|m| m.author_id == user_id) {
             out.push(json!({ "group": c.name, "message": m }));

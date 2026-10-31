@@ -1573,7 +1573,7 @@ async fn journey() {
     assert_eq!(s, StatusCode::OK, "{d}");
     let (_, after) = t.call("GET", "/sessions", Some("coach1"), None).await;
     assert!(!after.as_array().unwrap().iter().any(|s| s["clientId"] == "client1"), "{after}");
-    // ...and takes them out of their groups, with what they sent there
+    // ...and takes them out of their groups, with what they sent there (even in groups they'd left)
     let (_, g) = t.call("GET", &format!("/conversations/{group}"), Some("coach1"), None).await;
     assert!(g["conversation"]["members"].as_array().unwrap().iter().all(|m| m["userId"] != "client1"), "{g}");
     assert!(g["messages"].as_array().unwrap().iter().all(|m| m["authorId"] != "client1"), "{g}");
@@ -1968,6 +1968,12 @@ async fn team_and_group_messages(t: &T) -> String {
     // one client and no name is their private thread, not a group
     assert_eq!(t.call("POST", "/conversations", Some("coach1"), Some(json!({ "members": ["client1"] }))).await.0, StatusCode::BAD_REQUEST);
 
+    // an assistant goes in a group only with clients they message
+    assert_eq!(t.call("POST", "/conversations", Some("coach1"), Some(json!({ "members": ["asst2", "client5"], "name": "x" }))).await.0, StatusCode::BAD_REQUEST, "Pat can't message clients");
+    t.call("PUT", "/team/asst2", Some("coach1"), Some(json!({ "title": "Programming Assistant", "perms": ["programming", "messaging"], "clients": ["client1"] }))).await;
+    assert_eq!(t.call("POST", "/conversations", Some("coach1"), Some(json!({ "members": ["asst2", "client5"], "name": "x" }))).await.0, StatusCode::BAD_REQUEST, "client5 isn't Pat's");
+    t.call("PUT", "/team/asst2", Some("coach1"), Some(json!({ "title": "Programming Assistant", "perms": ["programming", "messaging"], "clients": ["client1", "client5"] }))).await;
+
     // a group: the head coach, Pat and two clients; clients reply, without credits
     let (s, g) = t.call("POST", "/conversations", Some("coach1"), Some(json!({ "members": ["asst2", "client1", "client5", "client1"] }))).await;
     assert_eq!(s, StatusCode::OK, "{g}");
@@ -2000,13 +2006,17 @@ async fn team_and_group_messages(t: &T) -> String {
     assert_eq!(s, StatusCode::OK, "{g2}");
     assert_eq!(g2["title"], "Saturday crew");
     assert_eq!(t.call("GET", &format!("/conversations/{gid}"), Some("client5"), None).await.0, StatusCode::NOT_FOUND, "removed from the group");
-    // leaving
-    assert_eq!(t.call("POST", &format!("/conversations/{gid}/leave"), Some("asst2"), None).await.0, StatusCode::OK);
+    // security review: unassigned from client1, Pat no longer sees (or hears about) the group
+    t.call("PUT", "/team/asst2", Some("coach1"), Some(json!({ "title": "Programming Assistant", "perms": ["programming", "messaging"], "clients": ["client5"] }))).await;
     assert_eq!(t.call("GET", &format!("/conversations/{gid}"), Some("asst2"), None).await.0, StatusCode::NOT_FOUND);
+    assert!(t.call("GET", "/conversations", Some("asst2"), None).await.1["conversations"].as_array().unwrap().iter().all(|c| c["id"] != gid.as_str()));
+    // leaving
+    assert_eq!(t.call("POST", &format!("/conversations/{gid}/leave"), Some("client1"), None).await.0, StatusCode::OK);
+    assert_eq!(t.call("GET", &format!("/conversations/{gid}"), Some("client1"), None).await.0, StatusCode::NOT_FOUND);
     assert_eq!(t.call("POST", &format!("/conversations/{dm_id}/leave"), Some("coach1"), None).await.0, StatusCode::BAD_REQUEST, "only groups");
 
     // a broadcast: privately to each client's own thread
-    assert_eq!(t.call("POST", "/broadcasts", Some("asst2"), Some(json!({ "clients": ["client1"], "text": "hi" }))).await.0, StatusCode::FORBIDDEN, "needs Messaging");
+    assert_eq!(t.call("POST", "/broadcasts", Some("asst2"), Some(json!({ "clients": ["client1"], "text": "hi" }))).await.0, StatusCode::FORBIDDEN, "not Pat's client");
     assert_ne!(t.call("POST", "/broadcasts", Some("coach1"), Some(json!({ "clients": ["client1", "client9"], "text": "hi" }))).await.0, StatusCode::OK, "not their client");
     let (s, b) = t.call("POST", "/broadcasts", Some("coach1"), Some(json!({ "clients": ["client1", "client5"], "text": "Gym closed Monday" }))).await;
     assert_eq!((s, b["sent"].as_u64()), (StatusCode::OK, Some(2)), "{b}");
@@ -2021,6 +2031,7 @@ async fn team_and_group_messages(t: &T) -> String {
     let (_, g3) = t.call("GET", &format!("/conversations/{}", g3["id"].as_str().unwrap()), Some("coach1"), None).await;
     assert!(g3["conversation"]["members"].as_array().unwrap().iter().all(|m| m["userId"] != "asst2"), "{g3}");
     assert_eq!(t.call("GET", &format!("/conversations/{dm_id}"), Some("coach1"), None).await.0, StatusCode::OK);
+    assert_eq!(t.call("POST", &format!("/conversations/{dm_id}/messages"), Some("coach1"), Some(json!({ "text": "still there?" }))).await.0, StatusCode::BAD_REQUEST, "read-only once Pat left");
     gid
 }
 

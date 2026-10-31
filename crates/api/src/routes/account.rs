@@ -155,7 +155,10 @@ pub async fn export(State(st): State<AppState>, ctx: Ctx) -> ApiResult<Json<Valu
     for key in keys.iter().take(MAX_EXPORT_FILES) {
         files.push(json!({ "key": key, "url": presign_get(&st, key).await? }));
     }
-    let group_messages = super::conversations::sent_by(&st, &p.coach_id, &p.user_id).await?;
+    let mut group_messages = Vec::new();
+    for coach in std::iter::once(&p.coach_id).chain(&p.former_coach_ids) {
+        group_messages.extend(super::conversations::sent_by(&st, coach, &p.user_id).await?);
+    }
     Ok(Json(json!({
         "exportedAt": Utc::now(),
         "account": { "email": ctx.caller.email, "profile": p },
@@ -189,7 +192,9 @@ pub async fn delete(State(st): State<AppState>, ctx: Ctx, Json(body): Json<Confi
 
     // 2. Everything in the client's partition, and what they sent in groups.
     delete_partition(&st, &format!("CLIENT#{}", p.user_id)).await?;
-    super::conversations::forget(&st, &p.coach_id, &p.user_id, true).await?;
+    for coach in std::iter::once(&p.coach_id).chain(&p.former_coach_ids) {
+        super::conversations::forget(&st, coach, &p.user_id, true).await?;
+    }
 
     // 3. Their place in the coach's lists: roster, thread, review queue.
     let coach_pk = format!("COACH#{}", p.coach_id);
